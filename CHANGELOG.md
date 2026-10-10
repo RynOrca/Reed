@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 2026-10-11 — PI 思考中断诊断
+
+Git 版本标签：`reed-stream-diagnosis-2026-10-11`。基线提交：`4cc5a8f2f2891f92f2b504fe0afe63caa7bb8fc3`。
+
+- 新增 `docs/PI-STREAM-DIAGNOSIS-PLAN.md`，记录用户已确认的排查范围、证据、结论边界和后续验证计划。
+- 确认真实会话 length 截断、SDK 默认输出上限与短会话恢复缺口、Reed 完成状态误报，以及本地 pi-desktop 源码的无输出恢复机制。
+- 本阶段仅提交诊断文档，不修改运行代码、真实用户数据或模型设置。
+
 ## 2026-10-10 — README 图片与产品介绍修正
 
 Git 版本标签：`reed-readme-2026-10-10`。基于上一版本提交 `1b4dbfeace37839ea58d4f0f8ac124ffeb9186ba`。
