@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 2026-10-11 — 输出预算与 harness 恢复机制对照
+
+基线提交：`83fccd1`。Git 版本标签：`reed-harness-research-2026-10-11`。
+
+- 补充官方参数语义、PI 内部 maxTokens 到 max_completion_tokens 的映射，以及 Codex、DSH、Hermes 固定源码版本的截断处理比较。
+- 修正不能将 maxTokens 一律理解为可见回复限制或一律套用模型厂商接口的推断；追加提供商适配与有界恢复的后续方案。
+
 ## 2026-10-11 — PI 思考中断诊断
 
 Git 版本标签：`reed-stream-diagnosis-2026-10-11`。基线提交：`4cc5a8f2f2891f92f2b504fe0afe63caa7bb8fc3`。
