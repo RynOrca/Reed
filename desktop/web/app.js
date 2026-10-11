@@ -149,7 +149,7 @@ function updateDisclosure(row, state) {
   row.label.textContent = state === "running" ? "运行中" : state === "error" ? "失败" : "完成";
 }
 function outcomeLabel(outcome) {
-  return { truncated: "输出被截断", empty: "未生成回复", aborted: "已停止", error: "失败" }[outcome?.status] || "完成";
+  return { truncated: "输出被截断", empty: "未生成回复", aborted: "已停止", error: "失败", unverified: "尚未通过验收" }[outcome?.status] || "完成";
 }
 function finishThinking(outcome) {
   if (!thinkingRow) return;
@@ -249,6 +249,7 @@ function restoreHistory(history) {
         })));
       }
     }
+    if (outcome?.status === "unverified") errorRow(outcome.message || "产物尚未通过视觉验收");
   }
   refreshEmpty(); scrollToLatest();
 }
@@ -485,6 +486,12 @@ function onEvent(event) {
       assistantRow = null; thinkingRow = null; break;
     case "recovery":
       setRunning(true); status(response.message || "正在恢复模型回复…");
+      break;
+    case "visual_review":
+      status(response.message || "正在视觉验收…");
+      break;
+    case "context_budget_warning":
+      $("compaction-state").textContent=response.message;
       break;
     case "done": case "settled":
       if (response.final === false) break;

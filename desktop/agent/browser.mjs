@@ -1,10 +1,48 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { access, mkdir, readFile, writeFile, realpath, stat } from "node:fs/promises";
+import { join, dirname, resolve, relative, extname } from "node:path";
+import { createServer } from "node:http";
+import { randomUUID, createHash } from "node:crypto";
+
+const MAX_IMAGE_BYTES=5*1024*1024, MAX_PIXELS=12*1024*1024;
+export function captureOptions(input) {
+  const viewport=input.viewport || {width:1280,height:800};
+  if(!Number.isInteger(viewport.width) || !Number.isInteger(viewport.height) || viewport.width<320 || viewport.width>2560 || viewport.height<240 || viewport.height>2160) throw new Error("视口须为 320–2560 × 240–2160 的整数像素");
+  const waitMs=input.waitMs ?? 0;
+  if(!Number.isInteger(waitMs) || waitMs<0 || waitMs>10000) throw new Error("等待时间须为 0–10000 毫秒");
+  if(input.fullPage!==undefined && typeof input.fullPage!=="boolean") throw new Error("fullPage 必须为布尔值");
+  return {viewport,waitMs,fullPage:input.fullPage===true};
+}
 
 // Own, isolated Edge profile; starts only when the agent uses the browser.
 export class AgentBrowser {
-  constructor(dir) { this.dir=dir; this.sequence=0; this.pending=new Map(); }
+  constructor(dir,{scope}={}) { this.dir=dir; this.scope=scope; this.sequence=0; this.pending=new Map(); this.viewport={width:1280,height:800}; this.operations=Promise.resolve(); this.generation=0; this.queued=0; }
+  async preview(path) {
+    if(!this.scope) throw new Error("本地预览需要文件访问授权");
+    const file=await realpath(await this.scope.check(path,false));
+    if(![".html",".htm"].includes(extname(file).toLowerCase()) || !(await stat(file)).isFile()) throw new Error("本地预览只支持 HTML 文件");
+    const root=dirname(file),token=randomUUID();
+    this.previewServer?.close();
+    const server=createServer(async(req,res)=>{
+      try {
+        if(req.method!=="GET" && req.method!=="HEAD") {res.writeHead(405);res.end();return;}
+        const url=new URL(req.url,"http://127.0.0.1"),prefix=`/${token}/`;
+        if(!url.pathname.startsWith(prefix)) throw new Error("无效预览路径");
+        const requested=decodeURIComponent(url.pathname.slice(prefix.length));
+        const candidate=await realpath(await this.scope.check(resolve(root,requested),false));
+        const rel=relative(root,candidate);
+        if(rel===".." || rel.startsWith(`..\\`) || rel.startsWith("../") || resolve(root,rel)!==candidate) throw new Error("文件不在预览目录内");
+        const info=await stat(candidate);if(!info.isFile() || info.size>16*1024*1024) throw new Error("资源过大或不是文件");
+        const mime={".html":"text/html; charset=utf-8",".htm":"text/html; charset=utf-8",".css":"text/css; charset=utf-8",".js":"text/javascript; charset=utf-8",".mjs":"text/javascript; charset=utf-8",".svg":"image/svg+xml",".png":"image/png",".jpg":"image/jpeg",".jpeg":"image/jpeg",".webp":"image/webp",".json":"application/json",".woff":"font/woff",".woff2":"font/woff2"}[extname(candidate).toLowerCase()] || "application/octet-stream";
+        res.writeHead(200,{"Content-Type":mime,"Cache-Control":"no-store","X-Content-Type-Options":"nosniff"});res.end(req.method==="HEAD"?undefined:await readFile(candidate));
+      }catch {res.writeHead(404);res.end("资源不可读取");}
+    });
+    await new Promise((res,rej)=>{server.once("error",rej);server.listen(0,"127.0.0.1",res);});
+    this.previewServer=server;this.previewPath=file;
+    this.previewRevision={path:file,mtimeMs:(await stat(file)).mtimeMs,sha256:createHash("sha256").update(await readFile(file)).digest("hex")};
+    this.previewUrl=`http://127.0.0.1:${server.address().port}/${token}/${encodeURIComponent(relative(root,file))}`;
+    return this.previewUrl;
+  }
   async start() {
     if(this.socket?.readyState===1) return;
     const candidates=[process.env.PROGRAMFILES,process.env["PROGRAMFILES(X86)"],process.env.LOCALAPPDATA].filter(Boolean).map(p=>join(p,"Microsoft","Edge","Application","msedge.exe"));
@@ -29,21 +67,75 @@ export class AgentBrowser {
   }
   call(method,params={}) { const id=++this.sequence; return new Promise((resolve,reject)=>{ const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error("浏览器操作超时"));},15000); this.pending.set(id,{resolve,reject,timer}); this.socket.send(JSON.stringify({id,method,params,...(this.sessionId?{sessionId:this.sessionId}:{})})); }); }
   async evaluate(expression) { const r=await this.call("Runtime.evaluate",{expression,returnByValue:true,awaitPromise:true}); if(r.exceptionDetails) throw new Error("网页操作失败"); return r.result.value; }
-  async run({action,url,index,text}) {
+  async navigate(url) {
+    const navigation=await this.call("Page.navigate",{url});
+    if(navigation.errorText) throw new Error(navigation.errorText);
+    // Page.navigate may resolve while the previous document is still visible.
+    // Confirm the new loader before accepting readyState from its document.
+    const deadline=Date.now()+5000;
+    while(Date.now()<deadline) {
+      const tree=await this.call("Page.getFrameTree");
+      if(!navigation.loaderId || tree.frameTree.frame.loaderId===navigation.loaderId) {
+        try {if(await this.evaluate("document.readyState==='complete'")) return;} catch {}
+      }
+      await new Promise(r=>setTimeout(r,50));
+    }
+    throw new Error("页面加载超时，请确认本地资源或网页可访问后重试");
+  }
+  run(input) {
+    if(this.queued>=20) return Promise.reject(new Error("浏览器待处理操作过多，请等待当前操作完成"));
+    const generation=this.generation; this.queued++;
+    const operation=this.operations.then(()=>{
+      if(generation!==this.generation) throw new Error("浏览器操作已取消");
+      return this.runOne(input);
+    });
+    this.operations=operation.catch(()=>{});
+    return operation.finally(()=>{this.queued--;});
+  }
+  async runOne(input) {
+    const {action,url,index,text,path}=input;
+    if(!["navigate","preview","snapshot","screenshot","click","fill"].includes(action)) throw new Error("未知浏览器操作");
+    const options=captureOptions({...input,viewport:input.viewport || this.viewport});
+    let destination;
+    if(action==="navigate") {const u=new URL(url);if(!["http:","https:"].includes(u.protocol) || u.username || u.password) throw new Error("浏览器只接受 HTTP(S) 地址；本地 HTML 请使用 preview");destination=u.href;}
+    if(action==="preview") destination=await this.preview(path);
     clearTimeout(this.idleTimer);
     this.idleTimer=setTimeout(()=>this.close(),60000); this.idleTimer.unref();
     await this.start();
-    if(action==="navigate") { const u=new URL(url); if(!["http:","https:"].includes(u.protocol) || u.username || u.password) throw new Error("浏览器只接受 HTTP(S) 地址"); const r=await this.call("Page.navigate",{url:u.href}); if(r.errorText) throw new Error(r.errorText); await this.evaluate(`new Promise(resolve => { if(document.readyState==='complete') resolve(); else { addEventListener('load',()=>resolve(),{once:true}); setTimeout(resolve,4000); } })`); }
+    this.viewport=options.viewport;
+    await this.call("Emulation.setDeviceMetricsOverride",{...this.viewport,deviceScaleFactor:1,mobile:false});
+    if(destination) { if(action==="navigate") {this.previewPath=null;this.previewRevision=null;this.previewServer?.close();this.previewServer=null;} await this.navigate(destination); this.loadedAt=new Date().toISOString(); }
     if(action==="click" || action==="fill") {
       if(!Number.isInteger(index) || index<1) throw new Error("请使用最近快照中的元素编号");
       await this.evaluate(`(()=>{const e=document.querySelector('[data-summon-element="${index}"]'); if(!e) throw Error('元素已失效，请刷新快照'); ${action==="click" ? "e.click();" : `if(!('value' in e)) throw Error('不是输入框'); const setter=Object.getOwnPropertyDescriptor(e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value')?.set; if(setter) setter.call(e,${JSON.stringify(String(text||"").slice(0,10000))}); else e.value=${JSON.stringify(String(text||"").slice(0,10000))}; e.dispatchEvent(new Event('input',{bubbles:true})); e.dispatchEvent(new Event('change',{bubbles:true}));`} return true;})()`);
     }
-    if(action==="screenshot") { const r=await this.call("Page.captureScreenshot",{format:"png"}); return {content:[{type:"image",data:r.data,mimeType:"image/png"}],details:{}}; }
+    if(options.waitMs) await new Promise(r=>setTimeout(r,options.waitMs));
+    if(action==="screenshot") {
+      const metrics=await this.call("Page.getLayoutMetrics");
+      const size=options.fullPage?(metrics.cssContentSize || metrics.contentSize):this.viewport;
+      const width=Math.ceil(size.width),height=Math.ceil(size.height);
+      if(width>4096 || height>8192 || width*height>MAX_PIXELS) throw new Error("完整页面截图过大，请缩小页面或使用视口截图");
+      const capturedUrl=await this.evaluate("location.href");
+      const r=await this.call("Page.captureScreenshot",{format:"png",captureBeyondViewport:options.fullPage,clip:{x:0,y:0,width,height,scale:1}});
+      if(capturedUrl!==await this.evaluate("location.href")) throw new Error("截图期间页面发生导航，请重新截图");
+      const png=Buffer.from(r.data,"base64");if(png.length>MAX_IMAGE_BYTES) throw new Error("截图超过 5 MB，请缩小截图范围");
+      const capturedAt=new Date().toISOString(),artifactDir=join(this.dir,"artifacts","screenshots");await mkdir(artifactDir,{recursive:true});
+      const artifactPath=join(artifactDir,`${Date.now()}-${randomUUID()}.png`);await writeFile(artifactPath,png,{flag:"wx"});
+      const currentLocation=new URL(capturedUrl),previewLocation=this.previewUrl?new URL(this.previewUrl):null;
+      const samePreview=!!this.previewPath && previewLocation?.origin===currentLocation.origin && previewLocation?.pathname===currentLocation.pathname;
+      const revision=samePreview?this.previewRevision:null;
+      const sourceChanged=revision?createHash("sha256").update(await readFile(revision.path)).digest("hex")!==revision.sha256:false;
+      const details={artifactPath,mimeType:"image/png",width,height,bytes:png.length,capturedAt,loadedAt:this.loadedAt || null,viewport:this.viewport,waitMs:options.waitMs,fullPage:options.fullPage,sourcePath:samePreview?this.previewPath:null,sourceHash:revision?.sha256 || null,revision,sourceChanged,url:capturedUrl};
+      return {content:[{type:"image",data:r.data,mimeType:"image/png"},{type:"text",text:JSON.stringify(details)}],details};
+    }
     const snapshot=await this.evaluate(`(()=>{const elements=[...document.querySelectorAll('a,button,input,textarea,select,[role="button"]')].filter(e=>e.getBoundingClientRect().width&&e.getBoundingClientRect().height).slice(0,150); document.querySelectorAll('[data-summon-element]').forEach(e=>e.removeAttribute('data-summon-element')); const controls=elements.map((e,i)=>{e.setAttribute('data-summon-element',String(i+1));return {index:i+1,tag:e.tagName,label:(e.innerText||e.getAttribute('aria-label')||e.placeholder||e.type||'').slice(0,150),href:e.href};}); return {url:location.href,title:document.title,text:document.body.innerText.slice(0,14000),controls};})()`);
     return {content:[{type:"text",text:JSON.stringify(snapshot)}],details:{url:snapshot.url}};
   }
   close() {
+    this.generation++;
     clearTimeout(this.idleTimer);
+    this.previewServer?.close();this.previewServer=null;this.previewPath=null;this.previewRevision=null;
+    for(const req of this.pending.values()) {clearTimeout(req.timer);req.reject(new Error("浏览器已关闭"));} this.pending.clear();
     const child=this.child, socket=this.socket;
     if(socket?.readyState===1) {
       socket.send(JSON.stringify({id:++this.sequence,method:"Browser.close"}));

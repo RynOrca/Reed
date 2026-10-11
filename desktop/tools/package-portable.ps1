@@ -34,7 +34,7 @@ Copy-Item -LiteralPath (Join-Path $agentDir 'endpoint.mjs') -Destination (Join-P
 Copy-Item -LiteralPath (Join-Path $agentDir 'memory.mjs') -Destination (Join-Path $Output 'agent\memory.mjs') -Force
 Copy-Item -LiteralPath (Join-Path $agentDir 'providers.mjs') -Destination (Join-Path $Output 'agent\providers.mjs') -Force
 Copy-Item -LiteralPath (Join-Path $agentDir 'memory-agent.mjs') -Destination (Join-Path $Output 'agent\memory-agent.mjs') -Force
-foreach ($module in @('capabilities.mjs', 'browser.mjs', 'learning-tools.mjs', 'learner.mjs', 'sandbox.mjs', 'user-config.mjs', 'mcp.mjs', 'turn-outcome.mjs', 'turn-recovery.mjs', 'stream-diagnostics.mjs')) { Copy-Item -LiteralPath (Join-Path $agentDir $module) -Destination (Join-Path $Output "agent\$module") -Force }
+foreach ($module in @('capabilities.mjs', 'browser.mjs', 'learning-tools.mjs', 'learner.mjs', 'sandbox.mjs', 'user-config.mjs', 'mcp.mjs', 'turn-outcome.mjs', 'turn-recovery.mjs', 'stream-diagnostics.mjs', 'context-policy.mjs', 'visual-review.mjs')) { Copy-Item -LiteralPath (Join-Path $agentDir $module) -Destination (Join-Path $Output "agent\$module") -Force }
 Copy-Item -LiteralPath (Join-Path $agentDir 'role-skills.mjs') -Destination (Join-Path $Output 'agent\role-skills.mjs') -Force
 Copy-Item -LiteralPath (Join-Path $agentDir 'skills') -Destination (Join-Path $Output 'agent\skills') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $agentDir 'package.json') -Destination (Join-Path $Output 'agent\package.json') -Force

@@ -1,10 +1,33 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtemp,rm } from "node:fs/promises";
+import { mkdtemp,rm,writeFile,readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentBrowser } from "./browser.mjs";
+import { AgentBrowser,captureOptions } from "./browser.mjs";
+import { FileScope } from "./sandbox.mjs";
+test("Screenshot limits reject excessive dimensions and animation waits before browser launch",()=>{
+  assert.throws(()=>captureOptions({viewport:{width:9000,height:800}}),/视口/);
+  assert.throws(()=>captureOptions({waitMs:10001}),/等待/);
+  assert.throws(()=>captureOptions({waitMs:-1}),/等待/);
+  assert.deepEqual(captureOptions({viewport:{width:390,height:844},waitMs:500}),{viewport:{width:390,height:844},waitMs:500,fullPage:false});
+});
+test("Local preview authorizes each resource and blocks directory escape",async()=>{
+  const root=await mkdtemp(join(tmpdir(),"reed-preview-test-"));
+  await writeFile(join(root,"index.html"),"<h1>preview</h1>");await writeFile(join(root,"style.css"),"h1{color:red}");
+  const checks=[],scope={async check(path,mutation){checks.push({path,mutation});return path;}};
+  const browser=new AgentBrowser(root,{scope});
+  try {
+    const url=await browser.preview(join(root,"index.html"));
+    assert.equal(await (await fetch(url)).text(),"<h1>preview</h1>");
+    assert.equal((await fetch(new URL("style.css",url))).status,200);
+    const u=new URL(url);u.pathname=u.pathname.replace("index.html","%2e%2e%2fsecret.txt");
+    assert.equal((await fetch(u)).status,404);
+    assert.ok(checks.length>=3 && checks.every(c=>c.mutation===false));
+    await assert.rejects(browser.run({action:"navigate",url:"file:///C:/secret.txt"}),/HTTP/);
+    assert.equal(browser.child,undefined);
+  }finally {browser.close();await rm(root,{recursive:true,force:true});}
+});
 test("Owned lazy Edge can read, fill, click and screenshot an isolated page",{timeout:30000},async()=>{
   const root=await mkdtemp(join(tmpdir(),"summon-browser-test-"));
   const server=createServer((_req,res)=>{res.setHeader("Content-Type","text/html; charset=utf-8");res.end('<title>Summon isolated browser</title><h1>Browser test</h1><input aria-label="Test input"><button onclick="document.querySelector(\'h1\').textContent=document.querySelector(\'input\').value">Apply</button>');});
@@ -14,6 +37,25 @@ test("Owned lazy Edge can read, fill, click and screenshot an isolated page",{ti
     const first=JSON.parse((await browser.run({action:"navigate",url:`http://127.0.0.1:${server.address().port}`})).content[0].text);assert.equal(first.title,"Summon isolated browser");assert.ok(first.text.includes("Browser test"));
     const input=first.controls.find(c=>c.tag==="INPUT"),button=first.controls.find(c=>c.tag==="BUTTON");assert.ok(input && button);
     await browser.run({action:"fill",index:input.index,text:"Verified local browser"});const result=await browser.run({action:"click",index:button.index});assert.ok(result.content[0].text.includes("Verified local browser"));
-    const screenshot=await browser.run({action:"screenshot"});assert.equal(screenshot.content[0].mimeType,"image/png");assert.ok(screenshot.content[0].data.length>100);
+    const screenshot=await browser.run({action:"screenshot",viewport:{width:390,height:844},waitMs:100});assert.equal(screenshot.content[0].mimeType,"image/png");assert.ok(screenshot.content[0].data.length>100);assert.equal(screenshot.details.width,390);assert.equal(screenshot.details.height,844);assert.deepEqual(await readFile(screenshot.details.artifactPath),Buffer.from(screenshot.content[0].data,"base64"));
+    await writeFile(join(root,"index.html"),'<title>Local animated artifact</title><style>body{height:1200px}h1{animation:pulse .2s infinite alternate}@keyframes pulse{to{opacity:.2}}</style><h1>Local preview</h1>');
+    browser.scope=new FileScope({workspace:()=>root,readOnly:()=>[]});
+    const local=await browser.run({action:"preview",path:"index.html",viewport:{width:1280,height:800}});assert.ok(local.content[0].text.includes("Local preview"));
+    const later=await browser.run({action:"screenshot",waitMs:250,fullPage:true});assert.ok(later.details.height>=1200);assert.equal(later.details.sourcePath,join(root,"index.html"));assert.notEqual(later.details.artifactPath,screenshot.details.artifactPath);
+    assert.equal(later.details.sourceChanged,false);assert.ok(later.details.revision.sha256);
+    await writeFile(join(root,"index.html"),'<h1>Updated but not reloaded</h1>');
+    const stale=await browser.run({action:"screenshot"});assert.equal(stale.details.sourceChanged,true);assert.equal(stale.details.revision.sha256,later.details.revision.sha256);
+    assert.equal(stale.details.sourceHash,later.details.sourceHash);
+    await browser.run({action:"preview",path:"index.html"});
+    const fresh=await browser.run({action:"screenshot"});assert.equal(fresh.details.sourceChanged,false);assert.notEqual(fresh.details.sourceHash,stale.details.sourceHash);
+    await writeFile(join(root,"index.html"),'<h1>Source artifact</h1><a href="other.html">跳转其他页面</a>');
+    await writeFile(join(root,"other.html"),'<h1>Different artifact</h1>');
+    const linked=await browser.run({action:"preview",path:"index.html"});
+    const link=JSON.parse(linked.content[0].text).controls.find(c=>c.tag==="A");
+    await browser.run({action:"click",index:link.index});
+    const navigated=await browser.run({action:"screenshot",waitMs:200});
+    assert.ok(navigated.details.url.endsWith("other.html"));
+    assert.equal(navigated.details.sourcePath,null,"导航到另一页面不能作为原HTML的证据");
+    assert.equal(navigated.details.sourceHash,null);
   }finally{browser.close();await new Promise(r=>server.close(r));await new Promise(r=>setTimeout(r,600));await rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
 });

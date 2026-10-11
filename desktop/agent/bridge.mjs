@@ -5,6 +5,8 @@ import { mkdir, stat, readFile, writeFile, appendFile, rename, realpath, unlink 
 import { classifyAssistantOutcome } from "./turn-outcome.mjs";
 import { createTurnRecovery } from "./turn-recovery.mjs";
 import { createDiagnosticFetch } from "./stream-diagnostics.mjs";
+import { createVisualReview, VISUAL_TOOLS } from "./visual-review.mjs";
+import { createContextPolicy } from "./context-policy.mjs";
 import { join, resolve } from "node:path";
 import { createApprovalGate } from "./approval.mjs";
 import { RoleStore } from "./roles.mjs";
@@ -68,13 +70,15 @@ const diagnostic = async entry => {
   catch { process.stderr.write("Request diagnostic could not be saved\n"); }
 };
 const turnRecovery = createTurnRecovery({ send, diagnostic });
+const contextPolicy = createContextPolicy({ dataDir, currentSession: () => session, send, diagnostic });
 let runtime;
 let session;
 let busy = false;
 let queue = Promise.resolve();
 const securityPath = join(dataDir, "security.json");
 const security = await userConfig.get("security",securityPath,{approval:"manual"});
-const scope = new FileScope({ workspace: () => cwd, readOnly: () => [capabilities.state.vaultPath, join(dataDir,"skills"), join(dataDir, "attachments"), ...(security.readOnly || [])].filter(Boolean), fullAccess: () => security.access === "full" });
+const scope = new FileScope({ workspace: () => cwd, readOnly: () => [capabilities.state.vaultPath, join(dataDir,"skills"), join(dataDir, "attachments"), join(dataDir,"artifacts","screenshots"), contextPolicy.artifactsDir, ...(security.readOnly || [])].filter(Boolean), fullAccess: () => security.access === "full" });
+const visualReview = createVisualReview({ scope, send, enabled: () => capabilities.state.browserEnabled });
 const mcp=new LazyMcp({config:userConfig,scope,send});await mcp.load();
 const approvalGate = createApprovalGate(send, undefined, () => security.approval);
 const memoryAgent = createMemoryAgent({ memory, learner, send, currentSession: () => session, runtime: getRuntime });
@@ -128,6 +132,7 @@ async function openSession(provider, modelId, sessionManager) {
   const model = provider && modelId ? models.getModel(provider, modelId) : undefined;
   if (provider && modelId && !model) throw new Error(`Unknown model: ${provider}/${modelId}`);
   const settingsManager = SettingsManager.create(cwd, agentDir);
+  contextPolicy.bindSettings(settingsManager, model);
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir,
@@ -140,7 +145,7 @@ async function openSession(provider, modelId, sessionManager) {
         const readonly=["read","ls","find","grep","current_time","web_search","fetch_url","search_notes"];
         if(roles.activeId==="planner" && !readonly.includes(event.toolName)) return {block:true,terminate:true,reason:"Planner 仅允许只读调查，请切换 Agent 执行操作"};
       });
-    }, approvalGate.extension, memoryAgent.extension, learningTools.extension, learnerTools,pi=>mcp.extension(pi),turnRecovery.extension],
+    }, approvalGate.extension, memoryAgent.extension, learningTools.extension, learnerTools,pi=>mcp.extension(pi),contextPolicy.extension,turnRecovery.extension,visualReview.extension],
     appendSystemPromptOverride: (base) => {
       const instructions = roles.current()?.system;
       return instructions ? [...base, instructions] : base;
@@ -152,7 +157,7 @@ async function openSession(provider, modelId, sessionManager) {
     agentDir,
     modelRuntime: models,
     model,
-    tools: roles.activeId==="planner" ? ["read","ls","find","grep","current_time","web_search","fetch_url","search_notes"] : [...FILE_TOOLS, "remember", "record_learning_event", ...LEARNING_TOOLS,...MCP_TOOLS],
+    tools: roles.activeId==="planner" ? ["read","ls","find","grep","current_time","web_search","fetch_url","search_notes"] : [...FILE_TOOLS, "remember", "record_learning_event", ...LEARNING_TOOLS,...MCP_TOOLS,...VISUAL_TOOLS],
     customTools: sandboxTools(scope),
     sessionManager,
     settingsManager,
@@ -168,7 +173,7 @@ async function openSession(provider, modelId, sessionManager) {
   Object.assign(appState, { activeSessionId: session.sessionId, projectPath, provider: session.model?.provider, modelId: session.model?.id });
   await saveJson(metadataPath, metadata); await saveJson(appStatePath, appState);
   session.subscribe((event) => {
-    if(event.type==="compaction_start" || event.type==="compaction_end") send({type:"compaction",status:event.type.endsWith("start")?"running":event.errorMessage?"error":"done",message:event.errorMessage||"",enabled:session.autoCompactionEnabled});
+    if(event.type==="compaction_start" || event.type==="compaction_end") send({type:"compaction",status:event.type.endsWith("start")?"running":event.errorMessage?"error":event.aborted?"skipped":"done",message:event.errorMessage||(event.aborted?"压缩未完成，原上下文已保留":""),enabled:session.autoCompactionEnabled});
     if (event.type === "queue_update") send({ type: "queue", steering: event.steering, followUp: event.followUp });
     if (event.type === "message_start" && event.message.role === "user" && busy) send({ type: "user_delivered", text: typeof event.message.content === "string" ? event.message.content : event.message.content?.filter(b => b.type === "text").map(b => b.text).join("\n") });
     if (event.type === "message_start" && event.message.role === "assistant") { generationStart = performance.now(); firstDelta = null; }
@@ -192,18 +197,20 @@ async function openSession(provider, modelId, sessionManager) {
     } else if (event.type === "tool_execution_end") {
       send({ type: "tool_end", id: event.toolCallId, isError: event.isError, result: event.result });
     } else if (event.type === "agent_settled") {
-      if (!busy) send({ type: "settled", outcome: turnRecovery.outcome() });
+      if (!busy) send({ type: "settled", outcome: visualReview.outcome(turnRecovery.outcome()) });
     }
   });
   emitSession();
   outputTokens = 0; generationMs = 0; missingUsage = false; emitTelemetry();
+  const historyBranch = session.sessionManager.getBranch();
+  const visualOutcomes = new Map(historyBranch.filter(entry => entry.type === "custom" && entry.customType === "reed_turn_verification").map(entry => [entry.data?.messageEntryId, entry.data?.outcome]));
   send({
     type: "history",
-    messages: session.sessionManager.getBranch().filter(entry => entry.type === "message").map(entry => entry.message).map((message) => ({
+    messages: historyBranch.filter(entry => entry.type === "message").map(entry => ({ ...entry.message, reedOutcome: visualOutcomes.get(entry.id) })).map((message) => ({
       role: message.role,
       stopReason: message.stopReason,
       errorMessage: message.errorMessage,
-      outcome: message.role === "assistant" ? classifyAssistantOutcome(message) : undefined,
+      outcome: message.role === "assistant" ? message.reedOutcome || classifyAssistantOutcome(message) : undefined,
       content: (Array.isArray(message.content) ? message.content : [{ type: "text", text: String(message.content || "") }]).filter((block) =>
         block.type === "text" || block.type === "thinking" || block.type === "toolCall" || block.type === "image"
       ).map((block) => ({ type: block.type, text: block.type === "thinking" ? block.thinking ?? block.text : block.text, name: block.name, id: block.id, arguments: block.arguments, data: block.data, mimeType: block.mimeType })),
@@ -566,13 +573,19 @@ async function handle(command) {
         await prepareSkills(command.text);
         busy = true;
         turnRecovery.begin();
+        visualReview.begin(command.text);
         outputTokens = 0; generationMs = 0; missingUsage = false;
         memoryAgent.cancel();
         send({ type: "started", id });
         try {
+          await contextPolicy.preparePrompt(command.text, images);
           await session.prompt(command.text, { images });
           emitTelemetry();
-          const outcome = turnRecovery.outcome();
+          const outcome = visualReview.outcome(turnRecovery.outcome());
+          if (visualReview.snapshot().required) {
+            const lastAssistant = session.sessionManager.getBranch().findLast(entry => entry.type === "message" && entry.message.role === "assistant");
+            if (lastAssistant) session.sessionManager.appendCustomEntry("reed_turn_verification", { messageEntryId: lastAssistant.id, outcome, review: visualReview.snapshot() });
+          }
           send({ type: "done", id, outcome });
           if (outcome.status === "complete") memoryAgent.schedule();
         } finally {
