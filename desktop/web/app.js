@@ -24,6 +24,7 @@ let activeSessionId = "";
 let activeSessionName = "";
 let sequence = 0;
 let running = false;
+let turnErrorShown = false;
 let assistantRow = null;
 let thinkingRow = null;
 let submitted = null;
@@ -36,7 +37,7 @@ let attachments = [];
 function status(text) {
   $("status").textContent = text;
   $("status").parentElement.classList.toggle("is-busy", /正在|连接/.test(text));
-  $("status").parentElement.classList.toggle("is-error", /断开|出错|失败/.test(text));
+  $("status").parentElement.classList.toggle("is-error", /断开|出错|失败|截断|未生成/.test(text));
 }
 function updateSendAvailability() { $("send-button").disabled = (!prompt.value.trim() && !attachments.length); }
 function scrollToLatest() { transcript.scrollTop = transcript.scrollHeight; }
@@ -147,6 +148,22 @@ function updateDisclosure(row, state) {
   row.indicator.className = `tool-row-state is-${state}`;
   row.label.textContent = state === "running" ? "运行中" : state === "error" ? "失败" : "完成";
 }
+function outcomeLabel(outcome) {
+  return { truncated: "输出被截断", empty: "未生成回复", aborted: "已停止", error: "失败" }[outcome?.status] || "完成";
+}
+function finishThinking(outcome) {
+  if (!thinkingRow) return;
+  updateDisclosure(thinkingRow, outcome && outcome.status !== "complete" ? "error" : "done");
+  thinkingRow.label.textContent = outcomeLabel(outcome);
+}
+function historyOutcome(message) {
+  if (message.outcome) return message.outcome;
+  const stopReason = message.stopReason;
+  if (["length", "error", "aborted"].includes(stopReason)) return { status: { length: "truncated", error: "error", aborted: "aborted" }[stopReason], message: message.errorMessage };
+  const blocks = message.content || [];
+  if (!blocks.some(block => block.type === "toolCall" || (block.type === "text" && (block.text || "").trim()))) return { status: "empty" };
+  return { status: "complete" };
+}
 function pretty(value) {
   if (value == null) return "";
   if (typeof value === "string") return value;
@@ -199,6 +216,7 @@ function restoreHistory(history) {
       continue;
     }
     if (message.role !== "user" && message.role !== "assistant") continue;
+    const outcome = message.role === "assistant" ? historyOutcome(message) : null;
     let content = null;
     for (const block of message.content || []) {
       if (block.type === "text") {
@@ -211,7 +229,9 @@ function restoreHistory(history) {
         if (!content) content = messageRow("user");
         attachmentPreview(content, [block]);
       } else if (block.type === "thinking") {
-        disclosure({ kind: "thinking", title: "思考过程", summary: (block.text || "").replace(/\s+/g, " ").slice(0, 120), detail: block.text || "" });
+        const text = block.thinking ?? block.text ?? "";
+        const row = disclosure({ kind: "thinking", title: "思考过程", summary: text.replace(/\s+/g, " ").slice(0, 120), detail: text, state: outcome?.status === "complete" ? "done" : "error" });
+        row.label.textContent = outcomeLabel(outcome);
       } else if (block.type === "toolCall") {
         toolStart({ id: block.id, name: block.name, args: block.arguments });
         updateDisclosure(toolRows.get(block.id), "done");
@@ -459,12 +479,24 @@ function onEvent(event) {
       break;
     }
     case "compaction": $("compaction-state").textContent=response.status==="running"?"正在压缩上下文…":response.status==="error"?"压缩失败："+response.message:response.status==="skipped"?response.message:"上下文已压缩";$("compact-now").disabled=response.status==="running";break;
-    case "started": submitted = null; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
+    case "started": submitted = null; turnErrorShown = false; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
+    case "message_outcome":
+      finishThinking(response.outcome);
+      assistantRow = null; thinkingRow = null; break;
+    case "recovery":
+      setRunning(true); status(response.message || "正在恢复模型回复…");
+      break;
     case "done": case "settled":
-      setRunning(false); if (thinkingRow) updateDisclosure(thinkingRow, "done");
+      if (response.final === false) break;
+      setRunning(false); finishThinking(response.outcome);
+      if (response.outcome && response.outcome.status !== "complete") {
+        status(outcomeLabel(response.outcome));
+        if (response.outcome.status !== "aborted" && !turnErrorShown) errorRow(response.outcome.message || outcomeLabel(response.outcome));
+      }
       assistantRow = null; thinkingRow = null; break;
     case "error":
       if(handledReply)break;
+      finishThinking({ status: "error" });
       if (submitted) {
         submitted.row.remove();
         prompt.value = submitted.text;
@@ -473,7 +505,7 @@ function onEvent(event) {
         submitted = null;
         refreshEmpty();
       }
-      if (!handledReply) errorRow(response.message || "PI Agent 出错");
+      if (!handledReply) { errorRow(response.message || "PI Agent 出错"); turnErrorShown = true; }
       setRunning(false); break;
     case "disconnected":
       setRunning(false); status("PI Agent 已断开，正在恢复连接…");

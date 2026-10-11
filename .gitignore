@@ -5,6 +5,7 @@ dist/
 desktop/src-tauri/gen/
 desktop/.test-data/
 desktop/dist-portable*/
+desktop/dist-stream-fix*/
 *.exe
 *.dll
 *.msi

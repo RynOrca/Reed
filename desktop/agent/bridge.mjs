@@ -1,7 +1,9 @@
 import {LazyMcp,MCP_TOOLS} from "./mcp.mjs";
 import {UserConfig} from "./user-config.mjs";
 import { createInterface } from "node:readline";
-import { mkdir, stat, readFile, writeFile, rename, realpath, unlink } from "node:fs/promises";
+import { mkdir, stat, readFile, writeFile, appendFile, rename, realpath, unlink } from "node:fs/promises";
+import { classifyAssistantOutcome } from "./turn-outcome.mjs";
+import { createTurnRecovery } from "./turn-recovery.mjs";
 import { join, resolve } from "node:path";
 import { createApprovalGate } from "./approval.mjs";
 import { RoleStore } from "./roles.mjs";
@@ -60,6 +62,10 @@ const learner = new LearnerStore(dataDir);
 await learner.load();
 
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
+const turnRecovery = createTurnRecovery({ send, diagnostic: async entry => {
+  try { await appendFile(join(dataDir, "request-diagnostics.jsonl"), JSON.stringify({ timestamp: new Date().toISOString(), sessionId: session?.sessionId, ...entry }) + "\n"); }
+  catch { process.stderr.write("Request diagnostic could not be saved\n"); }
+} });
 let runtime;
 let session;
 let busy = false;
@@ -132,7 +138,7 @@ async function openSession(provider, modelId, sessionManager) {
         const readonly=["read","ls","find","grep","current_time","web_search","fetch_url","search_notes"];
         if(roles.activeId==="planner" && !readonly.includes(event.toolName)) return {block:true,terminate:true,reason:"Planner 仅允许只读调查，请切换 Agent 执行操作"};
       });
-    }, approvalGate.extension, memoryAgent.extension, learningTools.extension, learnerTools,pi=>mcp.extension(pi)],
+    }, approvalGate.extension, memoryAgent.extension, learningTools.extension, learnerTools,pi=>mcp.extension(pi),turnRecovery.extension],
     appendSystemPromptOverride: (base) => {
       const instructions = roles.current()?.system;
       return instructions ? [...base, instructions] : base;
@@ -161,6 +167,7 @@ async function openSession(provider, modelId, sessionManager) {
     if (event.type === "message_start" && event.message.role === "user" && busy) send({ type: "user_delivered", text: typeof event.message.content === "string" ? event.message.content : event.message.content?.filter(b => b.type === "text").map(b => b.text).join("\n") });
     if (event.type === "message_start" && event.message.role === "assistant") { generationStart = performance.now(); firstDelta = null; }
     if (event.type === "message_end" && event.message.role === "assistant") {
+      send({ type: "message_outcome", outcome: classifyAssistantOutcome(event.message) });
       const n = event.message.usage?.output;
       if (Number.isFinite(n) && n > 0) { outputTokens += n; generationMs += Math.max(1, performance.now() - (generationStart ?? firstDelta ?? performance.now())); }
       else if (event.message.stopReason !== "error" && event.message.content?.some(b => b.type === "text" || b.type === "thinking")) missingUsage = true;
@@ -179,18 +186,21 @@ async function openSession(provider, modelId, sessionManager) {
     } else if (event.type === "tool_execution_end") {
       send({ type: "tool_end", id: event.toolCallId, isError: event.isError, result: event.result });
     } else if (event.type === "agent_settled") {
-      send({ type: "settled" });
+      if (!busy) send({ type: "settled", outcome: turnRecovery.outcome() });
     }
   });
   emitSession();
   outputTokens = 0; generationMs = 0; missingUsage = false; emitTelemetry();
   send({
     type: "history",
-    messages: session.state.messages.map((message) => ({
+    messages: session.sessionManager.getBranch().filter(entry => entry.type === "message").map(entry => entry.message).map((message) => ({
       role: message.role,
+      stopReason: message.stopReason,
+      errorMessage: message.errorMessage,
+      outcome: message.role === "assistant" ? classifyAssistantOutcome(message) : undefined,
       content: (Array.isArray(message.content) ? message.content : [{ type: "text", text: String(message.content || "") }]).filter((block) =>
         block.type === "text" || block.type === "thinking" || block.type === "toolCall" || block.type === "image"
-      ).map((block) => ({ type: block.type, text: block.text, name: block.name, id: block.id, arguments: block.arguments, data: block.data, mimeType: block.mimeType })),
+      ).map((block) => ({ type: block.type, text: block.type === "thinking" ? block.thinking ?? block.text : block.text, name: block.name, id: block.id, arguments: block.arguments, data: block.data, mimeType: block.mimeType })),
       toolCallId: message.toolCallId,
       toolName: message.toolName,
       isError: message.isError,
@@ -549,15 +559,18 @@ async function handle(command) {
         if (!command.text.trim() && !images.length) throw new Error("请输入消息或添加图片");
         await prepareSkills(command.text);
         busy = true;
+        turnRecovery.begin();
         outputTokens = 0; generationMs = 0; missingUsage = false;
         memoryAgent.cancel();
         send({ type: "started", id });
         try {
           await session.prompt(command.text, { images });
           emitTelemetry();
-          send({ type: "done", id });
-          memoryAgent.schedule();
+          const outcome = turnRecovery.outcome();
+          send({ type: "done", id, outcome });
+          if (outcome.status === "complete") memoryAgent.schedule();
         } finally {
+          turnRecovery.end();
           busy = false;
         }
         break;

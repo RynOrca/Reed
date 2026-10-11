@@ -13,6 +13,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
   const artifacts = path.resolve(__dirname, '../../dist/acceptance'); await fs.mkdir(artifacts, { recursive: true });
   let apiCalls = 0;
   let receivedImage=false;
+  const recoveryCalls = new Map(), recoveryRequests = [], releaseRecovery = new Map();
   const server = createServer(async (req, res) => {
     if (req.url === '/v1/models') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: [{ id: 'isolated-learning-model', context_length: 65536, supports_reasoning: true, reasoning_efforts: ['off','low','high'] }] })); return; }
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
@@ -23,6 +24,17 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     const text = memory ? '{"facts":[{"key":"学习目标","content":"学习线性代数"}],"notes":[],"learningEvents":[{"kind":"goal","subject":"线性代数","detail":"学习线性代数","evidence":"我在学习线性代数","status":"active"}]}' : '这是桌面验收的流式回答。\n\n| 概念 | 含义 |\n| --- | --- |\n| 矩阵 | 线性变换 |\n\n[打开生成的 HTML](preview.html)';
     const delta = (value, finish_reason = null) => ({ id:'desktop-test', object:'chat.completion.chunk', model:body.model, created:1, choices:[{index:0,delta:value,finish_reason}] });
     res.setHeader('content-type','text/event-stream');
+    if (!memory && ['RECOVER_SUCCESS_TEST', 'RECOVER_LENGTH_TEST'].includes(userText)) {
+      const attempt = (recoveryCalls.get(userText) || 0) + 1;
+      recoveryCalls.set(userText, attempt); recoveryRequests.push({ userText, attempt, body });
+      // Hold the retry until assertions observe the real recovery UI.
+      if (attempt === 2) await new Promise(resolve => releaseRecovery.set(userText, resolve));
+      const success = userText === 'RECOVER_SUCCESS_TEST' && attempt > 1;
+      res.write(`data: ${JSON.stringify(delta({role:'assistant', ...(success ? {content:'原始任务恢复成功。'} : {reasoning_content:'隔离思考内容，服务现在返回长度截断。'})}))}\n\n`);
+      res.write(`data: ${JSON.stringify(delta({}, success ? 'stop' : 'length'))}\n\n`);
+      res.write(`data: ${JSON.stringify({...delta({}), choices:[], usage:{prompt_tokens:100,completion_tokens:12,total_tokens:112}})}\n\n`);
+      res.end('data: [DONE]\n\n'); return;
+    }
     if (!memory && ['PERMISSION_TEST','READONLY_TEST'].includes(userText) && body.messages.at(-1)?.role!=='tool') {
       res.write(`data: ${JSON.stringify(delta({role:'assistant',reasoning_content:'先创建隔离测试文件。'}))}\n\n`);
       res.write(`data: ${JSON.stringify(delta({tool_calls:[{index:0,id:'desktop-write-'+apiCalls,type:'function',function:{name:'write',arguments:JSON.stringify({path:userText==='READONLY_TEST'?'readonly/note.txt':'permission-test.txt',content:'isolated approval evidence'})}}]}))}\n\n`);
@@ -218,6 +230,48 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     await settings.locator('.model-info').getByRole('button',{name:'编辑',exact:true}).click();await settings.locator('#manual-vision').check();await settings.locator('#manual-save').click();await settings.locator('#notice').filter({hasText:'模型信息已保存'}).waitFor();
     await main.locator('#prompt').fill('IMAGE_TEST');await main.evaluate(data=>{const transfer=new DataTransfer();transfer.items.add(new File([Uint8Array.from(atob(data),c=>c.charCodeAt(0))],'clipboard.png',{type:'image/png'}));document.getElementById('prompt').dispatchEvent(new ClipboardEvent('paste',{clipboardData:transfer,bubbles:true,cancelable:true}));},(await fs.readFile(path.resolve(__dirname,'../src-tauri/icons/icon.png'))).toString('base64'));await main.locator('#attachment-strip img').waitFor();await main.locator('#send-button').click();await main.waitForFunction(()=>document.getElementById('status').textContent==='就绪');assert.ok(receivedImage);
     await main.getByRole('button',{name:'查看图片',exact:true}).click();await main.locator('#image-dialog').waitFor({state:'visible'});assert.ok((await main.locator('#image-preview').getAttribute('src')).startsWith('data:image/png;base64,'));await main.keyboard.press('Escape');await main.locator('#image-dialog').waitFor({state:'hidden'});checks.push('视觉能力保存立即生效，剪贴板图片发送与点击预览');
+    await settings.locator('.model-info').getByRole('button',{name:'编辑',exact:true}).click();
+    await settings.locator('#manual-output').fill('32768');await settings.locator('#manual-save').click();
+    await settings.locator('.model-info').filter({hasText:'32,768 最大输出'}).waitFor();
+    await settings.locator('.model-info').getByRole('button',{name:'编辑',exact:true}).click();
+    assert.equal(await settings.locator('#manual-output').inputValue(),'32768');
+    checks.push('最大输出长度保存、卡片展示和编辑回显');
+    await main.evaluate(async()=>{window._recoveryEvents=[];await window.__TAURI__.event.listen('agent-event',e=>window._recoveryEvents.push(e.payload));});
+    for (const marker of ['RECOVER_SUCCESS_TEST','RECOVER_LENGTH_TEST']) {
+      await main.evaluate(()=>{window._recoveryEvents=[];});
+      await agentCommand('new_session',{noProject:true});
+      await main.locator('#prompt').fill(marker);await main.locator('#send-button').click();
+      await main.locator('#status').filter({hasText:'正在保留原任务'}).waitFor({timeout:25000});
+      await main.locator('#stop-button').waitFor({state:'visible'});
+      await main.locator('#messages .thinking .tool-row-state').filter({hasText:'输出被截断'}).waitFor();
+      assert.equal(await main.locator('#messages .thinking .tool-row-state').filter({hasText:'完成'}).count(),0);
+      // A settled event from the failed attempt must not end the overall prompt.
+      assert.equal(await main.evaluate(()=>window._recoveryEvents.some(e=>e.type==='done')),false);
+      for (let n=0;n<100 && !releaseRecovery.has(marker);n++) await new Promise(resolve=>setTimeout(resolve,50));
+      assert.ok(releaseRecovery.has(marker),'恢复请求未抵达隔离服务');
+      releaseRecovery.get(marker)();releaseRecovery.delete(marker);
+      if (marker==='RECOVER_SUCCESS_TEST') {
+        await main.locator('#messages .prose-chat').filter({hasText:'原始任务恢复成功'}).waitFor({timeout:25000});
+        await main.waitForFunction(()=>document.getElementById('status').textContent==='就绪');
+        assert.equal(await main.locator('#messages .message-error').count(),0);
+        checks.push('思考长度截断保持运行，原任务自动恢复成功且第一段显示截断');
+      } else {
+        await main.locator('#status').filter({hasText:'输出被截断'}).waitFor({timeout:25000});
+        await main.locator('#stop-button').waitFor({state:'hidden'});
+        assert.equal(await main.locator('#messages .thinking .tool-row-state').filter({hasText:'输出被截断'}).count(),2);
+        assert.equal(await main.locator('#messages .message-error').count(),1);
+        const sessionId=await main.evaluate(()=>window._recoveryEvents.filter(e=>e.type==='session').at(-1).sessionId);
+        await agentCommand('new_session',{noProject:true});await agentCommand('open_session',{sessionId});
+        assert.equal(await main.locator('#messages .thinking .tool-row-state').filter({hasText:'输出被截断'}).count(),2);
+        assert.equal(await main.locator('#messages .thinking .tool-row-state').filter({hasText:'完成'}).count(),0);
+        checks.push('连续思考截断只恢复一次、明确失败，历史重开仍保留两次截断');
+      }
+      assert.equal(recoveryCalls.get(marker),2);
+      const requests=recoveryRequests.filter(request=>request.userText===marker);
+      assert.equal(requests[0].body.max_tokens ?? requests[0].body.max_completion_tokens,32768);
+      assert.equal(requests[1].body.max_tokens ?? requests[1].body.max_completion_tokens,32768);
+      assert.ok(JSON.stringify(requests[1].body.messages).includes(marker),'恢复丢失原始任务');
+    }
     const deleteProvider=settings.locator('.provider-row').filter({hasText:'桌面隔离测试'}).locator('button').filter({hasText:'删除'});
     await deleteProvider.click();assert.equal(await settings.locator('.provider-row').count(),1);await deleteProvider.filter({hasText:'确认删除'}).click();
     await settings.locator('.provider-row').waitFor({state:'detached'});assert.ok((await main.locator('.message-row.user').count())>0);checks.push('供应商两步确认删除，当前模型安全退回，对话历史保留');
@@ -233,6 +287,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     }
     throw error;
   } finally {
+    for(const release of releaseRecovery.values()) release();
     if (browser) await browser.close();
     child.kill(); server.closeAllConnections(); await new Promise(resolve=>server.close(resolve));
     // Preserve isolated data and screenshots for review, never delete user data.

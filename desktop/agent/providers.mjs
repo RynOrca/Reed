@@ -36,7 +36,8 @@ export function normalizeDiscoveredModel(raw, known) {
   const modalities=raw.input || raw.input_modalities || raw.capabilities?.input;
   const vision=raw.supports_vision ?? raw.capabilities?.vision;
   const input=Array.isArray(modalities)?["text",...(modalities.includes("image")?["image"]:[])]:typeof vision==="boolean"?["text",...(vision?["image"]:[])]:known?.input||["text"];
-  return { id, name: raw.name || known?.name || id, contextWindow, maxTokens: positive(raw.max_output_tokens, known?.maxTokens), reasoning, thinkingLevels, input, compat, infoSource: contextWindow || reasoning !== null ? (known ? "catalog+service" : "service") : "unknown" };
+  const maxTokens = positive(raw.max_output_tokens, raw.max_completion_tokens, raw.max_tokens, raw.limit?.output, raw.metadata?.max_output_tokens, raw.metadata?.max_completion_tokens, raw.metadata?.max_tokens, raw.metadata?.limit?.output, known?.maxTokens);
+  return { id, name: raw.name || known?.name || id, contextWindow, maxTokens, reasoning, thinkingLevels, input, compat, infoSource: contextWindow || maxTokens || reasoning !== null ? (known ? "catalog+service" : "service") : "unknown" };
 }
 
 export class ProviderStore {
@@ -145,9 +146,11 @@ export class ProviderStore {
   async updateModel(providerId, input, runtime) {
     const provider = this.providers.find((item) => item.id === providerId);
     if (!provider) throw new Error("找不到该提供商");
+    if (input.maxTokens !== undefined && (!Number.isSafeInteger(input.maxTokens) || input.maxTokens <= 0)) throw new Error("最大输出长度必须是正整数");
     let model = provider.models.find((item) => item.id === input.id);
     if (!model) { model = normalizeDiscoveredModel({ id: input.id }); if (!model) throw new Error("Model ID 无效"); provider.models.push(model); }
     if (input.contextWindow !== undefined) model.contextWindow = positive(input.contextWindow);
+    if (input.maxTokens !== undefined) model.maxTokens = input.maxTokens;
     if (typeof input.vision === "boolean") model.input=["text",...(input.vision?["image"]:[])];
     if (typeof input.reasoning === "boolean") model.reasoning = input.reasoning;
     if (input.thinkingFormat) {
@@ -162,7 +165,7 @@ export class ProviderStore {
     }
     if(typeof input.reasoning==="boolean")model.reasoning=input.reasoning;
     model.overrides={...model.overrides};
-    for(const key of ["contextWindow","reasoning","thinkingLevels","compat"])if(input[key]!==undefined || (key==="compat"&&input.thinkingFormat))model.overrides[key]=model[key];
+    for(const key of ["contextWindow","maxTokens","reasoning","thinkingLevels","compat"])if(input[key]!==undefined || (key==="compat"&&input.thinkingFormat))model.overrides[key]=model[key];
     if(typeof input.vision==="boolean")model.overrides.input=model.input;
     model.infoSource = "user";
     await this.persist(); await this.install(runtime);
@@ -187,6 +190,6 @@ export class ProviderStore {
     const stored = this.providers.find((item) => item.id === providerId)?.models.find((item) => item.id === id);
     const model = runtime.getModel(providerId, id);
     const levels = model ? getSupportedThinkingLevels(model) : ["off"];
-    return { contextWindow: model?.contextWindow, reasoning: model?.reasoning, ...stored, compat:model?.compat || stored?.compat, provider: providerId, providerName: this.providers.find(item => item.id === providerId)?.name || providerId, thinkingDefaults:!!stored && stored.reasoning!==false && !stored.thinkingLevels?.length, thinkingLevels: stored ? configuredThinkingLevels(stored).filter(level=>levels.includes(level)) : levels };
+    return { contextWindow: model?.contextWindow, reasoning: model?.reasoning, ...stored, maxTokens:model?.maxTokens ?? stored?.maxTokens, compat:model?.compat || stored?.compat, provider: providerId, providerName: this.providers.find(item => item.id === providerId)?.name || providerId, thinkingDefaults:!!stored && stored.reasoning!==false && !stored.thinkingLevels?.length, thinkingLevels: stored ? configuredThinkingLevels(stored).filter(level=>levels.includes(level)) : levels };
   }
 }
