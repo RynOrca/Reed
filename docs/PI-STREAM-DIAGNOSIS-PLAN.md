@@ -71,6 +71,21 @@
 
 ## 2026-10-11 参数语义与其他 harness 对照
 
+### SSE JSON 解析失败继续排查
+
+用户在修复包重新提交原任务。脱敏日志确认从 01:41:02Z 至 01:46:52Z 后 stopReason=error、仅 thinking，无正文和工具调用，错误为 malformed server-sent event JSON；不是 length。SDK 解析 SSE data 时 JSON.parse 失败，未保存原始损坏事件，当前不能区分服务/代理输出错误和客户端解码异常。
+
+- [x] 定位异常源为 OpenAI SDK SSE JSON 解析，确认现有 length 恢复不会覆盖该错误。
+- [x] 增加不修改原始字节的 SSE 观察器，只记录首个异常事件序号、长度、行数、空数据标记与哈希，限制诊断缓冲，不保存正文或凭据。
+- [x] 针对无正文、无工具调用的已知 malformed SSE 进行一次降低思考强度的恢复；部分正文/工具调用、停止、鉴权失败及 503 不进入该恢复。
+- [x] 恢复期间抑制提前错误终止事件，仍保留失败思考记录；最终失败给出中文解析异常。
+- [x] 隔离测试：任意字节切分、UTF-8、CRLF、多行 JSON、空数据、缓冲限制、诊断失败不改变原流；真实 bridge 一次恢复/重复异常终止。完整源码回归 42 项通过。
+- [x] 更新原路径便携包，确认关键模块哈希一致；真实桌面 34 项检查通过，脚本错误 0，包含 SSE 恢复成功、错误去重和重复失败停止。
+
+用户已明确选择关闭当前 Reed 后测试；按精确包路径关闭 Reed 和其 Node，测试仅使用临时数据与本地模拟服务。SDK core 在 stopReason=error 时忽略 turn_end 的 continue；使用公开 agent_before_settle 边界继续，维持 session.prompt 的完整生命周期，不改 SDK 源码。
+
+版本标签：`reed-sse-recovery-2026-10-11`。尚未获得此次真实损坏事件内容，源头不能定因；新增观察器能在下一次发生时判断收到的事件是否为空、是否像完整 JSON、是否含解码替换字符。它不丢弃事件，不拼补 JSON，不执行损坏工具调用。
+
 ### 启动拒绝访问修复
 
 用户复测修复包报告 Io PermissionDenied。已定位：构建目录给 Reed.exe 和随包 node.exe 继承 Low mandatory label。实际失败 Reed 进程令牌完整性为 4,096（Low），启动器为 8,192（Medium）；普通用户身份不能消除低完整性对 AppData 写入的限制。

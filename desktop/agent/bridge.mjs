@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import { mkdir, stat, readFile, writeFile, appendFile, rename, realpath, unlink } from "node:fs/promises";
 import { classifyAssistantOutcome } from "./turn-outcome.mjs";
 import { createTurnRecovery } from "./turn-recovery.mjs";
+import { createDiagnosticFetch } from "./stream-diagnostics.mjs";
 import { join, resolve } from "node:path";
 import { createApprovalGate } from "./approval.mjs";
 import { RoleStore } from "./roles.mjs";
@@ -62,10 +63,11 @@ const learner = new LearnerStore(dataDir);
 await learner.load();
 
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
-const turnRecovery = createTurnRecovery({ send, diagnostic: async entry => {
+const diagnostic = async entry => {
   try { await appendFile(join(dataDir, "request-diagnostics.jsonl"), JSON.stringify({ timestamp: new Date().toISOString(), sessionId: session?.sessionId, ...entry }) + "\n"); }
   catch { process.stderr.write("Request diagnostic could not be saved\n"); }
-} });
+};
+const turnRecovery = createTurnRecovery({ send, diagnostic });
 let runtime;
 let session;
 let busy = false;
@@ -158,6 +160,10 @@ async function openSession(provider, modelId, sessionManager) {
   });
   session?.dispose();
   session = created.session;
+  const streamFunction = session.agent.streamFunction;
+  session.agent.streamFunction = (model, context, options) => streamFunction(model, context, {
+    ...options, fetch: createDiagnosticFetch(options?.fetch || globalThis.fetch, diagnostic),
+  });
   metadata[session.sessionId] = { ...metadata[session.sessionId], projectPath };
   Object.assign(appState, { activeSessionId: session.sessionId, projectPath, provider: session.model?.provider, modelId: session.model?.id });
   await saveJson(metadataPath, metadata); await saveJson(appStatePath, appState);
@@ -180,7 +186,7 @@ async function openSession(provider, modelId, sessionManager) {
         send({ type: "delta", kind: update.type === "text_delta" ? "text" : "thinking", text: update.delta });
       }
     } else if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "error") {
-      send({ type: "error", message: event.message.errorMessage || "模型请求失败，请检查服务地址、凭据和模型信息" });
+      if (!turnRecovery.willRecover(event.message)) send({ type: "error", message: classifyAssistantOutcome(event.message).message || "模型请求失败，请检查服务地址、凭据和模型信息" });
     } else if (event.type === "tool_execution_start") {
       send({ type: "tool_start", id: event.toolCallId, name: event.toolName, args: event.args });
     } else if (event.type === "tool_execution_end") {

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -15,7 +15,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function recoveryFixture(t, secondTruncated) {
+async function recoveryFixture(t, secondTruncated, malformed = false) {
   const root = await mkdtemp(join(tmpdir(), "reed-turn-recovery-"));
   const requests = [], events = [];
   const recoveryRequest = deferred(), releaseRecovery = deferred();
@@ -41,6 +41,7 @@ async function recoveryFixture(t, secondTruncated) {
     const chunk = (delta, finish_reason = null) => ({ id: `recovery-${index}`, object: "chat.completion.chunk", created: 1, model: "recovery-model", choices: [{ index: 0, delta, finish_reason }] });
     response.write(`data: ${JSON.stringify(chunk({ role: "assistant" }))}\n\n`);
     response.write(`data: ${JSON.stringify(chunk(truncated ? { reasoning_content: `ISOLATED_THINKING_ATTEMPT_${index}` } : { content: "RECOVERY_VISIBLE_SUCCESS" }))}\n\n`);
+    if (malformed && truncated) { response.end('data: {"choices":\n\n'); return; }
     response.write(`data: ${JSON.stringify(chunk({}, truncated ? "length" : "stop"))}\n\n`);
     response.write(`data: ${JSON.stringify({ ...chunk({}), choices: [], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } })}\n\n`);
     response.end("data: [DONE]\n\n");
@@ -101,6 +102,7 @@ async function recoveryFixture(t, secondTruncated) {
   await Promise.race([recoveryRequest.promise, until(event => events.indexOf(event) >= start && event.type === "done").then(() => { throw new Error("Turn completed before the recovery request"); })]);
   assert.ok(events.slice(start).some(event => event.type === "recovery"), "恢复应向 UI 发出明确事件");
   assert.ok(!events.slice(start).some(event => ["done", "settled"].includes(event.type)), "恢复请求未返回时不能显示完成");
+  if (malformed) assert.ok(!events.slice(start).some(event => event.type === "error"), "可恢复的首次流错误不能提前结束 UI 或留下最终错误提示");
   assert.equal(requests[0].reasoning_effort, "medium");
   assert.equal(requests[1].reasoning_effort, "low");
   for (const request of requests) {
@@ -109,6 +111,11 @@ async function recoveryFixture(t, secondTruncated) {
   assert.ok(!JSON.stringify(requests[1].messages).includes("ISOLATED_THINKING_ATTEMPT_1"), "失败思考不能再次送入模型上下文");
   releaseRecovery.resolve();
   const done = await pending;
+  if (malformed) {
+    const diagnostics = (await readFile(join(root, "data", "request-diagnostics.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+    assert.ok(diagnostics.some(entry => entry.type === "malformed_sse" && entry.event === 3), "诊断应观察到真实响应的损坏事件，而不是改写或忽略它");
+    assert.ok(!JSON.stringify(diagnostics).includes("ISOLATED_THINKING_ATTEMPT_"));
+  }
   assert.equal(requests.length, 2, "同一轮最多请求一次恢复");
   return { events, requests, done, command, sessionId, task, start };
 }
@@ -131,4 +138,17 @@ test("PI bridge bounds repeated truncation and preserves failed history and orig
   assert.equal(fixture.requests[2].reasoning_effort, "medium", "恢复降档不能改变用户的后续思考设置");
   assert.equal(fixture.requests[2].messages.filter(message => message.role === "user" && JSON.stringify(message.content).includes(fixture.task)).length, 1, "追问必须仍包含原始任务");
   assert.ok(!JSON.stringify(fixture.requests[2].messages).includes("ISOLATED_THINKING_ATTEMPT_"));
+});
+
+test("PI bridge retries a malformed thinking-only SSE once with the original task", { timeout: 30000 }, async t => {
+  const fixture = await recoveryFixture(t, false, true);
+  assert.equal(fixture.done.outcome.status, "complete");
+  assert.ok(fixture.events.some(event => event.type === "message_outcome" && event.outcome.code === "malformed_sse"));
+});
+
+test("PI bridge reports repeated malformed SSE rather than retrying indefinitely", { timeout: 30000 }, async t => {
+  const fixture = await recoveryFixture(t, true, true);
+  assert.equal(fixture.done.outcome.status, "error");
+  assert.equal(fixture.done.outcome.code, "malformed_sse");
+  assert.equal(fixture.requests.length, 2);
 });

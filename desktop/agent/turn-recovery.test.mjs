@@ -11,6 +11,18 @@ const thinkingOnly = {
   usage: { input: 100, output: 20, totalTokens: 120 },
 };
 
+test("malformed SSE recovery excludes visible answers, tool calls, aborts and unrelated errors", () => {
+  const recovery = createTurnRecovery({ send() {} });
+  recovery.begin();
+  const malformed = { ...thinkingOnly, stopReason: "error", errorMessage: "Error reading response: malformed server-sent event JSON." };
+  assert.equal(recovery.willRecover(malformed), true);
+  assert.equal(recovery.willRecover({ ...malformed, content: [{ type: "text", text: "partial answer" }] }), false);
+  assert.equal(recovery.willRecover({ ...malformed, content: [{ type: "toolCall", name: "write" }] }), false);
+  assert.equal(recovery.willRecover({ ...malformed, stopReason: "aborted" }), false);
+  assert.equal(recovery.willRecover({ ...malformed, errorMessage: "401 invalid API key" }), false);
+  assert.equal(recovery.willRecover({ ...malformed, errorMessage: "503 model startup failed" }), false);
+});
+
 const cases = [
   {
     name: "Qwen existing thinking toggles and separate budget",

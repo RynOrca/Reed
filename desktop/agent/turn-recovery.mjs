@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { classifyAssistantOutcome } from "./turn-outcome.mjs";
+import { classifyAssistantOutcome, isMalformedStreamError } from "./turn-outcome.mjs";
 
 const recoveryHint = "The previous request ended without visible text or a tool call. Continue the original user task now. Keep reasoning brief, then produce a visible answer or call the required tool. Do not ask the user to repeat the task.";
 
@@ -54,11 +54,21 @@ export function summarizeRequest(payload) {
 export function createTurnRecovery({ send, diagnostic = async () => {} }) {
   let active = false, attempted = false, recovering = false, requestNumber = 0;
   let lastMessage = null;
+  const willRecover = message => {
+    const outcome = classifyAssistantOutcome(message);
+    return active && !attempted && !outcome.hasText && !outcome.hasToolCalls && (["truncated", "empty"].includes(outcome.status) || isMalformedStreamError(message));
+  };
   return {
     begin() { active = true; attempted = false; recovering = false; requestNumber = 0; lastMessage = null; },
     end() { active = false; recovering = false; },
     outcome() { return classifyAssistantOutcome(lastMessage); },
+    willRecover,
     extension(pi) {
+      // Agent core ignores turn_end continuation for errors. The session's public
+      // settlement boundary can resume from the preserved user message instead.
+      pi.on("agent_before_settle", () => {
+        if (active && recovering) return { continue: true };
+      });
       pi.on("before_provider_request", async event => {
         if (!active) return;
         const isRecovery = recovering;
@@ -72,10 +82,9 @@ export function createTurnRecovery({ send, diagnostic = async () => {} }) {
         lastMessage = event.message;
         const outcome = classifyAssistantOutcome(lastMessage);
         await diagnostic({ type: "response", request: requestNumber, outcome, usage: lastMessage.usage });
-        const invisible = !outcome.hasText && !outcome.hasToolCalls;
-        if (invisible && ["truncated", "empty"].includes(outcome.status) && !attempted) {
+        if (willRecover(lastMessage)) {
           attempted = true; recovering = true;
-          send({ type: "recovery", message: "模型未产生回复或工具调用，正在保留原任务并降低思考强度重试一次" });
+          send({ type: "recovery", message: isMalformedStreamError(lastMessage) ? "流式响应损坏，正在保留原任务并降低思考强度重试一次" : "模型未产生回复或工具调用，正在保留原任务并降低思考强度重试一次" });
           return { entries: [{ type: "context_edit", targetId: event.messageEntryId, replacement: null }], continue: true };
         }
         // Avoid a second SDK compact-and-retry after our bounded recovery fails.
