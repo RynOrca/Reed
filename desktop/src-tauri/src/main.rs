@@ -536,7 +536,9 @@ fn run_desktop() -> tauri::Result<()> {
         })
         .build();
 
+    startup_log(&format!("Preparing user profile: {}", profile::directory()?.display()));
     let profile_dir = profile::prepare()?;
+    startup_log(&format!("User profile ready: {}", profile_dir.display()));
     let window_state = tauri_plugin_window_state::Builder::new().with_state_flags(BOUNDS)
         .with_filename(profile_dir.join("window-state.json").to_string_lossy().into_owned());
     tauri::Builder::default()

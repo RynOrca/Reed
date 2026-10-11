@@ -1,5 +1,9 @@
 use std::{fs, io, path::{Path, PathBuf}};
 
+fn at<T>(result: io::Result<T>, operation: &str, path: &Path) -> io::Result<T> {
+    result.map_err(|error| io::Error::new(error.kind(), format!("{operation} [{}]: {error}", path.display())))
+}
+
 pub fn directory() -> io::Result<PathBuf> {
     if let Some(path) = std::env::var_os("SUMMON_TEST_DATA_DIR") { return Ok(path.into()); }
     std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("Reed"))
@@ -12,12 +16,12 @@ pub fn prepare() -> io::Result<PathBuf> {
         std::env::var_os("SUMMON_TEST_LEGACY_DIR").map(PathBuf::from)
     } else { std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("dev.rynorca.summon")) };
     if let Some(source) = legacy.filter(|p| p.is_dir()) { migrate(&source, &target)?; }
-    fs::create_dir_all(&target)?;
+    at(fs::create_dir_all(&target), "Create profile directory", &target)?;
     Ok(target)
 }
 
 fn check_regular(path: &Path) -> io::Result<()> {
-    let meta = fs::symlink_metadata(path)?;
+    let meta = at(fs::symlink_metadata(path), "Inspect profile path", path)?;
     #[cfg(windows)]
     { use std::os::windows::fs::MetadataExt;
       if meta.file_attributes() & 0x400 != 0 { return Err(io::Error::other("Profile contains a junction or symbolic link")); } }
@@ -43,15 +47,15 @@ fn rewrite(value: &mut serde_json::Value, source: &Path, target: &Path) {
 
 fn copy_tree(source: &Path, destination: &Path, old: &Path, new: &Path) -> io::Result<()> {
     check_regular(source)?;
-    fs::create_dir_all(destination)?;
-    for entry in fs::read_dir(source)? {
+    at(fs::create_dir_all(destination), "Create migration directory", destination)?;
+    for entry in at(fs::read_dir(source), "Read migration directory", source)? {
         let entry = entry?; let path = entry.path(); let name = entry.file_name();
         if name.to_string_lossy().ends_with(".lock") || name.to_string_lossy().ends_with(".tmp") { continue; }
         check_regular(&path)?;
         let dest = destination.join(name);
         if path.is_dir() { copy_tree(&path, &dest, old, new)?; }
         else {
-            let bytes = fs::read(&path)?;
+            let bytes = at(fs::read(&path), "Read migration file", &path)?;
             let content = match path.extension().and_then(|e| e.to_str()) {
                 Some("json") => {
                     let mut value: serde_json::Value = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
@@ -70,7 +74,7 @@ fn copy_tree(source: &Path, destination: &Path, old: &Path, new: &Path) -> io::R
                 }
                 _ => bytes,
             };
-            fs::write(dest, content)?;
+            at(fs::write(&dest, content), "Write migration file", &dest)?;
         }
     }
     Ok(())
@@ -80,10 +84,10 @@ pub fn migrate(source: &Path, target: &Path) -> io::Result<bool> {
     check_regular(source)?;
     if target.exists() {
         check_regular(target)?;
-        if fs::read_dir(target)?.next().is_some() { return Ok(false); }
+        if at(fs::read_dir(target), "Inspect existing profile", target)?.next().is_some() { return Ok(false); }
     }
     let parent = target.parent().ok_or_else(|| io::Error::other("Invalid profile path"))?;
-    fs::create_dir_all(parent)?;
+    at(fs::create_dir_all(parent), "Prepare profile parent", parent)?;
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(io::Error::other)?.as_nanos();
     let staging = parent.join(format!("Reed.migrating-{}-{stamp}", std::process::id()));
     copy_tree(source, &staging, source, target)?;

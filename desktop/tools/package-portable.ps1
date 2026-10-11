@@ -1,5 +1,6 @@
 param([string]$Output = "")
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'executable-integrity.ps1')
 $desktopDir = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $projectDir = Join-Path $desktopDir 'src-tauri'
 $agentDir = Join-Path $desktopDir 'agent'
@@ -46,4 +47,6 @@ foreach ($notice in @('LICENSE','NOTICE.md')) {
     Copy-Item -LiteralPath (Join-Path $desktopDir "../$notice") -Destination (Join-Path $Output $notice) -Force
 }
 Copy-Item -LiteralPath (Join-Path $desktopDir 'web/vendor/MARKED-LICENSE') -Destination (Join-Path $Output 'MARKED-LICENSE') -Force
+Set-ReedExecutableIntegrity -Path (Join-Path $Output 'Reed.exe')
+Set-ReedExecutableIntegrity -Path (Join-Path $Output 'runtime/node.exe')
 Write-Host "Portable build: $Output"

@@ -1,5 +1,6 @@
 param([string]$Output = "")
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'executable-integrity.ps1')
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $tauri = Join-Path $root 'node_modules/.bin/tauri.cmd'
 if (-not (Test-Path -LiteralPath $tauri)) { throw 'Run npm ci in the repository first.' }
@@ -34,6 +35,7 @@ finally { Pop-Location }
 $installer = Get-ChildItem -LiteralPath (Join-Path $target 'release/bundle/nsis') -Filter '*setup.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $installer) { throw 'Installer output not found' }
 Copy-Item -LiteralPath $installer.FullName -Destination (Join-Path $Output 'Reed-0.1.0-setup.exe')
+Set-ReedExecutableIntegrity -Path (Join-Path $Output 'Reed-0.1.0-setup.exe')
 $version = @{ product = 'Reed'; version = '0.1.0'; sourceCommit = (& git -C $root rev-parse HEAD); dataDirectory = '%APPDATA%\Reed' }
 [IO.File]::WriteAllText((Join-Path $portable 'VERSION.json'), ($version | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 Compress-Archive -Path (Join-Path $portable '*') -DestinationPath (Join-Path $Output 'Reed-0.1.0-portable.zip')

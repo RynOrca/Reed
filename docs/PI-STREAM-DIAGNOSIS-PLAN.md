@@ -71,6 +71,19 @@
 
 ## 2026-10-11 参数语义与其他 harness 对照
 
+### 启动拒绝访问修复
+
+用户复测修复包报告 Io PermissionDenied。已定位：构建目录给 Reed.exe 和随包 node.exe 继承 Low mandatory label。实际失败 Reed 进程令牌完整性为 4,096（Low），启动器为 8,192（Medium）；普通用户身份不能消除低完整性对 AppData 写入的限制。
+
+- [x] 补充启动阶段及文件操作路径诊断，明确失败在创建 profile 迁移暂存目录。
+- [x] 检查父目录可写、旧数据 24 个文件可读，排除普通 ACL/文件锁故障。
+- [x] 仅为包内可执行文件恢复构建用户控制权和 Medium integrity；不改变系统防护策略。
+- [x] 修正现有便携包并正常启动，日志确认 profile ready、window created、setup complete、Agent started。旧数据目录保留。
+- [x] 将完整性归一化加入便携与安装包流程；后续构建不再直接交付继承 Low 标签的可执行文件。
+- [x] 三项 Rust 迁移回归通过。测试执行文件起初也因 Low 标记无法创建临时目录，归一化后全部通过；打包处理在临时副本上验证成功，三份 PowerShell 脚本语法检查通过。
+
+原桌面隔离验收在允许低完整性写入的测试目录运行，未覆盖正常 AppData 启动；本次已补真实用户目录启动验证。
+
 - SDK 的 maxTokens 是内部通用字段，不等于 HTTP max_tokens。当前自定义服务未匹配特殊提供商规则，也未覆盖 maxTokensField，适配器代码路径会发送 max_completion_tokens=16384；这是配置和源码推导，尚非历史请求抓包。
 - OpenAI 官方 token-counting 文档：max_completion_tokens / max_output_tokens 包含不可见推理 token。
 - 百炼 OpenAI Chat 文档：Qwen 的 max_tokens 通常只限制回答，max_completion_tokens 限制思考和回答之和。自定义 Qwen 部署是否遵循该契约仍未知，不能仅凭模型名称套用百炼规则。

@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## 2026-10-11 — 修复构建包无法写入用户数据目录
+
+基线提交：`59d7dc4`。Git 版本标签：`reed-startup-integrity-2026-10-11`。
+
+- 定位启动拒绝访问：构建产物继承 Low mandatory label，Windows 将 Reed 和随包 Node 以低完整性运行，无法创建正常 AppData 目录。
+- 打包流程将便携包两项可执行文件、安装程序恢复为普通用户 Medium integrity；仅调整生成产物，不改变系统安全策略。
+- 启动日志新增 profile 准备阶段与具体读写路径，避免权限错误仅有笼统代码。
+- 现有修复包原路径已修正，真实用户目录启动验证通过；窗口与 Agent 已启动，旧数据保留。
+- 三项 Rust 迁移回归通过；打包完整性处理的临时副本验证及 PowerShell 语法检查通过。
+
 ## 2026-10-11 — 真实服务参数对照结果
 
 修复提交：`9eb9542`。Git 版本标签：`reed-service-verification-2026-10-11`。
