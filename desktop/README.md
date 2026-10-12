@@ -2,6 +2,8 @@
 
 产品介绍、配置、数据与权限、构建和测试方式见[GitHub README](https://github.com/RynOrca/Reed#readme)。
 
+当前源码已支持 Markdown 分阶段学习目标、角色学习画像开关、独立工作记忆与保存前价值审查、笔记库初次总览、窗口置顶及用户消息快速定位。具体使用方式与模型判断的限制见主 README。
+
 便携包运行 `Reed.exe`，保留同目录 `agent/` 与 `runtime/`。更新前先通过托盘退出旧版，用户配置保存在 `%APPDATA%\Reed`，不随程序包覆盖。
 
 启动日志位于便携包的 `startup.log`；目录不可写时回退到系统临时目录的 `Reed-startup.log`。Agent 日志位于应用数据目录的 `agent.log`。反馈问题前请删除日志中的私人内容和服务凭据。
