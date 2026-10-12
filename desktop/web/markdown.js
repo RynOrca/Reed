@@ -31,12 +31,20 @@ function inline(tokens = []) {
   return fragment;
 }
 
-function blocks(tokens = []) {
+function blocks(tokens = [], options = {}) {
   const fragment = document.createDocumentFragment();
   for (const token of tokens) {
     let node;
     switch (token.type) {
       case "space": continue;
+      case "checkbox": {
+        node = document.createElement("input"); node.type = "checkbox"; node.checked = token.checked;
+        const index = options.taskIndex ? options.taskIndex.value++ : 0;
+        node.disabled = !options.onTask;
+        node.setAttribute("aria-label", `学习小目标 ${index+1}`);
+        if (options.onTask) node.onchange = () => options.onTask(index,node.checked);
+        break;
+      }
       case "heading": node = document.createElement(`h${Math.min(6, Math.max(1, token.depth))}`); node.append(inline(token.tokens)); break;
       case "paragraph": node = document.createElement("p"); node.append(inline(token.tokens)); break;
       case "text": node = document.createElement("p"); node.append(inline(token.tokens || [{ type: "text", text: token.text }])); break;
@@ -48,10 +56,10 @@ function blocks(tokens = []) {
       case "list": {
         node = document.createElement(token.ordered ? "ol" : "ul");
         if (token.ordered && token.start) node.start = token.start;
-        for (const item of token.items || []) { const li = document.createElement("li"); li.append(blocks(item.tokens)); node.append(li); }
+        for (const item of token.items || []) { const li = document.createElement("li"); if(item.task)li.className="task-list-item"; li.append(blocks(item.tokens,options)); node.append(li); }
         break;
       }
-      case "blockquote": node = document.createElement("blockquote"); node.append(blocks(token.tokens)); break;
+      case "blockquote": node = document.createElement("blockquote"); node.append(blocks(token.tokens,options)); break;
       case "hr": node = document.createElement("hr"); break;
       case "html": node = document.createElement("p"); node.textContent = token.text || token.raw || ""; break;
       case "table": {
@@ -69,6 +77,6 @@ function blocks(tokens = []) {
   return fragment;
 }
 
-export function renderMarkdown(root, source) {
-  root.replaceChildren(blocks(marked.lexer(String(source || ""), { gfm: true })));
+export function renderMarkdown(root, source, options = {}) {
+  root.replaceChildren(blocks(marked.lexer(String(source || ""), { gfm: true }), {...options,taskIndex:{value:0}}));
 }

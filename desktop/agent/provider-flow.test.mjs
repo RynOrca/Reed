@@ -50,7 +50,7 @@ test("real PI bridge: discover, stream, remember, background memory, projects an
   const server = createServer(async (request, response) => {
     if (request.url === "/v1/models") { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ data: [{ id: "test-model", context_length: 65536, supports_reasoning: true, reasoning_efforts: ["off", "low", "high"] },{id:"unknown-model",context_length:65536}] })); return; }
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
-    const body = JSON.parse(Buffer.concat(chunks).toString()); requests.push(body);
+    const body = JSON.parse(Buffer.concat(chunks).toString()); if(!body.messages.some(m=>/笔记库导航整理器|根据分批笔记浏览结果|合并笔记目录导航/.test(typeof m.content==="string"?m.content:"")))requests.push(body);
     if (body.messages.some(m => m.role === "user" && JSON.stringify(m.content).includes("模拟鉴权失败"))) {
       response.writeHead(401, { "content-type": "application/json" }); response.end(JSON.stringify({ error: { message: "isolated authentication failure", type: "authentication_error" } })); return;
     }
@@ -86,7 +86,7 @@ test("real PI bridge: discover, stream, remember, background memory, projects an
   }
   async function command(type, args = {}) {
     const id = `full-${++seq}`; child.stdin.write(JSON.stringify({ type, id, ...args }) + "\n");
-    const result = await until(m => m.id === id && ["ack", "done", "error", "sessions"].includes(m.type));
+    const result = await until(m => m.id === id && ["ack", "done", "error", "sessions", "goals"].includes(m.type));
     assert.notEqual(result.type, "error", result.message || stderr); return result;
   }
   async function stop() { if (!child || child.exitCode !== null) return; const closed = once(child, "close"); child.stdin.end(); await closed; }
@@ -105,7 +105,7 @@ test("real PI bridge: discover, stream, remember, background memory, projects an
     await writeFile(join(skill, "SKILL.md"), "---\nname: test-study\ndescription: TEST_SKILL_DESCRIPTION\n---\nONLY_BODY_SENTINEL\n");
     await command("configure_capabilities", { vaultPath: vault });
     await command("import_skill", { path: skill });
-    const role = await command("save_role", { name: "测试导师", system: "TEST_ROLE_SYSTEM_PRIORITY：用中文教学" });
+    const role = await command("save_role", { name: "测试导师", system: "TEST_ROLE_SYSTEM_PRIORITY：用中文教学", learnerProfileEnabled:true });
     const roleId = messages.filter(m => m.type === "roles").at(-1).roles.find(r => r.name === "测试导师").id;
     await command("select_role", { roleId });
     await command("prompt", { text: "请记住，我在学习线性代数" });
@@ -141,7 +141,18 @@ test("real PI bridge: discover, stream, remember, background memory, projects an
     const readonly=join(project,"readonly");await mkdir(readonly);
     await command("add_readonly",{path:readonly});await command("add_readonly",{path:readonly});
     assert.deepEqual(messages.filter(m=>m.type==="agent_capabilities").at(-1).customReadOnly,[readonly]);
-    await command("change_workspace", { path: project }); await command("prompt", { text: "项目对话" });
+    await command("change_workspace", { path: project });
+    await command("save_role", {roleId,name:"测试导师",system:"TEST_ROLE_SYSTEM_PRIORITY：用中文教学",learningGoalsEnabled:true,learnerProfileEnabled:true});
+    let goal=(await command("get_goals")).goal;
+    goal=(await command("save_goals",{projectPath:project,revision:goal.revision,body:"# GOAL_SYSTEM_SENTINEL\n- [ ] 第一阶段"})).goal;
+    await command("prompt",{text:"检查项目目标"});
+    assert.match(JSON.stringify(requests.at(-1).messages[0]),/GOAL_SYSTEM_SENTINEL/);
+    goal=(await command("save_goals",{projectPath:project,revision:goal.revision,body:"# GOAL_UPDATED_SENTINEL\n- [x] 第一阶段"})).goal;
+    await command("prompt",{text:"检查更新目标"});assert.match(JSON.stringify(requests.at(-1).messages[0]),/GOAL_UPDATED_SENTINEL/);
+    await command("save_role", {roleId,name:"测试导师",system:"TEST_ROLE_SYSTEM_PRIORITY：用中文教学",learningGoalsEnabled:false,learnerProfileEnabled:false});
+    await command("prompt",{text:"项目对话"});
+    const disabledSystem=JSON.stringify(requests.at(-1).messages[0]);assert.doesNotMatch(disabledSystem,/GOAL_UPDATED_SENTINEL|学习者画像（|相关知识库资料|相关历史对话片段/);
+    assert.ok(!requests.at(-1).tools.some(t=>["remember","record_learning_event"].includes(t.function.name)));
     await command("new_session", { noProject: true });
     const list = await command("list_sessions");
     assert.ok(list.sessions.some(m => m.id === first && m.projectPath === null));

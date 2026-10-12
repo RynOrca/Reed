@@ -5,7 +5,7 @@ import { protectKey, unprotectKey } from "./endpoint.mjs";
 
 export function inside(root, path) { const rel = relative(root, path); return !rel.startsWith("..") && !isAbsolute(rel); }
 export function terms(text) { const s = String(text).toLowerCase(); return [...new Set([...(s.match(/[a-z0-9_]{2,}/g) || []), ...(s.match(/[\u3400-\u9fff]+/g) || []).flatMap(v => Array.from({length: Math.max(1,v.length-1)}, (_,i)=>v.slice(i,i+2)))])]; }
-async function walk(root, accept, budget = { files:0, bytes:0 }) {
+export async function walk(root, accept, budget = { files:0, bytes:0 }) {
   const found=[];
   async function visit(dir) {
     for (const item of await readdir(dir,{withFileTypes:true})) {
@@ -58,6 +58,7 @@ export class CapabilityStore {
     const needles=terms(query); if(!needles.length) return [];
     const hits=[];
     for(const file of files) {
+      if(this.canRead && !(await this.canRead(file.path))) continue;
       if(file.size>1024*1024) continue;
       let entry=this.cache.get(file.path);
       if(!entry || entry.mtime!==file.mtime) {

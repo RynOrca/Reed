@@ -368,6 +368,24 @@ fn dismiss(window: tauri::WebviewWindow) {
 }
 
 #[tauri::command]
+fn window_pinned(window: tauri::WebviewWindow) -> Result<bool, String> {
+    window.is_always_on_top().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_window_pinned(window: tauri::WebviewWindow, pinned: bool) -> Result<bool, String> {
+    let previous = window.is_always_on_top().map_err(|e| e.to_string())?;
+    window.set_always_on_top(pinned).map_err(|e| e.to_string())?;
+    let mut prefs = read_preferences(window.app_handle());
+    prefs["alwaysOnTop"] = pinned.into();
+    if let Err(error) = save_preferences(window.app_handle(), &prefs) {
+        let _ = window.set_always_on_top(previous);
+        return Err(error);
+    }
+    Ok(pinned)
+}
+
+#[tauri::command]
 async fn choose_workspace() -> Result<Option<String>, String> {
     #[cfg(windows)]
     {
@@ -548,7 +566,7 @@ fn run_desktop() -> tauri::Result<()> {
         .manage(RoundedBounds::default())
         .plugin(window_state.build())
         .plugin(shortcuts)
-        .invoke_handler(tauri::generate_handler![dismiss, agent_command, choose_workspace, open_local_file, desktop_preferences, set_shortcut, set_autostart, open_settings, capture_shortcut, drag_window, resize_window, update_brand_icon, set_appearance, ui_ready])
+        .invoke_handler(tauri::generate_handler![dismiss, window_pinned, set_window_pinned, agent_command, choose_workspace, open_local_file, desktop_preferences, set_shortcut, set_autostart, open_settings, capture_shortcut, drag_window, resize_window, update_brand_icon, set_appearance, ui_ready])
         .setup(|app| {
             startup_log("Creating Tauri window");
             let webview_dir = profile::directory()?.join("webview");
@@ -573,6 +591,7 @@ fn run_desktop() -> tauri::Result<()> {
             }
 
             let prefs = read_preferences(app.handle());
+            main_window.set_always_on_top(prefs["alwaysOnTop"].as_bool().unwrap_or(false))?;
             let preferred = prefs["shortcut"].as_str().unwrap_or("Alt+Shift+C");
             let mut shortcut = String::new();
             for accelerator in std::iter::once(preferred).chain(["Alt+Shift+C", "Alt+Shift+Q", "Alt+Shift+J", "F3"]) {

@@ -7,7 +7,7 @@ import { inside } from "./capabilities.mjs";
 export const FILE_TOOLS=["read","write","edit","ls","find","grep"];
 const textResult=text=>({content:[{type:"text",text}],details:{}});
 export class FileScope {
-  constructor({workspace,readOnly,fullAccess=()=>false}) {this.workspace=workspace;this.readOnly=readOnly;this.fullAccess=fullAccess;}
+  constructor({workspace,readOnly,fullAccess=()=>false,protectedPaths=()=>[]}) {this.workspace=workspace;this.readOnly=readOnly;this.fullAccess=fullAccess;this.protectedPaths=protectedPaths;}
   async roots() {return {write:await realpath(this.workspace()),readOnly:await Promise.all(this.readOnly().map(p=>realpath(p).catch(()=>null))).then(r=>r.filter(Boolean))};}
   async check(input,mutation=false) {
     if(typeof input!=="string" || input.includes("\0") || /(^|[\\/])[^\\/]*:[^\\/]/.test(input.replace(/^[A-Za-z]:/,"")))throw new Error("文件路径无效");
@@ -16,19 +16,23 @@ export class FileScope {
       try {nearest=await realpath(nearest);break;}catch(e){if(e.code!=="ENOENT")throw e;const parent=dirname(nearest);if(parent===nearest)throw e;parts.unshift(relative(parent,nearest));nearest=parent;}
     }
     path=resolve(nearest,...parts);
+    for (const rule of this.protectedPaths()) {
+      const root = await realpath(rule.path).catch(()=>resolve(rule.path));
+      if ((inside(root,path) || (mutation && inside(path,root))) && (mutation || rule.denyRead)) throw new Error("角色权限禁止访问此学习数据，完全文件权限不能覆盖此限制");
+    }
     if(mutation && !this.fullAccess() && (!inside(roots.write,path) || roots.readOnly.some(root=>inside(root,path))))throw new Error("操作被阻止：默认只允许修改当前工作区；此目录只读，可在设置中切换完全文件权限");
     // Do not allow NTFS alternate data streams or device names.
     if(path.replace(/^[A-Za-z]:/,"").includes(":") || /(^|[\\/])(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(path))throw new Error("不支持设备路径或备用数据流");
     return path;
   }
   async entries(input=".",deep=false) {
-    const root=await this.check(input),out=[];let count=0;
+    const root=await this.check(input),out=[];let count=0;const scope=this;
     async function visit(dir,depth) {
       if(depth>20)return;
       for(const item of await readdir(dir,{withFileTypes:true})) {
         if(++count>10000)throw new Error("目录过大，请缩小检索范围");
         if(item.isSymbolicLink() || [".git","node_modules"].includes(item.name))continue;
-        const path=join(dir,item.name);out.push({path,name:relative(root,path),directory:item.isDirectory()});
+        const path=join(dir,item.name);try{await scope.check(path);}catch{continue;}out.push({path,name:relative(root,path),directory:item.isDirectory()});
         if(deep && item.isDirectory())await visit(path,depth+1);
       }
     }

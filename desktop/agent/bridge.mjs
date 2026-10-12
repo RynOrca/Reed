@@ -7,6 +7,9 @@ import { createTurnRecovery } from "./turn-recovery.mjs";
 import { createDiagnosticFetch } from "./stream-diagnostics.mjs";
 import { createVisualReview, VISUAL_TOOLS } from "./visual-review.mjs";
 import { createContextPolicy } from "./context-policy.mjs";
+import { GoalStore } from "./goals.mjs";
+import { roleFeatureExtension } from "./role-features.mjs";
+import { VaultOverview } from "./vault-overview.mjs";
 import { join, resolve } from "node:path";
 import { createApprovalGate } from "./approval.mjs";
 import { RoleStore } from "./roles.mjs";
@@ -17,7 +20,7 @@ import { EndpointStore, REMOTE_PROVIDER, validateEndpoint } from "./endpoint.mjs
 import { MemoryStore } from "./memory.mjs";
 import { ProviderStore } from "./providers.mjs";
 import { createMemoryAgent } from "./memory-agent.mjs";
-import { CapabilityStore } from "./capabilities.mjs";
+import { CapabilityStore, inside } from "./capabilities.mjs";
 import { createLearningTools, LEARNING_TOOLS } from "./learning-tools.mjs";
 import { LearnerStore, learnerExtension } from "./learner.mjs";
 import { FileScope, sandboxTools, FILE_TOOLS } from "./sandbox.mjs";
@@ -63,6 +66,7 @@ await capabilities.load();
 await installLearningSkills(capabilities);
 const learner = new LearnerStore(dataDir);
 await learner.load();
+const goals = new GoalStore(dataDir); await goals.initialize();
 
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const diagnostic = async entry => {
@@ -77,19 +81,25 @@ let busy = false;
 let queue = Promise.resolve();
 const securityPath = join(dataDir, "security.json");
 const security = await userConfig.get("security",securityPath,{approval:"manual"});
-const scope = new FileScope({ workspace: () => cwd, readOnly: () => [capabilities.state.vaultPath, join(dataDir,"skills"), join(dataDir, "attachments"), join(dataDir,"artifacts","screenshots"), contextPolicy.artifactsDir, ...(security.readOnly || [])].filter(Boolean), fullAccess: () => security.access === "full" });
+const scope = new FileScope({ workspace: () => cwd, readOnly: () => [capabilities.state.vaultPath, join(dataDir,"skills"), join(dataDir, "attachments"), join(dataDir,"artifacts","screenshots"), contextPolicy.artifactsDir, ...(security.readOnly || [])].filter(Boolean), fullAccess: () => security.access === "full", protectedPaths: () => [
+  {path:goals.dir,denyRead:!roles.current().learningGoalsEnabled},
+  ...(!roles.current().learnerProfileEnabled ? ["memory.json","learner.json"].map(name=>({path:join(dataDir,name),denyRead:true})) : []),
+] });
+capabilities.canRead = async path => {try {await scope.check(path);return true;}catch{return false;}};
+const vaultOverview = new VaultOverview({capabilities,runtime:getRuntime,model:()=>session?.model,send,canRead:capabilities.canRead});
 const visualReview = createVisualReview({ scope, send, enabled: () => capabilities.state.browserEnabled });
 const mcp=new LazyMcp({config:userConfig,scope,send});await mcp.load();
 const approvalGate = createApprovalGate(send, undefined, () => security.approval);
-const memoryAgent = createMemoryAgent({ memory, learner, send, currentSession: () => session, runtime: getRuntime });
+const memoryAgent = createMemoryAgent({ memory, learner, send, currentSession: () => session, runtime: getRuntime, enabled:()=>roles.current().learnerProfileEnabled === true });
 const preparedSkills=new Map();
 async function prepareSkills(text) {
   const key=roles.activeId+'\n'+text;
   preparedSkills.set(key,await prepareRoleSkills(roles.current(),capabilities,text));
   if(preparedSkills.size>100) preparedSkills.delete(preparedSkills.keys().next().value);
 }
-const learningTools = createLearningTools({ capabilities, currentWorkspace: () => cwd, roles, send, scope, roleSkillInstructions: prompt=>preparedSkills.get(roles.activeId+'\n'+prompt)||'' });
-const learnerTools = learnerExtension({ learner, memory, currentSession: () => session, send });
+const learningTools = createLearningTools({ capabilities, currentWorkspace: () => cwd, roles, send, scope, vaultOverview, roleSkillInstructions: prompt=>preparedSkills.get(roles.activeId+'\n'+prompt)||'' });
+const learnerTools = learnerExtension({ learner, memory, currentSession: () => session, send, enabled:()=>roles.current().learnerProfileEnabled === true });
+const roleFeatures = roleFeatureExtension({roles,goals,project:()=>projectPath,learner,memory,currentSession:()=>session});
 let generationStart = null, firstDelta = null, outputTokens = 0, generationMs = 0, missingUsage = false;
 function emitTelemetry() {
   const model = session?.model;
@@ -140,7 +150,7 @@ async function openSession(provider, modelId, sessionManager) {
     noExtensions: true,
     noSkills: true,
     additionalSkillPaths: capabilities.enabledSkills(),
-    extensionFactories: [pi => scope.extension(pi), pi => {
+    extensionFactories: [pi => scope.extension(pi), roleFeatures, pi => {
       pi.on("tool_call",event=>{
         const readonly=["read","ls","find","grep","current_time","web_search","fetch_url","search_notes"];
         if(roles.activeId==="planner" && !readonly.includes(event.toolName)) return {block:true,terminate:true,reason:"Planner 仅允许只读调查，请切换 Agent 执行操作"};
@@ -157,7 +167,7 @@ async function openSession(provider, modelId, sessionManager) {
     agentDir,
     modelRuntime: models,
     model,
-    tools: roles.activeId==="planner" ? ["read","ls","find","grep","current_time","web_search","fetch_url","search_notes"] : [...FILE_TOOLS, "remember", "record_learning_event", ...LEARNING_TOOLS,...MCP_TOOLS,...VISUAL_TOOLS],
+    tools: roles.activeId==="planner" ? ["read","ls","find","grep","current_time","web_search","fetch_url","search_notes"] : [...FILE_TOOLS, ...(roles.current().learnerProfileEnabled ? ["remember", "record_learning_event"] : []), ...LEARNING_TOOLS,...MCP_TOOLS,...VISUAL_TOOLS],
     customTools: sandboxTools(scope),
     sessionManager,
     settingsManager,
@@ -228,7 +238,7 @@ function thinkingLevels() {
 function thinkingInfo() { const model=session?.model; const info=model && runtime ? providers.modelInfo(model.provider,model.id,runtime) : null; return {thinkingFormat:info?.compat?.thinkingFormat,reasoningKnown:info?.reasoning != null}; }
 function emitSession() {
   if (!session) return;
-  send({ type: "session", autoCompaction:session.autoCompactionEnabled, model: session.model && session.model.provider !== "unknown" ? `${session.model.provider}/${session.model.id}` : null, modelName: session.model?.provider !== "unknown" ? session.model?.name || session.model?.id : null, sessionId: session.sessionId, sessionName: session.sessionName || "", thinkingLevel: session.thinkingLevel, availableThinkingLevels: thinkingLevels(), ...thinkingInfo(), workspace: projectPath, roleId: roles.activeId });
+  send({ type: "session", autoCompaction:session.autoCompactionEnabled, model: session.model && session.model.provider !== "unknown" ? `${session.model.provider}/${session.model.id}` : null, modelName: session.model?.provider !== "unknown" ? session.model?.name || session.model?.id : null, sessionId: session.sessionId, sessionName: session.sessionName || "", thinkingLevel: session.thinkingLevel, availableThinkingLevels: thinkingLevels(), ...thinkingInfo(), workspace: projectPath, roleId: roles.activeId, learningGoalsEnabled:roles.current().learningGoalsEnabled, learnerProfileEnabled:roles.current().learnerProfileEnabled });
 }
 async function emitState() {
   const models = await getRuntime();
@@ -241,6 +251,7 @@ async function emitState() {
   send({ type: "capabilities", state: capabilities.snapshot() });
   const active = new Set(session?.getActiveToolNames() || []);
   send({ type: "agent_capabilities", approval: security.approval, access: security.access === "full" ? "full" : "workspace", workspace: cwd, readOnly: scope.readOnly(), customReadOnly: security.readOnly || [], tools: (session?.getAllTools() || []).map(t => ({ name: t.name, description: t.description, active: active.has(t.name) && !(["web_search", "fetch_url"].includes(t.name) && (!capabilities.state.webEnabled || !capabilities.key)) && !(t.name === "browser" && !capabilities.state.browserEnabled), scope: ["write", "edit", "file_manage"].includes(t.name) ? (security.access === "full" ? "完全文件权限" : "当前工作区") : FILE_TOOLS.includes(t.name) ? "任意可读取目录" : "按工具配置" })), extensions: ["文件范围限制", "权限审批", "分层记忆", "学习画像", "联网与笔记工具"], mcp: mcp.snapshot(), terminal: "disabled" });
+  send({type:"vault_overview",...vaultOverview.snapshot()});
   emitSession();
 }
 
@@ -254,6 +265,7 @@ async function handle(command) {
         if (!session) await openSession(command.provider || appState.provider || (remoteConfig ? REMOTE_PROVIDER : undefined), command.model || appState.modelId || remoteConfig?.modelId);
         await emitState();
         send({ type: "ack", id });
+        if(capabilities.state.vaultPath)void vaultOverview.start();
         break;
       }
       case "save_mcp":
@@ -304,16 +316,36 @@ async function handle(command) {
         for(const text of previous.followUp)await session.followUp(text);
         send({type:"queue",steering:session.getSteeringMessages(),followUp:session.getFollowUpMessages()});send({type:"ack",id});break;
       }
+      case "get_goals": {
+        send({type:"goals",id,goal:projectPath?await goals.read(projectPath):null,enabled:roles.current().learningGoalsEnabled});break;
+      }
+      case "save_goals": {
+        if(command.projectPath!==projectPath)throw new Error("项目已切换，草稿未写入，请重新打开目标");
+        const goal=await goals.save(projectPath,command.body,command.revision);
+        send({type:"goals",id,goal,enabled:roles.current().learningGoalsEnabled});break;
+      }
+      case "generate_vault_overview":
+        if(busy)throw new Error("请等待当前回复结束");
+        if(!capabilities.state.vaultPath)throw new Error("请先连接笔记库");
+        void vaultOverview.start();send({type:"ack",id});break;
+      case "cancel_vault_overview":
+        vaultOverview.cancel();vaultOverview.emit("idle",{message:"已停止生成，可以重新开始"});send({type:"ack",id});break;
       case "configure_capabilities":
       case "import_skill":
       case "toggle_skill": {
         if (busy) throw new Error("请等待当前回复结束");
-        if (command.type === "configure_capabilities") await capabilities.configure(command);
+        if (command.type === "configure_capabilities") {
+          if(command.vaultPath){const target=await realpath(command.vaultPath);if(inside(target,dataDir)||inside(dataDir,target))throw new Error("笔记库不能与应用私有数据目录重叠");}
+          await capabilities.configure(command);
+          if(command.vaultPath!==undefined){vaultOverview.cancel();vaultOverview.emit("idle");}
+        }
         if (command.type === "import_skill") await capabilities.importSkill(command.path);
         if (command.type === "toggle_skill") await capabilities.toggleSkill(command.skillId, command.enabled);
         const model = session?.model;
         if (session) await openSession(model?.provider === "unknown" ? undefined : model?.provider, model?.provider === "unknown" ? undefined : model?.id);
-        await emitState(); send({ type: "ack", id }); break;
+        await emitState(); send({ type: "ack", id });
+        if(command.type==="configure_capabilities" && command.vaultPath)void vaultOverview.start();
+        break;
       }
       case "search_notes":
         send({ type: "ack", id, results: await capabilities.searchNotes(command.query || "", 8) }); break;
@@ -396,6 +428,7 @@ async function handle(command) {
         memoryAgent.cancel(); await memory.deleteFact(command.key);
         send({ type: "memory", state: memory.snapshot() }); send({ type: "ack", id }); break;
       case "memory_consolidate":
+          if(!roles.current().learnerProfileEnabled)throw new Error("当前角色已关闭学习者画像与记忆功能");
           if (busy) throw new Error("请等待当前回复结束");
           if (!session?.model || session.model.provider === "unknown") throw new Error("请先配置并选择模型");
           if (!session.state.messages.some(message => message.role === "user")) throw new Error("请先进行对话，再整理记忆");
@@ -620,13 +653,13 @@ for await (const line of createInterface({ input: process.stdin })) {
     send({ type: "error", message: "Invalid JSON command" });
     continue;
   }
-  if (["abort", "tool_decision", "queue_message", "promote_queue", "clear_queue", "set_approval"].includes(command.type)) {
+  if (["get_goals", "save_goals", "cancel_vault_overview", "abort", "tool_decision", "queue_message", "promote_queue", "clear_queue", "set_approval"].includes(command.type)) {
     void handle(command);
   } else {
     queue = queue.then(() => handle(command));
   }
 }
-await queue;await mcp.closeAll();
+await queue;vaultOverview.cancel();await mcp.closeAll();
 memoryAgent.cancel();
 learningTools.close();
 session?.dispose();

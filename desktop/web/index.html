@@ -7,7 +7,7 @@
   <title>Reed 一苇</title>
   <link rel="stylesheet" href="./style.css">
   <script type="module" src="./app.js"></script>
-<link rel="stylesheet" href="./role-skills.css"><link rel="stylesheet" href="./brand.css"></head>
+<link rel="stylesheet" href="./role-skills.css"><link rel="stylesheet" href="./brand.css"><link rel="stylesheet" href="./learning-workspace.css"></head>
 <body>
 <div id="startup" role="status" aria-label="Reed 正在启动"><img class="brand-icon" data-brand-icon src="./assets/branding/glass-dark.png" alt="一苇"><h1>Reed 一苇</h1><p>轻如一苇，学海可航。</p><div class="startup-progress" aria-hidden="true"></div></div>
   <svg class="icon-sprite" aria-hidden="true" focusable="false">
@@ -34,7 +34,7 @@
       <div class="header-actions">
         <button id="activity-button" class="icon-button" type="button" title="工具与思考记录" aria-label="工具与思考记录"></button>
         <button id="settings-button" class="icon-button" type="button" title="设置" aria-label="设置"><svg><use href="#icon-settings"/></svg></button>
-        <button id="hide-button" class="icon-button" type="button" title="隐藏到托盘" aria-label="隐藏到托盘"></button>
+        <button id="pin-button" class="icon-button" type="button" title="窗口置顶" aria-label="窗口置顶" aria-pressed="false"></button><button id="hide-button" class="icon-button" type="button" title="隐藏到托盘" aria-label="隐藏到托盘"></button>
 
 
       </div>
@@ -95,7 +95,7 @@
     <div id="role-editor" hidden>
       <label>角色名称<input id="role-name" maxlength="60" placeholder="例如：翻译官"></label>
       <label>角色说明<textarea id="role-system" maxlength="20000" rows="6" placeholder="描述角色的语气、任务和回复规则"></textarea></label>
-      <div id="role-skills" class="role-skill-bindings"></div><div class="role-editor-actions"><button id="role-cancel" type="button">取消</button><button id="role-save" class="settings-action" type="button">保存角色</button></div>
+      <div class="role-features"><label><input id="role-goals-enabled" type="checkbox">启用学习目标</label><small>每次模型请求读取当前项目目标；关闭后 Agent 不能访问目标文件。</small><label><input id="role-profile-enabled" type="checkbox">启用学习者画像与记忆</label><small>关闭后不召回、不记录、不注入记忆，也不在后台整理；已有数据保留。</small></div><div id="role-skills" class="role-skill-bindings"></div><div class="role-editor-actions"><button id="role-cancel" type="button">取消</button><button id="role-save" class="settings-action" type="button">保存角色</button></div>
     </div>
     <p id="role-error" class="history-error" role="alert" hidden></p>
   </dialog>

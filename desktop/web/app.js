@@ -1,4 +1,6 @@
 // Transcript row structure and disclosure behavior adapted from PI-Desktop 0.16.1.
+import { createGoals } from "./goals.js";
+import { createMessageNavigation } from "./message-navigation.js";
 import { renderMarkdown } from "./markdown.js";
 import { icon, windowHandles } from "./icons.js";
 const $ = (id) => document.getElementById(id);
@@ -33,6 +35,10 @@ const permissionRows = new Map();
 const pending = new Map();
 const queuedTexts = new Map();
 let attachments = [];
+let followLatest = true;
+const goalsPanel = createGoals({command});
+createMessageNavigation({messages,transcript,onNavigate:()=>{followLatest=false;}});
+transcript.addEventListener("scroll",()=>{followLatest=transcript.scrollHeight-transcript.clientHeight-transcript.scrollTop<65;},{passive:true});
 
 function status(text) {
   $("status").textContent = text;
@@ -40,7 +46,7 @@ function status(text) {
   $("status").parentElement.classList.toggle("is-error", /断开|出错|失败|截断|未生成/.test(text));
 }
 function updateSendAvailability() { $("send-button").disabled = (!prompt.value.trim() && !attachments.length); }
-function scrollToLatest() { transcript.scrollTop = transcript.scrollHeight; }
+function scrollToLatest() { if(followLatest)transcript.scrollTop = transcript.scrollHeight; }
 function refreshEmpty() { $("empty-state").hidden = messages.childElementCount > 0; }
 function setRunning(value) {
   running = value;
@@ -209,6 +215,7 @@ function permissionRequest(event) {
   permissionRows.set(event.requestId, { ...row, allow, deny });
 }
 function restoreHistory(history) {
+  followLatest=true;
   messages.replaceChildren(); toolRows.clear(); permissionRows.clear(); assistantRow = null; thinkingRow = null;
   for (const message of history) {
     if (message.role === "toolResult") {
@@ -355,6 +362,8 @@ function renderRoles() {
       editingRoleId = role.id;
       $("role-name").value = role.name;
       $("role-system").value = role.system || "";
+      $("role-goals-enabled").checked = role.learningGoalsEnabled === true;
+      $("role-profile-enabled").checked = role.learnerProfileEnabled === true;
       roleSkills.set(role.skills);
       $("role-editor").hidden = false;
       $("role-name").focus();
@@ -401,7 +410,7 @@ async function newSession() {
 function onEvent(event) {
   const response = event.payload;
   if (!response || typeof response !== "object") return;
-  const handledReply = Boolean(response.id && pending.has(response.id) && ["ack", "error", "done", "conversation", "file_staged"].includes(response.type));
+  const handledReply = Boolean(response.id && pending.has(response.id) && ["ack", "error", "done", "conversation", "file_staged", "goals"].includes(response.type));
   if (handledReply) {
     const { resolve, reject, timer } = pending.get(response.id); clearTimeout(timer); pending.delete(response.id);
     response.type === "error" ? reject(new Error(response.message)) : resolve(response);
@@ -426,6 +435,7 @@ function onEvent(event) {
     case "models": modelCatalog = response.models || []; renderModels(); break;
     case "session":
       reconnectAttempts = 0;
+      void goalsPanel.session(response.workspace || null);
       $("model-label").textContent = response.modelName || response.model || "选择模型";
       $("model-button").title = response.model || "选择模型";
       activeSessionId = response.sessionId || "";
@@ -551,6 +561,7 @@ function command(type, args = {}, awaitReply = false) {
 }
 $("composer").addEventListener("submit", async (event) => {
   event.preventDefault();
+  followLatest=true;
   const text = prompt.value.trim();
   if ((!text && !attachments.length)) return;
   if (running) {
@@ -652,6 +663,7 @@ $("roles-new").addEventListener("click", () => {
   editingRoleId = null;
   $("role-name").value = "";
   $("role-system").value = "";
+  $("role-goals-enabled").checked=false;$("role-profile-enabled").checked=false;
   roleSkills.set();
   $("role-editor").hidden = false;
   $("role-name").focus();
@@ -660,7 +672,7 @@ $("role-cancel").addEventListener("click", () => { $("role-editor").hidden = tru
 $("role-save").addEventListener("click", async () => {
   $("role-error").hidden = true;
   try {
-    await command("save_role", { roleId: editingRoleId, name: $("role-name").value, system: $("role-system").value, skills: roleSkills.get() }, true);
+    await command("save_role", { roleId: editingRoleId, name: $("role-name").value, system: $("role-system").value, skills: roleSkills.get(), learningGoalsEnabled:$("role-goals-enabled").checked, learnerProfileEnabled:$("role-profile-enabled").checked }, true);
     $("role-editor").hidden = true;
     editingRoleId = null;
   } catch (error) { roleError(error); }
@@ -676,6 +688,10 @@ if (tauri) {
 }
 for (const [id,name] of Object.entries({"header-new-chat":"new","history-button":"history","settings-button":"settings","hide-button":"hide","activity-button":"activity","add-image":"new","stop-button":"stop","send-button":"send"})) $(id).replaceChildren(icon(name));
 for (const [id,name] of [["model-button","spark"],["role-button","role"],["workspace-button","folder"]]) $(id).querySelector("svg")?.replaceWith(icon(name));
+$("pin-button").replaceChildren(icon("pin"));
+function showPinned(value){$("pin-button").setAttribute("aria-pressed",String(value));$("pin-button").title=value?"取消窗口置顶":"窗口置顶";$("pin-button").setAttribute("aria-label",$("pin-button").title);}
+$("pin-button").onclick=async()=>{const button=$("pin-button");button.disabled=true;try{showPinned(await tauri.core.invoke("set_window_pinned",{pinned:button.getAttribute("aria-pressed")!=="true"}));}catch(e){errorRow(String(e));}finally{button.disabled=false;}};
+if(tauri)void tauri.core.invoke("window_pinned").then(showPinned).catch(console.error);
 $("hide-button").onclick = () => void tauri?.core.invoke("dismiss");
 const activityOpen = new Set();
 function renderActivity() {

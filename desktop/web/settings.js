@@ -189,14 +189,14 @@ function renderRoles(roles) {
     const row = document.createElement("div"); row.className = "memory-item";
     const name = document.createElement("strong"); name.textContent = role.name;
     const edit = document.createElement("button"); edit.className = "secondary"; edit.textContent = "编辑";
-    edit.onclick = () => { roleId = role.id; $("role-name").value = role.name; $("role-system").value = role.system || ""; roleSkills.set(role.skills); $("role-form").scrollIntoView(); };
+    edit.onclick = () => { roleId = role.id; $("role-name").value = role.name; $("role-system").value = role.system || ""; $("role-goals-enabled").checked=role.learningGoalsEnabled===true; $("role-profile-enabled").checked=role.learnerProfileEnabled===true; roleSkills.set(role.skills); $("role-form").scrollIntoView(); };
     row.append(name, edit);
     if (!role.builtin) row.append(deletionButton("删除", () => command("delete_role", { roleId: role.id })));
     $("role-list").append(row);
   }
 }
 $("role-new").onclick = () => { roleId = null; $("role-form").reset(); roleSkills.set(); $("role-name").focus(); };
-$("role-form").onsubmit = event => { event.preventDefault(); void action(async () => { await command("save_role", { roleId, name: $("role-name").value, system: $("role-system").value, skills: roleSkills.get() }); roleId = null; $("role-form").reset(); roleSkills.set(); notice("角色已保存，可在对话窗口选择。"); }); };
+$("role-form").onsubmit = event => { event.preventDefault(); void action(async () => { await command("save_role", { roleId, name: $("role-name").value, system: $("role-system").value, skills: roleSkills.get(), learningGoalsEnabled:$("role-goals-enabled").checked, learnerProfileEnabled:$("role-profile-enabled").checked }); roleId = null; $("role-form").reset(); roleSkills.set(); notice("角色已保存，可在对话窗口选择。"); }); };
 for(const id of ['appearance-theme','appearance-icon']) $(id).onchange=()=>action(()=>saveAppearance($("appearance-icon").value,$("appearance-theme").value));
 $("autostart").onchange = () => action(async () => { try { await tauri.core.invoke("set_autostart", { enabled: $("autostart").checked }); } catch(error) { $("autostart").checked = !$("autostart").checked; throw error; } });
 async function finishRecording() { recording = false; $("shortcut").textContent = savedShortcut || "录入快捷键"; await tauri.core.invoke("capture_shortcut", { active: false }); }
@@ -228,6 +228,7 @@ if (tauri) {
       if (r.type === "capabilities") renderCapabilities(r.state);
       if(r.type==="mcp_status"){agentCapabilities.mcp=r.servers;renderMcp(r.servers);}
       if (r.type === "agent_capabilities") { renderAgent(r); if($("notice").textContent.includes("Agent 连接断开")) notice(""); }
+      if (r.type === "vault_overview") renderOverview(r);
       if (r.type === "roles") renderRoles(r.roles || []);
       if (r.type === "memory_status") $("memory-status").textContent = ({ organizing:" 正在整理…", saved:" 已整理", error:" 整理失败，可稍后重试" })[r.status] || "";
       if (r.type === "disconnected") { for (const p of pending.values()) { clearTimeout(p.timer); p.reject(new Error("Agent 连接断开")); } pending.clear(); notice("Agent 连接断开，请在主对话窗口恢复连接后重试。", true); }
@@ -249,3 +250,9 @@ $("mcp-form").onsubmit=e=>{e.preventDefault();void action(async()=>{await comman
 
 function syncMcpTransport(){const http=$("mcp-transport").value==="http";$("mcp-http-fields").hidden=!http;$("mcp-key-field").hidden=!http;$("mcp-stdio-fields").hidden=http;}
 $("mcp-transport").onchange=syncMcpTransport;syncMcpTransport();
+
+let overviewPath=null;
+function renderOverview(info){overviewPath=info.path||null;const working=["scanning","generating"].includes(info.state);$("vault-overview-status").textContent=info.state==="ready"?"总览已保存，后续对话将使用科目与目录导航。":info.message||"连接笔记库后自动生成。";$("generate-overview").disabled=working;$("cancel-overview").hidden=!working;$("open-overview").hidden=info.state!=="ready"||!overviewPath;}
+$("generate-overview").onclick=()=>action(()=>command("generate_vault_overview"));
+$("cancel-overview").onclick=()=>action(()=>command("cancel_vault_overview"));
+$("open-overview").onclick=()=>action(async()=>{if(overviewPath){const r=await command("resolve_file",{path:overviewPath});await tauri.core.invoke("open_local_file",{path:r.path});}});

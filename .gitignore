@@ -59,3 +59,6 @@ desktop.ini
 .idea/
 __pycache__/
 *.pyc
+
+# Learning workspace portable verification packages
+desktop/dist-learning-workspace*/
