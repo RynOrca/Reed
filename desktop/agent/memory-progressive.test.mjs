@@ -47,3 +47,11 @@ test('语义判定仅接受有效同主题索引，失败时保留独立条目',
   const match=semanticMatcher({model:()=>({id:'test'}),runtime:async()=>({completeSimple:async()=>({stopReason:'stop',content:[{type:'text',text:output}]})})});
   assert.equal(await match('两个矩阵相乘',items,'subject'),items[0]);output='{"index":99}';assert.equal(await match('不同主题',items,'subject'),null);
 });
+
+import {hasRequiredReview} from './role-skills.mjs';
+test('只有实际匹配的必选复习技能可预先授权，其他技能正文不能冒充',()=>{
+  const caps={state:{skills:[{id:'review',name:'spaced-review',enabled:true},{id:'other',name:'other',enabled:true,description:'必选流程：spaced-review'}]}};
+  assert.equal(hasRequiredReview({skills:[{skillId:'other',required:true}]},caps,'复习'),false);
+  assert.equal(hasRequiredReview({skills:[{skillId:'review',required:false}]},caps,'复习'),false);
+  const role={skills:[{skillId:'review',required:true}]};assert.equal(hasRequiredReview(role,caps,'复习'),true);assert.equal(hasRequiredReview(role,caps,'普通问题'),false);caps.state.skills[0].enabled=false;assert.equal(hasRequiredReview(role,caps,'复习'),false);
+});

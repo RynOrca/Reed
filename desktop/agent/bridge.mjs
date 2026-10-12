@@ -15,7 +15,7 @@ import { VaultOverview } from "./vault-overview.mjs";
 import { join, resolve } from "node:path";
 import { createApprovalGate } from "./approval.mjs";
 import { RoleStore } from "./roles.mjs";
-import { installLearningSkills, prepareRoleSkills } from "./role-skills.mjs";
+import { installLearningSkills, prepareRoleSkills, hasRequiredReview } from "./role-skills.mjs";
 import { normalizeImages } from "./images.mjs";
 import { stageFile } from "./files.mjs";
 import { EndpointStore, REMOTE_PROVIDER, validateEndpoint } from "./endpoint.mjs";
@@ -97,10 +97,10 @@ memory.agentAllowed=learner.agentAllowed=source=>roles.current().learnerProfileE
 memory.matchTopic=learner.matchTopic=semanticMatcher({runtime:getRuntime,model:()=>session?.model?.provider!=="unknown"?session?.model:null,allowed:()=>roles.current().learnerProfileEnabled===true&&!sessionDisallowsMemory(session)});
 memory.workAllowed=source=>memory.state.enabled.work&&!sessionDisallowsMemory(session)&&source===session?.sessionId;
 memory.matchWorkTopic=semanticMatcher({runtime:getRuntime,model:()=>session?.model?.provider!=="unknown"?session?.model:null,allowed:()=>memory.state.enabled.work&&!sessionDisallowsMemory(session)});
-const preparedSkills=new Map();
+const preparedSkills=new Map(),preparedReviews=new Set();
 let reviewReadKey=null;
 const lastUserPrompt=()=>{const u=session?.state.messages.findLast(m=>m.role==="user");return typeof u?.content==="string"?u.content:(u?.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");};
-const reviewEnabled=(prompt=lastUserPrompt())=>reviewReadKey===session?.sessionId+"\n"+prompt||Boolean(preparedSkills.get(roles.activeId+"\n"+prompt)?.includes("必选流程：spaced-review"));
+const reviewEnabled=(prompt=lastUserPrompt())=>reviewReadKey===session?.sessionId+"\n"+prompt||preparedReviews.has(roles.activeId+"\n"+prompt);
 const workingTools=workMemoryExtension({memory,learner,roles,currentSession:()=>session,reviewEnabled,send});
 const reviewGate=pi=>pi.on("tool_result",event=>{
   if(event.toolName!=="read"||event.isError||!roles.current().learnerProfileEnabled)return;
@@ -111,7 +111,9 @@ async function prepareSkills(text) {
   reviewReadKey=null;
   const key=roles.activeId+'\n'+text;
   preparedSkills.set(key,await prepareRoleSkills(roles.current(),capabilities,text));
-  if(preparedSkills.size>100) preparedSkills.delete(preparedSkills.keys().next().value);
+  preparedReviews.delete(key);
+  if(hasRequiredReview(roles.current(),capabilities,text))preparedReviews.add(key);
+  if(preparedSkills.size>100){const oldest=preparedSkills.keys().next().value;preparedSkills.delete(oldest);preparedReviews.delete(oldest);}
 }
 const learningTools = createLearningTools({ capabilities, currentWorkspace: () => cwd, roles, send, scope, vaultOverview, roleSkillInstructions: prompt=>preparedSkills.get(roles.activeId+'\n'+prompt)||'' });
 const learnerTools = learnerExtension({ learner, memory, currentSession: () => session, send, enabled:()=>roles.current().learnerProfileEnabled === true });

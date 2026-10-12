@@ -30,6 +30,14 @@ export function skillApplies(skill,prompt) {
   if(quoted?.[1]===skill.name) return true;
   return !!workflows[skill.name]?.test(String(prompt));
 }
+// Only call after prepareRoleSkills has successfully loaded required bodies.
+// Text inside another skill cannot impersonate a loaded review workflow.
+export function hasRequiredReview(role,capabilities,prompt) {
+  return (role?.skills||[]).some(binding=>{
+    const skill=capabilities.state.skills.find(s=>s.id===binding.skillId);
+    return binding.required&&skill?.enabled&&skill.name==='spaced-review'&&skillApplies(skill,prompt);
+  });
+}
 export async function prepareRoleSkills(role,capabilities,prompt) {
   const descriptors=[], bodies=[];
   for(const binding of role?.skills || []) {

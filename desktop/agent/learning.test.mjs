@@ -28,7 +28,7 @@ test("Learning events require user evidence, deduplicate and rebuild with unknow
     const store=new LearnerStore(root);await store.load();const event={kind:"concept",subject:"矩阵",detail:"学习过矩阵",evidence:"我学过矩阵"};
     await assert.rejects(store.record(event,"test",["什么是矩阵"]),/原话/);assert.equal(store.state.events.length,0);
     assert.equal(await store.record(event,"test",["我学过矩阵，但需要复习"]),true);assert.equal(await store.record(event,"test",["我学过矩阵"]),false);
-    const reload=new LearnerStore(root);await reload.load();assert.equal(reload.snapshot().eventCount,1);assert.equal(reload.snapshot().knowledge[0].mastery,null);assert.equal(reload.snapshot().knowledge[0].status,"needs_review");assert.ok(reload.context().includes("我学过矩阵"));
+    const reload=new LearnerStore(root);await reload.load();assert.equal(reload.snapshot().eventCount,1);assert.equal(reload.snapshot().knowledge[0].mastery,null);assert.equal(reload.snapshot().knowledge[0].status,"needs_review");assert.doesNotMatch(reload.context(),/矩阵|我学过矩阵/);assert.match(reload.context({review:true}),/矩阵/);assert.doesNotMatch(reload.context({review:true}),/我学过矩阵/);
   }finally{await rm(root,{recursive:true,force:true});}
 });
 test("Tavily tools preserve citations, use private key and request permissions for mutations",async()=>{
