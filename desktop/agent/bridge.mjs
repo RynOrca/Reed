@@ -1,3 +1,5 @@
+import { semanticMatcher } from "./memory-match.mjs";
+import { workMemoryExtension } from "./work-memory.mjs";
 import {LazyMcp,MCP_TOOLS} from "./mcp.mjs";
 import {UserConfig} from "./user-config.mjs";
 import { createInterface } from "node:readline";
@@ -19,7 +21,7 @@ import { stageFile } from "./files.mjs";
 import { EndpointStore, REMOTE_PROVIDER, validateEndpoint } from "./endpoint.mjs";
 import { MemoryStore } from "./memory.mjs";
 import { ProviderStore } from "./providers.mjs";
-import { createMemoryAgent } from "./memory-agent.mjs";
+import { createMemoryAgent, sessionDisallowsMemory } from "./memory-agent.mjs";
 import { CapabilityStore, inside } from "./capabilities.mjs";
 import { createLearningTools, LEARNING_TOOLS } from "./learning-tools.mjs";
 import { LearnerStore, learnerExtension } from "./learner.mjs";
@@ -83,7 +85,7 @@ const securityPath = join(dataDir, "security.json");
 const security = await userConfig.get("security",securityPath,{approval:"manual"});
 const scope = new FileScope({ workspace: () => cwd, readOnly: () => [capabilities.state.vaultPath, join(dataDir,"skills"), join(dataDir, "attachments"), join(dataDir,"artifacts","screenshots"), contextPolicy.artifactsDir, ...(security.readOnly || [])].filter(Boolean), fullAccess: () => security.access === "full", protectedPaths: () => [
   {path:goals.dir,denyRead:!roles.current().learningGoalsEnabled},
-  ...(!roles.current().learnerProfileEnabled ? ["memory.json","learner.json"].map(name=>({path:join(dataDir,name),denyRead:true})) : []),
+  ...["memory.json","learner.json"].map(name=>({path:join(dataDir,name),denyRead:true})),
 ] });
 capabilities.canRead = async path => {try {await scope.check(path);return true;}catch{return false;}};
 const vaultOverview = new VaultOverview({capabilities,runtime:getRuntime,model:()=>session?.model,send,canRead:capabilities.canRead});
@@ -91,15 +93,29 @@ const visualReview = createVisualReview({ scope, send, enabled: () => capabiliti
 const mcp=new LazyMcp({config:userConfig,scope,send});await mcp.load();
 const approvalGate = createApprovalGate(send, undefined, () => security.approval);
 const memoryAgent = createMemoryAgent({ memory, learner, send, currentSession: () => session, runtime: getRuntime, enabled:()=>roles.current().learnerProfileEnabled === true });
+memory.agentAllowed=learner.agentAllowed=source=>roles.current().learnerProfileEnabled===true&&!sessionDisallowsMemory(session)&&source===session?.sessionId;
+memory.matchTopic=learner.matchTopic=semanticMatcher({runtime:getRuntime,model:()=>session?.model?.provider!=="unknown"?session?.model:null,allowed:()=>roles.current().learnerProfileEnabled===true&&!sessionDisallowsMemory(session)});
+memory.workAllowed=source=>memory.state.enabled.work&&!sessionDisallowsMemory(session)&&source===session?.sessionId;
+memory.matchWorkTopic=semanticMatcher({runtime:getRuntime,model:()=>session?.model?.provider!=="unknown"?session?.model:null,allowed:()=>memory.state.enabled.work&&!sessionDisallowsMemory(session)});
 const preparedSkills=new Map();
+let reviewReadKey=null;
+const lastUserPrompt=()=>{const u=session?.state.messages.findLast(m=>m.role==="user");return typeof u?.content==="string"?u.content:(u?.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");};
+const reviewEnabled=(prompt=lastUserPrompt())=>reviewReadKey===session?.sessionId+"\n"+prompt||Boolean(preparedSkills.get(roles.activeId+"\n"+prompt)?.includes("必选流程：spaced-review"));
+const workingTools=workMemoryExtension({memory,learner,roles,currentSession:()=>session,reviewEnabled,send});
+const reviewGate=pi=>pi.on("tool_result",event=>{
+  if(event.toolName!=="read"||event.isError||!roles.current().learnerProfileEnabled)return;
+  const skill=capabilities.state.skills.find(s=>s.name==="spaced-review"&&s.enabled&&roles.current().skills.some(b=>b.skillId===s.id));
+  if(skill&&event.input?.path&&resolve(cwd,event.input.path)===resolve(skill.path,"SKILL.md"))reviewReadKey=session.sessionId+"\n"+lastUserPrompt();
+});
 async function prepareSkills(text) {
+  reviewReadKey=null;
   const key=roles.activeId+'\n'+text;
   preparedSkills.set(key,await prepareRoleSkills(roles.current(),capabilities,text));
   if(preparedSkills.size>100) preparedSkills.delete(preparedSkills.keys().next().value);
 }
 const learningTools = createLearningTools({ capabilities, currentWorkspace: () => cwd, roles, send, scope, vaultOverview, roleSkillInstructions: prompt=>preparedSkills.get(roles.activeId+'\n'+prompt)||'' });
 const learnerTools = learnerExtension({ learner, memory, currentSession: () => session, send, enabled:()=>roles.current().learnerProfileEnabled === true });
-const roleFeatures = roleFeatureExtension({roles,goals,project:()=>projectPath,learner,memory,currentSession:()=>session});
+const roleFeatures = roleFeatureExtension({roles,goals,project:()=>projectPath,learner,memory,currentSession:()=>session,reviewEnabled});
 let generationStart = null, firstDelta = null, outputTokens = 0, generationMs = 0, missingUsage = false;
 function emitTelemetry() {
   const model = session?.model;
@@ -152,10 +168,10 @@ async function openSession(provider, modelId, sessionManager) {
     additionalSkillPaths: capabilities.enabledSkills(),
     extensionFactories: [pi => scope.extension(pi), roleFeatures, pi => {
       pi.on("tool_call",event=>{
-        const readonly=["read","ls","find","grep","current_time","web_search","fetch_url","search_notes"];
+        const readonly=["read","ls","find","grep","current_time","web_search","fetch_url","search_notes","recall_memory"];
         if(roles.activeId==="planner" && !readonly.includes(event.toolName)) return {block:true,terminate:true,reason:"Planner 仅允许只读调查，请切换 Agent 执行操作"};
       });
-    }, approvalGate.extension, memoryAgent.extension, learningTools.extension, learnerTools,pi=>mcp.extension(pi),contextPolicy.extension,turnRecovery.extension,visualReview.extension],
+    }, approvalGate.extension, workingTools, reviewGate, memoryAgent.extension, learningTools.extension, learnerTools,pi=>mcp.extension(pi),contextPolicy.extension,turnRecovery.extension,visualReview.extension],
     appendSystemPromptOverride: (base) => {
       const instructions = roles.current()?.system;
       return instructions ? [...base, instructions] : base;
@@ -167,7 +183,7 @@ async function openSession(provider, modelId, sessionManager) {
     agentDir,
     modelRuntime: models,
     model,
-    tools: roles.activeId==="planner" ? ["read","ls","find","grep","current_time","web_search","fetch_url","search_notes"] : [...FILE_TOOLS, ...(roles.current().learnerProfileEnabled ? ["remember", "record_learning_event"] : []), ...LEARNING_TOOLS,...MCP_TOOLS,...VISUAL_TOOLS],
+    tools: roles.activeId==="planner" ? ["read","ls","find","grep","current_time","web_search","fetch_url","search_notes"] : [...FILE_TOOLS, "remember_work", "recall_memory", ...(roles.current().learnerProfileEnabled ? ["remember", "record_learning_event"] : []), ...LEARNING_TOOLS,...MCP_TOOLS,...VISUAL_TOOLS],
     customTools: sandboxTools(scope),
     sessionManager,
     settingsManager,
@@ -238,7 +254,7 @@ function thinkingLevels() {
 function thinkingInfo() { const model=session?.model; const info=model && runtime ? providers.modelInfo(model.provider,model.id,runtime) : null; return {thinkingFormat:info?.compat?.thinkingFormat,reasoningKnown:info?.reasoning != null}; }
 function emitSession() {
   if (!session) return;
-  send({ type: "session", autoCompaction:session.autoCompactionEnabled, model: session.model && session.model.provider !== "unknown" ? `${session.model.provider}/${session.model.id}` : null, modelName: session.model?.provider !== "unknown" ? session.model?.name || session.model?.id : null, sessionId: session.sessionId, sessionName: session.sessionName || "", thinkingLevel: session.thinkingLevel, availableThinkingLevels: thinkingLevels(), ...thinkingInfo(), workspace: projectPath, roleId: roles.activeId, learningGoalsEnabled:roles.current().learningGoalsEnabled, learnerProfileEnabled:roles.current().learnerProfileEnabled });
+  send({ type: "session", autoCompaction:session.autoCompactionEnabled, model: session.model && session.model.provider !== "unknown" ? `${session.model.provider}/${session.model.id}` : null, modelName: session.model?.provider !== "unknown" ? session.model?.name || session.model?.id : null, sessionId: session.sessionId, sessionName: session.sessionName || "", thinkingLevel: session.thinkingLevel, availableThinkingLevels: thinkingLevels(), ...thinkingInfo(), workspace: projectPath, roleId: roles.activeId, roleName:roles.current().name, learningGoalsEnabled:roles.current().learningGoalsEnabled, learnerProfileEnabled:roles.current().learnerProfileEnabled });
 }
 async function emitState() {
   const models = await getRuntime();
@@ -424,6 +440,8 @@ async function handle(command) {
         send({ type: "memory", state: memory.snapshot() });
         send({ type: "ack", id });
         break;
+      case "memory_work_delete":
+        await memory.deleteWork(command.title);send({type:"memory",state:memory.snapshot()});send({type:"ack",id});break;
       case "memory_fact_delete":
         memoryAgent.cancel(); await memory.deleteFact(command.key);
         send({ type: "memory", state: memory.snapshot() }); send({ type: "ack", id }); break;

@@ -307,10 +307,11 @@ function renderSessions(sessions) {
     const group=section(path,path.split(/[\\/]/).filter(Boolean).pop(),projectGroup,true);group.querySelector("summary").title=path;items.forEach(item => addConversation(group, item));
   }
 }
-let chosenModel=null,activeModelKey="",activeThinking="off";
+let chosenModel=null,activeModelKey="",activeThinking="off",statusModelResponse={};
+function updateStatusModel(){const role=roles.find(r=>r.id===activeRoleId);$("status-model").textContent=[role?.name||statusModelResponse.roleName||"Agent",statusModelResponse.model?$("model-label").textContent:null,statusModelResponse.model?activeThinking:null].filter(Boolean).join(" · ");$("status-model").title=$("status-model").textContent;$("status-model").hidden=false;}
 const thinkingNames={off:"思考关闭",minimal:"最少",low:"低",medium:"中等",high:"高",xhigh:"很高",max:"最高"};
 function thinkingName(level,format){return level!=="off" && ["qwen","qwen-chat-template"].includes(format)?"思考开启":thinkingNames[level]||level;}
-function updateModelChip(response){activeModelKey=response.model||"";activeThinking=response.thinkingLevel||"off";$("model-label").textContent=response.model?response.modelName||response.model:"选择模型";const name=thinkingName(activeThinking,response.thinkingFormat);$("model-thinking").textContent=/思考/.test(name)?name:`思考·${name}`;$("model-thinking").hidden=!response.model;$("model-button").title=response.model?`${$("model-label").textContent} · ${$("model-thinking").textContent}`:"选择模型";$("status-model").textContent=response.model?`${$("model-label").textContent} · ${activeThinking}`:"";$("status-model").title=$("status-model").textContent;$("status-model").hidden=!response.model;}
+function updateModelChip(response){statusModelResponse=response;activeModelKey=response.model||"";activeThinking=response.thinkingLevel||"off";$("model-label").textContent=response.model?response.modelName||response.model:"选择模型";const name=thinkingName(activeThinking,response.thinkingFormat);$("model-thinking").textContent=/思考/.test(name)?name:`思考·${name}`;$("model-thinking").hidden=!response.model;$("model-button").title=response.model?`${$("model-label").textContent} · ${$("model-thinking").textContent}`:"选择模型";$("status-model").textContent=response.model?`${$("model-label").textContent} · ${activeThinking}`:"";$("status-model").title=$("status-model").textContent;$("status-model").hidden=!response.model;updateStatusModel();}
 function resetModelStep(){chosenModel=null;$("model-step").hidden=false;$("thinking-step").hidden=true;$("model-step-title").textContent="选择模型";$("model-error").hidden=true;}
 function chooseModel(model){chosenModel=model;$("model-step").hidden=true;$("thinking-step").hidden=false;$("model-step-title").textContent="选择思考档位";$("chosen-model-name").textContent=model.name||model.id;$("chosen-model-info").textContent=`${model.providerName||model.provider} · ${model.contextWindow?model.contextWindow.toLocaleString()+" 上下文":"上下文未知"}`;const format=model.compat?.thinkingFormat;renderThinkingLevels(model.thinkingLevels||["off"],activeModelKey===`${model.provider}/${model.id}`?activeThinking:"off",{thinkingFormat:format,reasoningKnown:model.reasoning!=null});$("thinking-hint").textContent=model.thinkingDefaults?"服务未返回档位，使用默认五档；实际思考效果由模型服务决定，可在设置中调整协议。":model.reasoning===false?"此模型不支持思考。":"仅展示当前模型支持的选项。";$("thinking-level").focus();}
 function renderModels() {
@@ -344,7 +345,7 @@ function renderRoles() {
   const list = $("roles-list");
   list.replaceChildren();
   const active = roles.find((role) => role.id === activeRoleId);
-  $("role-label").textContent = active?.name || "Agent";
+  $("role-label").textContent = active?.name || "Agent";updateStatusModel();
   for (const role of roles) {
     const row = document.createElement("div");
     row.className = `role-item${role.id === activeRoleId ? " active" : ""}`;

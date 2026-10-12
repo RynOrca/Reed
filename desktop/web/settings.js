@@ -17,7 +17,7 @@ function command(type, args = {}) {
     tauri.core.invoke("agent_command", { command: { type, id, ...args } }).catch(error => { clearTimeout(timer); pending.delete(id); reject(error); });
   });
 }
-const headings = { general: ["通用", "窗口与快捷键"], models: ["模型", "选择提供商，连接你的模型"], memory: ["记忆", "由 Agent 整理的学习信息"], vault: ["笔记库", "引用你的 Obsidian 笔记，回到原文复习"], skills: ["技能仓库", "管理 Agent 可用的技能"], tools: ["工具", "搜索、浏览器与文件能力"], roles: ["角色", "角色说明作为系统指令，每轮生效"], about: ["关于", "轻量的个人 Agent 入口"] };
+const headings = { general: ["通用", "窗口与快捷键"], models: ["模型", "选择提供商，连接你的模型"], memory: ["记忆", "学习画像与独立工作经验，按需读取"], vault: ["笔记库", "引用你的 Obsidian 笔记，回到原文复习"], skills: ["技能仓库", "管理 Agent 可用的技能"], tools: ["工具", "搜索、浏览器与文件能力"], roles: ["角色", "角色说明作为系统指令，每轮生效"], about: ["关于", "轻量的个人 Agent 入口"] };
 headings.mcp=["MCP","按需加载外部工具"];
 headings.security = ["权限与范围", "文件范围与审批方式分别管理"]; headings.agent = ["Agent 能力", "实际加载的工具、扩展、技能与 MCP 状态"];
 let agentCapabilities = {};
@@ -168,20 +168,20 @@ function deletionButton(label, work) {
   }; return button;
 }
 function renderMemory() {
-  for (const layer of ["l1", "l2", "l3"]) $(layer).checked = memory.enabled?.[layer] !== false;
-  for (const [id, entries] of [["facts", memory.facts || []], ["notes", memory.notes || []]]) {
+  for (const layer of ["l1", "l2", "l3", "work"]) $(layer).checked = memory.enabled?.[layer] !== false;
+  for (const [id, entries] of [["facts", memory.facts || []], ["notes", memory.notes || []], ["working",memory.working||[]]]) {
     const list = $(id); list.replaceChildren();
     for (const item of entries) {
       const row = document.createElement("div"); row.className = "memory-item";
       const content = document.createElement("div"), title = document.createElement("h3"), text = document.createElement("p"), source = document.createElement("small");
       title.textContent = item.title || item.key; text.textContent = item.body || item.content;
       source.textContent = item.updated ? `更新于 ${new Date(item.updated).toLocaleString()}${item.source ? " · 来源会话 " + item.source.slice(0, 8) : ""}` : "已有记忆";
-      content.append(title, text, source); row.append(content, deletionButton("删除", () => command(id === "facts" ? "memory_fact_delete" : "memory_note_delete", id === "facts" ? { key: item.key } : { noteId: item.id }))); list.append(row);
+      content.append(title, text, source); row.append(content, deletionButton("删除", () => command(id === "facts" ? "memory_fact_delete" : id === "working" ? "memory_work_delete" : "memory_note_delete", id === "facts" ? { key: item.key } : id === "working" ? {title:item.title} : { noteId: item.id }))); list.append(row);
     }
     if (!entries.length) { const p = document.createElement("p"); p.className = "hint"; p.textContent = "尚无内容，Agent 会从对话中整理。"; list.append(p); }
   }
 }
-for (const layer of ["l1", "l2", "l3"]) $(layer).onchange = () => action(async () => { try { await command("memory_enabled", { layer, enabled: $(layer).checked }); } catch(error) { $(layer).checked = !$(layer).checked; throw error; } });
+for (const layer of ["l1", "l2", "l3", "work"]) $(layer).onchange = () => action(async () => { try { await command("memory_enabled", { layer, enabled: $(layer).checked }); } catch(error) { $(layer).checked = !$(layer).checked; throw error; } });
 $("organize").onclick = () => action(async () => { await command("memory_consolidate"); notice("Agent 已开始整理当前对话。"); });
 function renderRoles(roles) {
   $("role-list").replaceChildren();

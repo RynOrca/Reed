@@ -95,7 +95,7 @@
     <div id="role-editor" hidden>
       <label>角色名称<input id="role-name" maxlength="60" placeholder="例如：翻译官"></label>
       <label>角色说明<textarea id="role-system" maxlength="20000" rows="6" placeholder="描述角色的语气、任务和回复规则"></textarea></label>
-      <div class="role-features"><label><input id="role-goals-enabled" type="checkbox">启用学习目标</label><small>每次模型请求读取当前项目目标；关闭后 Agent 不能访问目标文件。</small><label><input id="role-profile-enabled" type="checkbox">启用学习者画像与记忆</label><small>关闭后不召回、不记录、不注入记忆，也不在后台整理；已有数据保留。</small></div><div id="role-skills" class="role-skill-bindings"></div><div class="role-editor-actions"><button id="role-cancel" type="button">取消</button><button id="role-save" class="settings-action" type="button">保存角色</button></div>
+      <div class="role-features"><label><input id="role-goals-enabled" type="checkbox">启用学习目标</label><small>每次模型请求读取当前项目目标；关闭后 Agent 不能访问目标文件。</small><label><input id="role-profile-enabled" type="checkbox">启用学习画像与教学记忆</label><small>关闭后不整理或注入学习、知识和教学信息；操作经验与常用路径记忆仍可用。</small></div><div id="role-skills" class="role-skill-bindings"></div><div class="role-editor-actions"><button id="role-cancel" type="button">取消</button><button id="role-save" class="settings-action" type="button">保存角色</button></div>
     </div>
     <p id="role-error" class="history-error" role="alert" hidden></p>
   </dialog>

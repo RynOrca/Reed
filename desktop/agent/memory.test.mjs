@@ -19,14 +19,14 @@ test("three memory layers respect their switches and remain editable", async () 
       JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "Python 函数的默认参数怎么用？" }] } }),
     ].join("\n"));
     const context = await store.context("Python 函数默认参数", "current");
-    assert.match(context, /学习者画像/);
-    assert.match(context, /知识库资料/);
-    assert.match(context, /历史对话片段/);
+    assert.match(context, /背景与偏好/);
+    assert.match(context, /相关资料索引/);
+    assert.doesNotMatch(context, /历史对话片段|def 定义/);
     await store.setEnabled("l2", false);
     await store.setEnabled("l3", false);
     const narrow = await store.context("Python 函数默认参数", "current");
-    assert.match(narrow, /学习者画像/);
-    assert.doesNotMatch(narrow, /知识库资料|历史对话片段/);
+    assert.match(narrow, /背景与偏好/);
+    assert.doesNotMatch(narrow, /相关资料索引|历史对话片段/);
     const loaded = new MemoryStore(root, sessions);
     await loaded.load();
     assert.equal(loaded.snapshot().enabled.l3, false);
