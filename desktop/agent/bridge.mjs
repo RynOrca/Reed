@@ -11,6 +11,7 @@ import { createDiagnosticFetch } from "./stream-diagnostics.mjs";
 import { createVisualReview, VISUAL_TOOLS } from "./visual-review.mjs";
 import { createContextPolicy } from "./context-policy.mjs";
 import { GoalStore } from "./goals.mjs";
+import { InteractiveArtifactStore, boundArtifactIds } from "./interactive-ui/artifacts.mjs";
 import { roleFeatureExtension } from "./role-features.mjs";
 import { VaultOverview } from "./vault-overview.mjs";
 import { join, resolve } from "node:path";
@@ -70,6 +71,7 @@ await installLearningSkills(capabilities);
 const learner = new LearnerStore(dataDir);
 await learner.load();
 const goals = new GoalStore(dataDir); await goals.initialize();
+const interactiveArtifacts = new InteractiveArtifactStore(dataDir);
 
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const diagnostic = async entry => {
@@ -234,9 +236,20 @@ async function openSession(provider, modelId, sessionManager) {
   outputTokens = 0; generationMs = 0; missingUsage = false; emitTelemetry();
   const historyBranch = session.sessionManager.getBranch();
   const visualOutcomes = new Map(historyBranch.filter(entry => entry.type === "custom" && entry.customType === "reed_turn_verification").map(entry => [entry.data?.messageEntryId, entry.data?.outcome]));
+  const interactiveByMessage = new Map();
+  for (const entry of historyBranch) if (entry.type === "custom" && entry.customType === "reed_interactive_artifact") {
+    if (!interactiveByMessage.has(entry.data?.messageEntryId)) interactiveByMessage.set(entry.data?.messageEntryId, []);
+    interactiveByMessage.get(entry.data?.messageEntryId).push(entry.data?.artifactId);
+  }
+  const historyMessages = await Promise.all(historyBranch.filter(entry => entry.type === "message").map(async entry => ({
+    ...entry.message,
+    reedOutcome: visualOutcomes.get(entry.id),
+    interactiveArtifacts: entry.message?.role === "assistant" ? await Promise.all((interactiveByMessage.get(entry.id) || []).map(artifactId =>
+      interactiveArtifacts.summary(session.sessionId, artifactId).catch(() => ({ artifactId, title: "交互讲解作品", status: "missing" })))) : [],
+  })));
   send({
     type: "history",
-    messages: historyBranch.filter(entry => entry.type === "message").map(entry => ({ ...entry.message, reedOutcome: visualOutcomes.get(entry.id) })).map((message) => ({
+    messages: historyMessages.map((message) => ({
       role: message.role,
       stopReason: message.stopReason,
       errorMessage: message.errorMessage,
@@ -247,6 +260,7 @@ async function openSession(provider, modelId, sessionManager) {
       toolCallId: message.toolCallId,
       toolName: message.toolName,
       isError: message.isError,
+      interactiveArtifacts: message.interactiveArtifacts,
     })),
   });
 }
@@ -299,6 +313,37 @@ async function handle(command) {
       }
       case "get_state":
         await emitState(); send({ type: "ack", id }); break;
+      case "get_interactive_artifact":
+      case "save_interactive_artifact_state": {
+        if (!session || !boundArtifactIds(session.sessionManager.getBranch()).has(command.artifactId)) throw new Error("当前会话没有这个作品");
+        if (command.type === "get_interactive_artifact") {
+          const artifact = await interactiveArtifacts.read(session.sessionId, command.artifactId);
+          if (!artifact) throw new Error("作品文件不可用");
+          send({ type: "ack", id, artifact });
+        } else {
+          const state = await interactiveArtifacts.saveState(session.sessionId, command.artifactId, command.state);
+          send({ type: "ack", id, state });
+        }
+        break;
+      }
+      case "create_interactive_fixture": {
+        if (process.env.SUMMON_INTERACTIVE_UI_TEST !== "1") throw new Error("固定作品仅供隔离测试");
+        if (busy || !session) throw new Error("当前会话不可创建固定作品");
+        const fixture = { schemaVersion: 1, mode: "fixture", title: "KMP 失配后如何移动？", steps: [
+          { title: "先看失配", body: "文本 ABABABC 与模式 ABABC 对齐，比较到第 5 个字符时失配。" },
+          { title: "尝试移动一位", body: "移动一位后，已知前缀与文本冲突，因此这个起点可以跳过。" },
+          { title: "移动两位", body: "AB 前缀可以复用，从下一处未知字符继续比较。" },
+        ] };
+        const message = { role: "assistant", content: [{ type: "text", text: "固定测试作品：点击卡片逐步查看 KMP 对齐。" }], timestamp: Date.now(), api: "test", provider: "fixture", model: "fixture", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" };
+        session.sessionManager.appendMessage(message);
+        const messageEntryId = session.sessionManager.getBranch().findLast(entry => entry.type === "message" && entry.message?.role === "assistant")?.id;
+        if (!messageEntryId) throw new Error("固定作品消息未能写入会话");
+        const artifact = await interactiveArtifacts.create(session.sessionId, fixture, { parentArtifactId: command.parentArtifactId || null });
+        session.sessionManager.appendCustomEntry("reed_interactive_artifact", { messageEntryId, artifactId: artifact.artifactId });
+        await openSession(undefined, undefined, session.sessionManager);
+        send({ type: "ack", id, artifactId: artifact.artifactId });
+        break;
+      }
       case "add_readonly": {
         if(busy)throw new Error("请等待当前任务结束");
         if(typeof command.path!=="string" || !command.path.trim())throw new Error("请选择目录");
@@ -591,8 +636,8 @@ async function handle(command) {
         const info=(await SessionManager.listAll(sessionsDir)).find(item=>item.id===command.sessionId);
         if(!info)throw new Error("找不到该会话");
         if(command.type==="delete_session" && command.confirm!==true)throw new Error("删除需要确认");
-        if(info.id===session?.sessionId){const model=session.model;await openSession(model?.provider,model?.id,SessionManager.create(cwd,sessionsDir));}
-        if(command.type==="delete_session"){await unlink(info.path);delete metadata[info.id];}
+        if(info.id===session?.sessionId){const model=session.model;await openSession(model?.provider === "unknown" ? undefined : model?.provider,model?.provider === "unknown" ? undefined : model?.id,SessionManager.create(cwd,sessionsDir));}
+        if(command.type==="delete_session"){await unlink(info.path);await interactiveArtifacts.deleteSession(info.id);delete metadata[info.id];}
         else metadata[info.id]={...metadata[info.id],archived:command.archived!==false};
         await saveJson(metadataPath,metadata);send({type:"ack",id});break;
       }

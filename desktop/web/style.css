@@ -264,3 +264,14 @@ body { border:0; border-radius:14px; }
 .image-preview-button { background:transparent; padding:0; border:0; border-radius:7px; cursor:zoom-in; }.image-preview-button img { display:block; }
 .image-dialog { border:0; padding:12px; border-radius:12px; background:#202123; max-width:92vw; max-height:90vh; overflow:auto; }.image-dialog::backdrop { background:#000a; }.image-dialog #image-close { position:sticky; top:0; margin-left:auto; background:#202123; z-index:1; }.image-dialog img { display:block; max-width:calc(92vw - 24px); max-height:75vh; object-fit:contain; margin:8px auto 0; }
 .composer-toolbar { flex-wrap:wrap; row-gap:5px; }.composer-metrics { display:flex; align-items:center; gap:5px; margin-left:auto; flex:none; }.composer-configuration { min-width:112px; }.queue-item { display:flex; gap:10px; align-items:center; margin:6px 0; }.queue-item span { flex:1; min-width:0; overflow-wrap:anywhere; }.queue-item button { flex:none; padding:5px 7px; color:#bdd0ef; border-radius:5px; }.queue-item button:hover { background:#ffffff0a; }
+
+.interactive-card { margin:8px 0 4px; padding:13px 14px; border:1px solid #8bb9e544; border-radius:12px; background:linear-gradient(135deg,#24354a,#1e2734); color:#e5edf8; max-width:min(720px,100%); box-sizing:border-box; }
+.interactive-card-header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.interactive-card-heading { display:grid; gap:3px; min-width:0; }.interactive-card-heading strong { font-size:14px; line-height:1.35; }
+.interactive-card-eyebrow { color:#9fc1e5; font-size:10px; letter-spacing:.04em; }
+.interactive-card button { border:1px solid #9fc1e555; border-radius:7px; padding:6px 10px; background:#ffffff0d; color:#e6f1ff; cursor:pointer; white-space:nowrap; }
+.interactive-card button:hover:not(:disabled) { background:#9fc1e522; }.interactive-card button:disabled { opacity:.45; cursor:default; }
+.interactive-card-detail { margin-top:12px; padding-top:12px; border-top:1px solid #ffffff20; }.interactive-card-detail[hidden] { display:none; }
+.interactive-card-detail h4 { margin:8px 0 5px; font-size:14px; }.interactive-card-detail p { margin:5px 0; font-size:12px; line-height:1.6; }
+.interactive-card-progress,.interactive-card-version { color:#a5bfde; }.interactive-card-actions { display:flex; flex-wrap:wrap; gap:7px; margin-top:13px; }
+.interactive-card-error { color:#f2b4b4; font-size:12px; margin:10px 0 0; }

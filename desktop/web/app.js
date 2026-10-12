@@ -2,6 +2,7 @@
 import { createGoals } from "./goals.js";
 import { createMessageNavigation } from "./message-navigation.js";
 import { renderMarkdown } from "./markdown.js";
+import { createInteractiveCard } from "./interactive-ui.js";
 import { icon, windowHandles } from "./icons.js";
 const $ = (id) => document.getElementById(id);
 import { createSkillBindings } from "./role-skills.js";
@@ -255,6 +256,13 @@ function restoreHistory(history) {
           name: line.slice(2).split(/[\\/]/).pop().replace(/^[0-9a-f-]{36}-/, ""),
         })));
       }
+    }
+    if (message.role === "assistant" && message.interactiveArtifacts?.length) {
+      if (!content) content = messageRow("assistant");
+      for (const summary of message.interactiveArtifacts) content.closest(".message-col").append(createInteractiveCard(summary, {
+        load: async artifactId => (await command("get_interactive_artifact", { artifactId }, true)).artifact,
+        save: async (artifactId, state) => (await command("save_interactive_artifact_state", { artifactId, state }, true)).state,
+      }));
     }
     if (outcome?.status === "unverified") errorRow(outcome.message || "产物尚未通过视觉验收");
   }

@@ -4,7 +4,7 @@
   "private": true,
   "description": "Reed 一苇 — 一苇以航，轻渡学海。独立 Windows 学习 Agent。",
   "scripts": {
-    "test": "node --test --test-isolation=none desktop/agent/*.test.mjs",
+    "test": "node --test --test-isolation=none desktop/agent/*.test.mjs desktop/agent/interactive-ui/*.test.mjs",
     "agent:install": "npm ci --prefix desktop/agent",
     "build": "powershell -NoProfile -ExecutionPolicy Bypass -File desktop/tools/package-portable.ps1",
     "test:desktop": "node desktop/tools/desktop-acceptance.cjs",

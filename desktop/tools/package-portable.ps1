@@ -36,6 +36,8 @@ Copy-Item -LiteralPath (Join-Path $agentDir 'providers.mjs') -Destination (Join-
 Copy-Item -LiteralPath (Join-Path $agentDir 'memory-agent.mjs') -Destination (Join-Path $Output 'agent\memory-agent.mjs') -Force
 foreach ($module in @('capabilities.mjs', 'browser.mjs', 'learning-tools.mjs', 'learner.mjs', 'sandbox.mjs', 'user-config.mjs', 'mcp.mjs', 'turn-outcome.mjs', 'turn-recovery.mjs', 'stream-diagnostics.mjs', 'context-policy.mjs', 'visual-review.mjs', 'memory-match.mjs', 'memory-value.mjs', 'work-memory.mjs', 'goals.mjs', 'role-features.mjs', 'vault-overview.mjs')) { Copy-Item -LiteralPath (Join-Path $agentDir $module) -Destination (Join-Path $Output "agent\$module") -Force }
 Copy-Item -LiteralPath (Join-Path $agentDir 'role-skills.mjs') -Destination (Join-Path $Output 'agent\role-skills.mjs') -Force
+New-Item -ItemType Directory -Force -Path (Join-Path $Output 'agent\interactive-ui') | Out-Null
+Copy-Item -LiteralPath (Join-Path $agentDir 'interactive-ui\artifacts.mjs') -Destination (Join-Path $Output 'agent\interactive-ui\artifacts.mjs') -Force
 Copy-Item -LiteralPath (Join-Path $agentDir 'skills') -Destination (Join-Path $Output 'agent\skills') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $agentDir 'package.json') -Destination (Join-Path $Output 'agent\package.json') -Force
 # Copy dependency trees without mirroring/deleting destination files.
