@@ -1,11 +1,13 @@
 """Isolated provider tests; --serve exposes the mock for manual browser QA."""
 import json
+import io
 import threading
 import unittest
 import urllib.request
 import urllib.error
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from server import build_request, Handler
+from server import build_request, Handler, read_provider
 
 HTML = '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"></head><body><h1>隔离测试作品</h1><p>这是模拟接口，不是真实模型生成。</p><button onclick="document.getElementById(\'step\').textContent=Number(document.getElementById(\'step\').textContent)+1">下一步</button><output id="step">0</output></body></html>'
 
@@ -25,7 +27,7 @@ class Mock(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b': keep-alive\n\n\n')
             chunks = [{'choices': [{'index': 0, 'delta': {'reasoning_content': '模拟思考'}, 'finish_reason': None}]}]
-            content = 'OK' if Mock.received['max_tokens'] == 64 else HTML
+            content = 'OK' if Mock.received.get('max_tokens') == 64 else HTML
             for part in [content[:12], content[12:]]:
                 chunks.append({'choices': [{'index': 0, 'delta': {'content': part}, 'finish_reason': None}]})
             for chunk in chunks:
@@ -131,6 +133,45 @@ class Tests(unittest.TestCase):
     def test_invalid_config(self):
         for data in [self.data(base='file:///tmp/x'), self.data(model=''), self.data(maxTokens=1), self.data(messages=[])]:
             with self.assertRaises(ValueError): build_request(data)
+
+    def test_optional_output_budget(self):
+        for value in [None, '', '   ']:
+            _, body = build_request(self.data(maxTokens=value))
+            self.assertNotIn('max_tokens', body)
+        _, body = build_request(self.data())
+        self.assertNotIn('max_tokens', body)
+        for value in ['8192', 131072]:
+            _, body = build_request(self.data(maxTokens=value))
+            self.assertEqual(body['max_tokens'], int(value))
+        for value in ['bad', '12.5', 0, 1048577]:
+            with self.assertRaises(ValueError): build_request(self.data(maxTokens=value))
+
+    def provider_stream(self, chunks):
+        raw = ''.join('data: ' + json.dumps(c, ensure_ascii=False) + '\n\n' for c in chunks) + 'data: [DONE]\n\n'
+        response = io.BytesIO(raw.encode())
+        response.headers = {'Content-Type': 'text/event-stream'}
+        return response
+
+    def test_sse_metadata_can_exceed_old_8mb_limit(self):
+        chunk = {'provider_metadata': 'x' * 900000, 'choices': [{'delta': {'content': '中'}}]}
+        with self.provider_stream([chunk] * 10) as response:
+            self.assertGreater(response.getbuffer().nbytes, 8_000_000)
+            result = read_provider(response, lambda event: None)
+        self.assertEqual(result['content'], '中' * 10)
+
+    def test_separate_utf8_content_and_reasoning_limits(self):
+        for field, constant, text in [('content', 'MAX_CONTENT_BYTES', '正文'), ('reasoning_content', 'MAX_REASONING_BYTES', '思考')]:
+            events = []
+            chunks = [{'choices': [{'delta': {field: '中'}}]}] * 3
+            with self.provider_stream(chunks) as response, patch('server.' + constant, 6):
+                with self.assertRaisesRegex(ValueError, text):
+                    read_provider(response, events.append)
+            self.assertEqual(len(events), 2)  # Two UTF-8 characters (6 bytes) retained.
+
+    def test_wire_limit_has_distinct_diagnostic(self):
+        with self.provider_stream([{'metadata': 'x'*200}]) as response, patch('server.MAX_WIRE_BYTES', 100):
+            with self.assertRaisesRegex(ValueError, 'SSE 总传输量'):
+                read_provider(response, lambda event: None)
 
 if __name__ == '__main__':
     import sys

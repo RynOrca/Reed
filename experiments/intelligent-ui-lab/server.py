@@ -10,6 +10,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent
+# Count UTF-8 content independently of SSE envelopes and provider metadata.
+MAX_CONTENT_BYTES = 16 * 1024 * 1024
+MAX_REASONING_BYTES = 32 * 1024 * 1024
+MAX_WIRE_BYTES = 256 * 1024 * 1024
+MAX_EVENT_BYTES = 8 * 1024 * 1024
+MAX_JSON_BYTES = 80 * 1024 * 1024
 SYSTEM = """你是交互学习页面开发者。根据用户问题生成一个完整、独立、可离线运行的 HTML 文档。
 只返回 HTML（允许一个 html 代码围栏），不要返回其他说明。使用中文界面。
 HTML 内嵌 CSS 和 JavaScript，不使用外部库、网络请求、图片链接或 CDN。
@@ -31,10 +37,15 @@ def build_request(data):
     if not messages or len(messages) > 30 or any(m.get('role') not in ('user', 'assistant') or not isinstance(m.get('content'), str) for m in messages):
         raise ValueError('任务或对话格式无效（最多 30 条消息）')
     body = dict(model=data['model'].strip(), messages=[dict(role='system', content=SYSTEM), *messages], stream=True)
-    budget = int(data.get('maxTokens', 8192))
-    if not 512 <= budget <= 65536:
-        raise ValueError('输出 token 上限应在 512 到 65536 之间')
-    body['max_tokens'] = budget
+    budget = data.get('maxTokens')
+    if budget is not None and str(budget).strip():
+        try:
+            budget = int(str(budget).strip())
+        except (ValueError, TypeError):
+            raise ValueError('最大输出必须是整数，或留空使用服务默认值')
+        if not 512 <= budget <= 1_048_576:
+            raise ValueError('最大输出应在 512 到 1048576 之间，或留空；具体可用上限由服务决定')
+        body['max_tokens'] = budget
     protocol, effort = data.get('protocol', 'none'), data.get('effort', 'medium')
     if effort not in ('off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'):
         raise ValueError('不支持的思考档位')
@@ -55,18 +66,35 @@ def build_request(data):
 def read_provider(response, emit):
     """Parse SSE events (including multiline data), or a JSON-only provider."""
     result = dict(content='', reasoning='', usage=None, finishReason=None)
+    content_bytes, reasoning_bytes = 0, 0
+
+    def append(content, reasoning):
+        nonlocal content_bytes, reasoning_bytes
+        if not isinstance(content, str) or not isinstance(reasoning, str):
+            raise ValueError('接口返回了不支持的内容格式')
+        content_bytes += len(content.encode('utf-8'))
+        reasoning_bytes += len(reasoning.encode('utf-8'))
+        if content_bytes > MAX_CONTENT_BYTES:
+            raise ValueError('实际页面正文超过测试台限制（16 MiB）；已接收内容保留。请简化页面或限制输出预算。')
+        if reasoning_bytes > MAX_REASONING_BYTES:
+            raise ValueError('实际思考内容超过测试台限制（32 MiB）；已接收内容保留。可降低思考档位。')
+        result['content'] += content
+        result['reasoning'] += reasoning
+        if content or reasoning:
+            emit(dict(type='delta', content=content, reasoning=reasoning))
+
     if 'text/event-stream' not in response.headers.get('Content-Type', '').lower():
-        raw = response.read(4_000_001)
-        if len(raw) > 4_000_000:
-            raise ValueError('模型响应超过 4MB')
+        raw = response.read(MAX_JSON_BYTES + 1)
+        if len(raw) > MAX_JSON_BYTES:
+            raise ValueError('模型 JSON 响应超过传输限制（80 MiB）')
         payload = json.loads(raw)
         choice = payload['choices'][0]
         message = choice['message']
-        result.update(content=message.get('content') or '', reasoning=message.get('reasoning_content') or message.get('reasoning') or '', usage=payload.get('usage'), finishReason=choice.get('finish_reason'))
-        emit(dict(type='delta', content=result['content'], reasoning=result['reasoning']))
+        result.update(usage=payload.get('usage'), finishReason=choice.get('finish_reason'))
+        append(message.get('content') or '', message.get('reasoning_content') or message.get('reasoning') or '')
         return result
     start, size, done = time.monotonic(), 0, False
-    pending = []
+    pending, pending_bytes = [], 0
 
     def event(lines):
         nonlocal done
@@ -85,36 +113,37 @@ def read_provider(response, emit):
             delta = choice.get('delta') or {}
             content = delta.get('content') or ''
             reasoning = delta.get('reasoning_content') or delta.get('reasoning') or ''
-            if not isinstance(content, str) or not isinstance(reasoning, str):
-                raise ValueError('接口返回了不支持的流式内容格式')
-            result['content'] += content
-            result['reasoning'] += reasoning
+            append(content, reasoning)
             if choice.get('finish_reason'):
                 result['finishReason'] = choice['finish_reason']
-            if content or reasoning:
-                emit(dict(type='delta', content=content, reasoning=reasoning))
 
     while not done:
         if time.monotonic() - start > 600:
             raise TimeoutError('生成超过 10 分钟')
-        line = response.readline(1_000_001)
+        line = response.readline(MAX_EVENT_BYTES + 1)
         if not line:
             if pending:
                 event(pending)
             break
         size += len(line)
-        if len(line) > 1_000_000 or size > 8_000_000:
-            raise ValueError('模型流式响应过大')
+        if len(line) > MAX_EVENT_BYTES:
+            raise ValueError('单行 SSE 消息超过传输限制（8 MiB），不是正文累计上限')
+        if size > MAX_WIRE_BYTES:
+            raise ValueError('SSE 总传输量超过限制（256 MiB，含协议字段）；已接收内容保留。')
         text = line.decode('utf-8').rstrip('\r\n')
         if not text:
             if pending:
                 event(pending)
                 pending = []
+                pending_bytes = 0
             else:
                 emit(dict(type='heartbeat'))
         elif text.startswith(':'):
             emit(dict(type='heartbeat'))
         elif text.startswith('data:'):
+            pending_bytes += len(line)
+            if pending_bytes > MAX_EVENT_BYTES:
+                raise ValueError('单个 SSE 事件超过传输限制（8 MiB）')
             pending.append(text[5:].lstrip(' '))
     if not done and not result['finishReason']:
         raise IncompleteRead(b'')

@@ -42,7 +42,7 @@ async function requestModel(data, path, onProgress) {
     if(item.type==='error')throw new Error(item.error);
     if(item.type==='result')result=item;
     onProgress(item,partial);
-    if(performance.now()-lastDetail>150||result) {$('details').textContent=JSON.stringify(result||{status:'接收中',...partial},null,2);lastDetail=performance.now();}
+    if(performance.now()-lastDetail>1000||result) {$('details').textContent=JSON.stringify(result||{status:'接收中（仅展示最近4000字符，完整输出保留在内存）',content:partial.content.slice(-4000),reasoning:partial.reasoning.slice(-4000)},null,2);lastDetail=performance.now();}
   }
   try {
     while(true) { const {value,done}=await reader.read();buffer+=decoder.decode(value,{stream:!done});let end;while((end=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,end);buffer=buffer.slice(end+1);event(line);}if(done)break; }
