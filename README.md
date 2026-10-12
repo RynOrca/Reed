@@ -6,7 +6,7 @@
 
 Reed 是一款面向学习与日常工作的独立 Windows 桌面 Agent。它以快捷键唤出的轻量窗口承载对话，把角色、学习流程、长期记忆和 Obsidian 笔记连接起来，让提问、练习与复习能够接续进行。
 
-Reed 基于 PI Agent 构建，使用 Tauri 与 WebView2 提供桌面界面。当前版本为源码与 Windows 便携构建阶段。
+Reed 基于 PI Agent 构建，使用 Tauri 与 WebView2 提供桌面界面。当前源码版本为 **0.2.0**，提供 Windows 安装包与便携包。
 
 ## 主要能力
 
