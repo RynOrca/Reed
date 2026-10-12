@@ -141,7 +141,7 @@ python desktop/tools/extract-icons.py
 
 ## Windows 安装包
 
-从 [最新版本](https://github.com/RynOrca/Reed/releases/latest) 下载 `Reed-0.1.0-setup.exe`。安装包包含 Node 运行时与 Agent，支持当前用户安装、开始菜单与卸载入口。升级和卸载默认保留 `%APPDATA%\Reed` 中的配置与会话；更新前从托盘退出旧版。也可以下载便携 ZIP，解压后运行 `Reed.exe`。
+从 [最新版本](https://github.com/RynOrca/Reed/releases/latest) 下载 `Reed-0.2.0-setup.exe`。安装包包含 Node 运行时与 Agent，支持当前用户安装、开始菜单与卸载入口。升级和卸载默认保留 `%APPDATA%\Reed` 中的配置与会话；更新前从托盘退出旧版。也可以下载便携 ZIP，解压后运行 `Reed.exe`。
 
 本 README 的功能介绍以当前 `main` 分支源码为准，已发布安装包包含的功能以对应发行说明为准。
 
