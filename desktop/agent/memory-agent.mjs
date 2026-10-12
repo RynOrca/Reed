@@ -1,8 +1,10 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { userTexts } from "./learner.mjs";
+import { skippedMemory } from './memory-value.mjs';
 
 const noMemoryPatterns = [
+  /(?:不要|别|无需|不必)记住|(?:不要|别)记(?:下|入|到|进|这个|这件|这条)/,
   /(?:不要|不应|不得|禁止|别|无需|不需要|不再|不允许)[^。！？；;\n]{0,30}(?:保存|写入|写进|写到|记录|总结|整理|存入|存到|存进|加入|记到|记入|记住)[^。！？；;\n]{0,30}(?:长期记忆|永久记忆|记忆|memory)/i,
   /(?:不保存|不写入|不写|不记录|不总结|不整理)[^。！？；;\n]{0,20}(?:长期记忆|永久记忆|记忆|memory)/i,
   /(?:不要|禁止|关闭|禁用)[^。！？；;\n]{0,12}(?:长期记忆|永久记忆|记忆保存|记忆整理)/i,
@@ -19,7 +21,7 @@ export function sessionDisallowsMemory(session, pendingPrompt = "") {
   return [...users.map(messageText), pendingPrompt].some(text => noMemoryPatterns.some(pattern => pattern.test(text)));
 }
 
-export function createMemoryAgent({ memory, learner, send, currentSession, runtime, enabled = () => true }) {
+export function createMemoryAgent({ memory, learner, send, currentSession, runtime, judgeValue, enabled = () => true }) {
   let timer;
   let controller;
   let generation = 0;
@@ -28,11 +30,14 @@ export function createMemoryAgent({ memory, learner, send, currentSession, runti
     pi.registerTool(defineTool({
       name: "remember", label: "整理记忆", description: "保存用户明确表达的长期学习背景、偏好或可复用知识。只保存明确事实，纠正时使用相同 key/title 更新。不要存凭据、一次性任务或推测。",
       parameters: Type.Object({ layer: Type.Union([Type.Literal("profile"), Type.Literal("knowledge")]), key: Type.String(), content: Type.String() }),
-      async execute(_id, input) {
+      async execute(_id, input, signal) {
         if (!enabled()) return { content: [{ type: "text", text: "当前角色的学习者画像与记忆功能已关闭，未保存" }], details: { skipped: true } };
         if (sessionDisallowsMemory(currentSession())) return { content: [{ type: "text", text: "用户已要求本会话不写入长期记忆，未保存" }], details: { skipped: true, reason: "session_no_memory" } };
         const layer = input.layer === "profile" ? "l1" : "l2";
         if (!memory.state.enabled[layer]) return { content: [{ type: "text", text: "此层记忆已关闭，未保存" }], details: {} };
+        const selected = currentSession();
+        const verdict = await judgeValue?.([{ area: input.layer, key: input.key, content: input.content }], { signal });
+        if (!verdict?.[0] || signal?.aborted || currentSession() !== selected || !enabled() || sessionDisallowsMemory(selected) || !memory.state.enabled[layer]) return skippedMemory();
         await memory.applyAgentUpdate(input.layer === "profile" ? { facts: [{ key: input.key, content: input.content }] } : { notes: [{ title: input.key, body: input.content }] }, currentSession()?.sessionId || "agent");
         send({ type: "memory", state: memory.snapshot() });
         return { content: [{ type: "text", text: "记忆已整理保存" }], details: { layer } };
@@ -67,8 +72,18 @@ export function createMemoryAgent({ memory, learner, send, currentSession, runti
       const output = response.content.filter((block) => block.type === "text").map((block) => block.text).join("");
       const match = output.match(/\{[\s\S]*\}/);
       if (!match) throw new Error("模型未返回有效整理结果");
-      const update = JSON.parse(match[0]);
+      let update = JSON.parse(match[0]);
+      if (['error', 'aborted', 'length'].includes(response.stopReason)) throw Error('整理结果不完整');
+      const candidates = [
+        ...(memory.state.enabled.l1 && Array.isArray(update.facts) ? update.facts.slice(0,8).map(value=>({area:'facts',value})) : []),
+        ...(memory.state.enabled.l2 && Array.isArray(update.notes) ? update.notes.slice(0,3).map(value=>({area:'notes',value})) : []),
+        ...(memory.state.enabled.l1 && Array.isArray(update.learningEvents) ? update.learningEvents.slice(0,8).map(value=>({area:'learningEvents',value})) : []),
+      ];
+      const verdict = await judgeValue?.(candidates, { signal: controller.signal });
+      update = {facts:[],notes:[],learningEvents:[]};
+      candidates.forEach((candidate,index)=>{if(verdict?.[index])update[candidate.area].push(candidate.value);});
       if (!enabled() || ticket !== generation || sessionDisallowsMemory(selected)) return;
+      if (!Object.values(update).some(items=>items.length)) { send({type:'memory_status',status:'idle',message:'本轮没有需要长期保存的内容'}); return; }
       await memory.applyAgentUpdate(update, sessionId);
       if (learner && memory.state.enabled.l1 && Array.isArray(update.learningEvents)) {
         for (const item of update.learningEvents.slice(0, 8)) { if (!enabled() || ticket !== generation || sessionDisallowsMemory(selected)) return; await learner.record(item, sessionId, userTexts(selected)).catch(() => {}); }

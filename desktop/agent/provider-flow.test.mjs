@@ -59,7 +59,10 @@ test("real PI bridge: discover, stream, remember, background memory, projects an
     const lastUser=body.messages.filter(m=>m.role==="user").at(-1);
     if(JSON.stringify(lastUser?.content).includes("QUEUE_START")) await new Promise(r=>setTimeout(r,500));
     let delta, finish;
-    if (consolidating) { delta = { content: '{"facts":[{"key":"学习目标","content":"学习线性代数"}],"notes":[{"title":"矩阵","body":"矩阵用于表示线性变换。"}],"learningEvents":[{"kind":"goal","subject":"线性代数","detail":"学习线性代数","evidence":"我在学习线性代数","status":"active"}]}' }; finish = "stop"; }
+    if (body.messages.some(m=>typeof m.content==='string'&&m.content.includes('记忆价值审查器'))) {
+      const payload=JSON.parse(typeof lastUser.content==='string'?lastUser.content:lastUser.content.filter(b=>b.type==='text').map(b=>b.text).join(''));
+      delta={content:JSON.stringify({decisions:payload.candidates.map(c=>({id:c.id,supported:c.area!=='notes',durable:true,useful:c.area!=='notes',requested:false,confidence:0.95}))})};finish='stop';
+    } else if (consolidating) { delta = { content: '{"facts":[{"key":"学习目标","content":"学习线性代数"}],"notes":[{"title":"矩阵","body":"矩阵用于表示线性变换。"}],"learningEvents":[{"kind":"goal","subject":"线性代数","detail":"学习线性代数","evidence":"我在学习线性代数","status":"active"}]}' }; finish = "stop"; }
     else if (body.tools?.length && !usedTool && body.messages.some(m => m.role === "user" && JSON.stringify(m.content).includes("记住"))) {
       delta = { tool_calls: [{ index: 0, id: "remember-test", type: "function", function: { name: "remember", arguments: JSON.stringify({ layer: "profile", key: "学习目标", content: "学习线性代数" }) } }] }; finish = "tool_calls";
     } else { delta = { content: "已记住你的学习目标。" }; finish = "stop"; }
@@ -113,7 +116,7 @@ test("real PI bridge: discover, stream, remember, background memory, projects an
     assert.ok(messages.some(m => m.type === "tool_end" && m.name !== "other" && !m.isError));
     await until(m => m.type === "memory_status" && m.status === "saved");
     const memory = JSON.parse(await readFile(join(root, "data", "memory.json"), "utf8"));
-    assert.equal(memory.facts[0].content, "学习线性代数"); assert.equal(memory.notes[0].title, "矩阵");
+    assert.equal(memory.facts[0].content, "学习线性代数"); assert.equal(memory.notes.length, 0, '模型拒绝的普通知识讲解不能成为长期笔记');
     const profile = JSON.parse(await readFile(join(root, "data", "learner.json"), "utf8")); assert.equal(profile.goals[0].subject, "线性代数");
     const prompt = JSON.stringify(requests[0].messages.filter(m => ["system", "developer"].includes(m.role)));
     assert.ok(prompt.includes("TEST_ROLE_SYSTEM_PRIORITY")); assert.ok(prompt.includes("TEST_SKILL_DESCRIPTION")); assert.ok(!prompt.includes("ONLY_BODY_SENTINEL")); assert.ok(prompt.includes("线性代数.md")); assert.ok(prompt.includes("summon-file:"));

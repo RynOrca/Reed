@@ -1,4 +1,5 @@
 import { semanticMatcher } from "./memory-match.mjs";
+import { createMemoryValueGate } from './memory-value.mjs';
 import { workMemoryExtension } from "./work-memory.mjs";
 import {LazyMcp,MCP_TOOLS} from "./mcp.mjs";
 import {UserConfig} from "./user-config.mjs";
@@ -92,7 +93,8 @@ const vaultOverview = new VaultOverview({capabilities,runtime:getRuntime,model:(
 const visualReview = createVisualReview({ scope, send, enabled: () => capabilities.state.browserEnabled });
 const mcp=new LazyMcp({config:userConfig,scope,send});await mcp.load();
 const approvalGate = createApprovalGate(send, undefined, () => security.approval);
-const memoryAgent = createMemoryAgent({ memory, learner, send, currentSession: () => session, runtime: getRuntime, enabled:()=>roles.current().learnerProfileEnabled === true });
+const judgeValue=createMemoryValueGate({runtime:getRuntime,currentSession:()=>session,learningEnabled:()=>roles.current().learnerProfileEnabled===true,workEnabled:()=>memory.state.enabled.work});
+const memoryAgent = createMemoryAgent({ memory, learner, send, judgeValue, currentSession: () => session, runtime: getRuntime, enabled:()=>roles.current().learnerProfileEnabled === true });
 memory.agentAllowed=learner.agentAllowed=source=>roles.current().learnerProfileEnabled===true&&!sessionDisallowsMemory(session)&&source===session?.sessionId;
 memory.matchTopic=learner.matchTopic=semanticMatcher({runtime:getRuntime,model:()=>session?.model?.provider!=="unknown"?session?.model:null,allowed:()=>roles.current().learnerProfileEnabled===true&&!sessionDisallowsMemory(session)});
 memory.workAllowed=source=>memory.state.enabled.work&&!sessionDisallowsMemory(session)&&source===session?.sessionId;
@@ -101,7 +103,7 @@ const preparedSkills=new Map(),preparedReviews=new Set();
 let reviewReadKey=null;
 const lastUserPrompt=()=>{const u=session?.state.messages.findLast(m=>m.role==="user");return typeof u?.content==="string"?u.content:(u?.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");};
 const reviewEnabled=(prompt=lastUserPrompt())=>reviewReadKey===session?.sessionId+"\n"+prompt||preparedReviews.has(roles.activeId+"\n"+prompt);
-const workingTools=workMemoryExtension({memory,learner,roles,currentSession:()=>session,reviewEnabled,send});
+const workingTools=workMemoryExtension({memory,learner,roles,currentSession:()=>session,reviewEnabled,send,judgeValue});
 const reviewGate=pi=>pi.on("tool_result",event=>{
   if(event.toolName!=="read"||event.isError||!roles.current().learnerProfileEnabled)return;
   const skill=capabilities.state.skills.find(s=>s.name==="spaced-review"&&s.enabled&&roles.current().skills.some(b=>b.skillId===s.id));
@@ -116,7 +118,7 @@ async function prepareSkills(text) {
   if(preparedSkills.size>100){const oldest=preparedSkills.keys().next().value;preparedSkills.delete(oldest);preparedReviews.delete(oldest);}
 }
 const learningTools = createLearningTools({ capabilities, currentWorkspace: () => cwd, roles, send, scope, vaultOverview, roleSkillInstructions: prompt=>preparedSkills.get(roles.activeId+'\n'+prompt)||'' });
-const learnerTools = learnerExtension({ learner, memory, currentSession: () => session, send, enabled:()=>roles.current().learnerProfileEnabled === true });
+const learnerTools = learnerExtension({ learner, memory, judgeValue, currentSession: () => session, send, enabled:()=>roles.current().learnerProfileEnabled === true });
 const roleFeatures = roleFeatureExtension({roles,goals,project:()=>projectPath,learner,memory,currentSession:()=>session,reviewEnabled});
 let generationStart = null, firstDelta = null, outputTokens = 0, generationMs = 0, missingUsage = false;
 function emitTelemetry() {

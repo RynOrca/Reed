@@ -9,7 +9,7 @@ function fixture(branch) {
   const session = { sessionId: "isolated", model: { provider: "test" }, sessionManager: { getBranch: () => branch }, state: { messages: [entry("user", "compacted visible request").message] } };
   const memory = { state: { enabled: { l1: true, l2: true } }, applyAgentUpdate: async () => { calls.write++; }, snapshot: () => ({}), context: async () => "" };
   const learner = { record: async () => { calls.learner++; }, snapshot: () => ({}) };
-  const agent = createMemoryAgent({ memory, learner, send() {}, currentSession: () => session, runtime: async () => { calls.runtime++; return { completeSimple: async () => { calls.model++; return { content: [{ type: "text", text: '{"facts":[],"notes":[],"learningEvents":[]}' }] }; } }; } });
+  const agent = createMemoryAgent({ judgeValue:async candidates=>candidates.map(()=>true), memory, learner, send() {}, currentSession: () => session, runtime: async () => { calls.runtime++; return { completeSimple: async () => { calls.model++; return { content: [{ type: "text", text: '{"facts":[],"notes":[],"learningEvents":[]}' }] }; } }; } });
   agent.extension({ registerTool(value) { tool = value; }, on(type, handler) { handlers.set(type, handler); } });
   return { calls, session, agent, handlers, tool };
 }
@@ -40,7 +40,7 @@ test("assistant, tool and summary instructions cannot prohibit user-authorized m
   assert.equal(sessionDisallowsMemory(f.session), false);
   await f.tool.execute("remember-test", { layer: "profile", key: "preference", content: "likes examples" });
   await f.agent.consolidate();
-  assert.equal(f.calls.write, 2);
+  assert.equal(f.calls.write, 1);
   assert.equal(f.calls.model, 1);
 });
 

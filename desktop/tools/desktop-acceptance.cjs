@@ -21,7 +21,8 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     if(body.messages.some(m=>Array.isArray(m.content)&&m.content.some(b=>b.type==='image_url'&&b.image_url?.url?.startsWith('data:image/'))))receivedImage=true;
     const lastUser=body.messages.filter(m=>m.role==='user').at(-1); const userText=typeof lastUser?.content==='string'?lastUser.content:(lastUser?.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n');
     const memory = body.messages.some(m => JSON.stringify(m.content).includes('记忆整理器'));
-    const text = memory ? '{"facts":[{"key":"学习目标","content":"学习线性代数"}],"notes":[],"learningEvents":[{"kind":"goal","subject":"线性代数","detail":"学习线性代数","evidence":"我在学习线性代数","status":"active"}]}' : '这是桌面验收的流式回答。\n\n| 概念 | 含义 |\n| --- | --- |\n| 矩阵 | 线性变换 |\n\n[打开生成的 HTML](preview.html)';
+    const valuing = body.messages.some(m=>JSON.stringify(m.content).includes('记忆价值审查器'));
+    const text = valuing ? JSON.stringify({decisions:JSON.parse(userText).candidates.map(c=>({id:c.id,supported:true,durable:true,useful:true,requested:false,confidence:0.95}))}) : memory ? '{"facts":[{"key":"学习目标","content":"学习线性代数"}],"notes":[],"learningEvents":[{"kind":"goal","subject":"线性代数","detail":"学习线性代数","evidence":"我在学习线性代数","status":"active"}]}' : '这是桌面验收的流式回答。\n\n| 概念 | 含义 |\n| --- | --- |\n| 矩阵 | 线性变换 |\n\n[打开生成的 HTML](preview.html)';
     const delta = (value, finish_reason = null) => ({ id:'desktop-test', object:'chat.completion.chunk', model:body.model, created:1, choices:[{index:0,delta:value,finish_reason}] });
     res.setHeader('content-type','text/event-stream');
     if (!memory && ['RECOVER_SUCCESS_TEST', 'RECOVER_LENGTH_TEST', 'RECOVER_SSE_SUCCESS_TEST', 'RECOVER_SSE_FAILURE_TEST'].includes(userText)) {

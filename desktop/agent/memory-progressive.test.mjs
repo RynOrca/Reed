@@ -35,7 +35,7 @@ test('默认上下文无复习条目、证据原文和知识正文，按需读�
 
 test('画像关闭仍能保存工具经验，无工具证据和禁写会话不能保存',()=>fixture(async root=>{
   const memory=new MemoryStore(root,join(root,'sessions')),tools={},events={},session={sessionId:'s',state:{messages:[]}};
-  workMemoryExtension({memory,learner:{},roles:{current:()=>({learnerProfileEnabled:false})},currentSession:()=>session,reviewEnabled:()=>false,send(){}})({registerTool:t=>tools[t.name]=t,on:(n,f)=>events[n]=f});
+  workMemoryExtension({judgeValue:async candidates=>candidates.map(()=>true),memory,learner:{},roles:{current:()=>({learnerProfileEnabled:false})},currentSession:()=>session,reviewEnabled:()=>false,send(){}})({registerTool:t=>tools[t.name]=t,on:(n,f)=>events[n]=f});
   const input={kind:'shell',title:'PowerShell 命令',body:'使用分号分隔命令',evidence:'Unexpected token'};
   await assert.rejects(tools.remember_work.execute('1',input),/证据/);events.before_agent_start();events.tool_result({toolName:'mcp_call',content:[{type:'text',text:'Unexpected token'}],isError:true});
   events.tool_result({toolName:'mcp_call',content:[{type:'text',text:'Command succeeded'}],isError:false});await tools.remember_work.execute('1',input);assert.equal(memory.state.working.length,1);
