@@ -31,8 +31,26 @@ $configPath = Join-Path $Output 'installer-config.json'
 [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
 $env:RUSTUP_TOOLCHAIN = 'stable'
 $target = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR) } else { Join-Path $root 'desktop/src-tauri/target' }
+# Downloaded compilers can inherit the workspace's Low integrity label and fail
+# to map files in the normal user TEMP directory. Repair only our local tools.
+function Repair-ReedNsisIntegrity {
+    $found = $false
+    foreach ($relative in @('.tauri/NSIS/makensis.exe', '.tauri/NSIS/Bin/makensis.exe')) {
+        $compiler = Join-Path $target $relative
+        if (Test-Path -LiteralPath $compiler) { Set-ReedExecutableIntegrity -Path $compiler; $found = $true }
+    }
+    return $found
+}
+$hadNsis = Repair-ReedNsisIntegrity
 Push-Location (Join-Path $root 'desktop')
-try { & $tauri build --bundles nsis --config $configPath; if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' } }
+try {
+    & $tauri build --bundles nsis --config $configPath
+    if ($LASTEXITCODE -ne 0 -and -not $hadNsis -and (Repair-ReedNsisIntegrity)) {
+        # The first run may have downloaded NSIS after the preflight repair.
+        & $tauri build --bundles nsis --config $configPath
+    }
+    if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
+}
 finally { Pop-Location }
 $installer = Get-ChildItem -LiteralPath (Join-Path $target 'release/bundle/nsis') -Filter '*setup.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $installer) { throw 'Installer output not found' }
