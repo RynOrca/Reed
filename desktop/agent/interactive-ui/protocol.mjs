@@ -15,13 +15,13 @@ const exactState = (schema, state) => plain(state) && Object.keys(state).length 
   Object.entries(schema).every(([name, spec]) => Object.hasOwn(state, name) && integer(state[name]) && state[name] >= spec.min && state[name] <= spec.max);
 
 export function initialArtifactState(document) {
-  if (document.mode === 'algorithm') return {step:0,input:[...document.input]};
+  if (document.mode === 'algorithm') return {step:0,input:structuredClone(document.input)};
   if (document.mode === 'math') return {...document.initialState};
   return document.mode === 'fixture' ? {step:0} : {...document.initialState};
 }
 
 export function validateState(document, state) {
-  if (document.mode === 'algorithm') return plain(state) && keys(state,['step','input']) && Object.keys(state).length===2 && validSortInput(state.input) && integer(state.step) && state.step>=0 && state.step<EXECUTION_ENGINES[document.algorithm].trace(state.input).length;
+  if (document.mode === 'algorithm') { const engine=EXECUTION_ENGINES[document.algorithm];return !!engine && plain(state) && keys(state,['step','input']) && Object.keys(state).length===2 && (engine.validInput||validSortInput)(state.input) && integer(state.step) && state.step>=0 && state.step<engine.trace(state.input).length; }
   if (document.mode === 'math') return validMathState(document.math,state);
   if (document.mode === 'fixture') return plain(state) && Object.keys(state).length === 1 && integer(state.step) && state.step >= 0 && state.step < document.steps.length;
   return document.mode === 'components' && exactState(document.stateSchema, state);
@@ -32,7 +32,7 @@ export function validateDocument(document) {
   if (Buffer.byteLength(JSON.stringify(document), 'utf8') > 32768) fail('大小超过 32 KiB');
   if (document.mode === 'algorithm') {
     if (!keys(document,['schemaVersion','mode','algorithm','title','question','source','input']) || !Object.hasOwn(EXECUTION_ENGINES,document.algorithm) || !line(document.question,300) ||
-      !plain(document.source) || !keys(document.source,['kind','label']) || document.source.kind!=='illustrative' || !line(document.source.label,80) || !validSortInput(document.input)) fail('算法版本或输入');
+      !plain(document.source) || !keys(document.source,['kind','label']) || document.source.kind!=='illustrative' || !line(document.source.label,80) || !(EXECUTION_ENGINES[document.algorithm].validInput||validSortInput)(document.input)) fail('算法版本或输入');
     return document;
   }
   if(document.mode === 'math') {

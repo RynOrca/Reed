@@ -116,3 +116,14 @@ input 允许 0–12 个 -999 至 999 的整数。不要提交代码、执行轨�
 {"schemaVersion":1,"mode":"math","math":"linear-transform-2d-v1","title":"二维线性变换：剪切与面积","question":"改变矩阵和变换进度，观察网格、基向量与单位正方形的像。","source":{"kind":"illustrative","label":"确定性矩阵计算"},"initialState":{"a":1,"b":1,"c":0,"d":1,"vx":1,"vy":1,"t":1}}
 ```
 成功后指出默认剪切矩阵 det A=1，保持有向面积；更换参数后据实际值解释。图中超出固定视窗的部分会裁切，不能据可见面积估计行列式。
+
+## 完整 KMP：前缀表构建与首个匹配
+
+需要完整算法过程时选择 `mode: algorithm, algorithm: kmp-prefix-first-v1`。input 必须恰为 `{text:字符串,pattern:字符串}`，文本最多48字、模式最多24字，支持基本多文种字符（中英文等），不含控制字符或 emoji；不裁剪用户输入。Reed 按固定展示代码构建 pi 表，再搜索第一个匹配，返回0起算索引；未找到返回-1，空模式返回0。pi[k] 是 pattern[0..k] 的最长相等真前后缀长度。失配时 j=pi[j-1]，i 不回退；这不是某些教材的 next[0]=-1 或优化 nextval 版本。用户指定不同源码时说明差异，不能冒充原代码执行。无需生成 pi 或逐帧数据，它们由本地确定性引擎计算。原 StringTracks 组件 few-shot 仍适合一个失配概念练习。
+
+用户：完整演示 ABABABC 中匹配 ABABC，先告诉我前缀表怎么来的，再看失配怎么跳。
+工具 generate_learning_ui 的 document 内容：
+```json
+{"schemaVersion":1,"mode":"algorithm","algorithm":"kmp-prefix-first-v1","title":"KMP：前缀表与完整匹配过程","question":"逐步观察 pi 表构建、字符比较和失配回退；注意文本指针 i 不回退。","source":{"kind":"illustrative","label":"确定性代码执行轨迹 · pi 前缀函数"},"input":{"text":"ABABABC","pattern":"ABABC"}}
+```
+成功后说明默认 pi=[0,0,1,2,0]、首个匹配索引2；用户改输入后按实际结果解释。本实现找到第一个匹配就返回，不列出全部匹配；不等同于用户已掌握算法。

@@ -31,9 +31,9 @@
 
 作品绑定到含相应 toolCall ID 的助手消息；成功后发 `interactive_artifact` 事件，前端即时追加卡片，重开会话按同一绑定恢复。关闭开关后仍能操作历史卡片，但不能生成新作品。
 
-运行 `node desktop/tools/create-interactive-preview.cjs` 会生成可离线打开的 `dist/interactive-components-preview.html`：七张卡片使用正式渲染器，可对比外观。自动化桥接测试使用隔离模拟服务验证调用路径，不宣称真实 DeepSeek/Qwen 已通过教学质量验收。
+运行 `node desktop/tools/create-interactive-preview.cjs` 会生成可离线打开的 `dist/interactive-components-preview.html`：八张卡片使用正式渲染器，可对比外观。自动化桥接测试使用隔离模拟服务验证调用路径，不宣称真实 DeepSeek/Qwen 已通过教学质量验收。
 
-内置 Skill 附八组完整 few-shot：KMP、快排分区、Attention、Bellman、完整快排、堆排序、二次函数、二维线性变换；通过协议与交互检查。它们是组件组合与教学边界的示范，不是所有算法的固定模板。
+内置 Skill 附九组完整 few-shot：KMP、快排分区、Attention、Bellman、完整快排、堆排序、二次函数、二维线性变换、完整 KMP；通过协议与交互检查。它们是组件组合与教学边界的示范，不是所有算法的固定模板。
 
 
 ## 完整代码执行（优先增补阶段）
@@ -53,3 +53,11 @@
 `linear-transform-2d-v1` 状态为 `{a,b,c,d,vx,vy,t}`，前六项 [-3,3]，t 在 [0,1]；按行排列矩阵，等比例坐标展示 B(t)=(1-t)I+tA 的网格、基向量、单位面积与向量，明确区分目标 det A 和当前 det B(t)。插值中间可能奇异；面积缩放为行列式绝对值。
 
 `math-models.mjs` 是前后端共用计算和状态校验核心，`math-explorer.js` 是正式渲染器。控制变化仅在本地计算，释放/确认后保存，不请求模型。三个新模式接入角色开关与内置 Skill。验收使用隔离数据与模拟模型；真实模型选择参数和解释的质量仍待验收。
+
+## 完整 KMP 代码执行
+
+`kmp-prefix-first-v1` 同属 `mode: algorithm`，input 为 `{text,pattern}`，状态为 `{step,input:{text,pattern}}`；文本最多48个 UTF-16 基本多文种字符，模式最多24个，不接受控制字符、代理码元或 emoji。不裁剪输入，空格保留并绘为 ␠。代码先构建 pi 前缀表，再寻找首个匹配；索引从0开始，不存在返回-1，空模式返回0。它不是 next[0]=-1 / nextval 的实现，不支持任意用户源码。
+
+复用算法播放器，`kmp-view.js` 提供两阶段字符对齐、i/j 指针、未知/已知 pi 表和结果；失配回退不移动文本 i。未计算前缀项显示问号。用户可以修改字符串并重算，输入和进度保存恢复，控件不会调用模型。`kmp-trace.mjs` 为前后端共享的版本固定核心，便携构建复制同一模块。
+
+`kmp.test.mjs` 对965组输入逐次比较展示源码的真实运行、回退、pi写入；另以原生 indexOf 和独立暴力前后缀枚举验证结果。浏览器覆盖每步代码行/pi、鼠标键盘触屏、中文、空串与360px长字符串；隔离桌面用模拟模型验证生成工具和修改输入后的历史恢复，不代表实际 DeepSeek/Qwen 教学质量通过。

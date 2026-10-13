@@ -38,9 +38,9 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
       res.write(`data: ${JSON.stringify({...delta({}), choices:[], usage:{prompt_tokens:100,completion_tokens:12,total_tokens:112}})}\n\n`);
       res.end('data: [DONE]\n\n'); return;
     }
-    if (!memory && ['INTERACTIVE_MODEL_TEST','UI_HEAP_TEST','UI_QUADRATIC_TEST','UI_LINEAR_TEST'].includes(userText) && !body.messages.slice(body.messages.lastIndexOf(lastUser)+1).some(m=>m.role==='tool')) {
+    if (!memory && ['INTERACTIVE_MODEL_TEST','UI_KMP_TEST','UI_HEAP_TEST','UI_QUADRATIC_TEST','UI_LINEAR_TEST'].includes(userText) && !body.messages.slice(body.messages.lastIndexOf(lastUser)+1).some(m=>m.role==='tool')) {
       assert.ok(body.tools.some(t=>t.function?.name==='generate_learning_ui'));
-      res.write(`data: ${JSON.stringify(delta({role:'assistant',tool_calls:[{index:0,id:'desktop-ui-'+apiCalls,type:'function',function:{name:'generate_learning_ui',arguments:JSON.stringify({document:JSON.stringify(createFixedDocument(({UI_HEAP_TEST:'heapsort',UI_QUADRATIC_TEST:'quadratic',UI_LINEAR_TEST:'linear-transform'})[userText]||'quicksort-full'))})}}]}))}\n\n`);
+      res.write(`data: ${JSON.stringify(delta({role:'assistant',tool_calls:[{index:0,id:'desktop-ui-'+apiCalls,type:'function',function:{name:'generate_learning_ui',arguments:JSON.stringify({document:JSON.stringify(createFixedDocument(({UI_KMP_TEST:'kmp-full',UI_HEAP_TEST:'heapsort',UI_QUADRATIC_TEST:'quadratic',UI_LINEAR_TEST:'linear-transform'})[userText]||'quicksort-full'))})}}]}))}\n\n`);
       res.write(`data: ${JSON.stringify(delta({},'tool_calls'))}\n\n`);res.end('data: [DONE]\n\n');return;
     }
     if (!memory && ['PERMISSION_TEST','READONLY_TEST'].includes(userText) && body.messages.at(-1)?.role!=='tool') {
@@ -328,10 +328,12 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     assert.equal(await generatedCard.getByLabel('输入数组').inputValue(),'3, -1, 3, 0');
     assert.deepEqual(await generatedCard.locator('.algorithm-value').allTextContents(),['-1','0','3','3']);
     checks.push('Planner 已移除、编辑删除右侧成组，角色开关启用完整快排生成、输入重算、实时交互与历史恢复');
-    for(const [marker,title] of [['UI_HEAP_TEST','堆排序：数组与二叉树'],['UI_QUADRATIC_TEST','二次函数：参数怎样'],['UI_LINEAR_TEST','线性代数：矩阵怎样']]){
+    for(const [marker,title] of [['UI_KMP_TEST','KMP：前缀表与完整匹配'],['UI_HEAP_TEST','堆排序：数组与二叉树'],['UI_QUADRATIC_TEST','二次函数：参数怎样'],['UI_LINEAR_TEST','线性代数：矩阵怎样']]){
       await agentCommand('new_session',{noProject:true});await main.locator('#prompt').fill(marker);await main.locator('#send-button').click();
       const card=main.locator('.interactive-card').filter({hasText:title});await card.getByRole('button',{name:'展开',exact:true}).click();await main.waitForFunction(()=>document.getElementById('status').textContent==='就绪');
-      if(marker==='UI_HEAP_TEST'){
+      if(marker==='UI_KMP_TEST'){
+        await card.getByLabel('文本串',{exact:true}).fill('AAAAAB');await card.getByLabel('模式串',{exact:true}).fill('AAAB');await card.getByRole('button',{name:'重新生成过程'}).click();await card.getByRole('slider',{name:'执行步骤'}).focus();await main.keyboard.press('End');assert.ok((await card.locator('.kmp-result').innerText()).includes('索引：2'));
+      }else if(marker==='UI_HEAP_TEST'){
         assert.equal(await card.locator('.tree-value').count(),5);await card.getByRole('slider',{name:'执行步骤'}).focus();await main.keyboard.press('End');assert.deepEqual(await card.locator('.algorithm-value').allTextContents(),['1','3','4','5','10']);assert.equal(await card.locator('.tree-value').count(),0);
       }else if(marker==='UI_QUADRATIC_TEST'){
         await card.getByRole('slider',{name:'开口系数 a'}).focus();await main.keyboard.press('End');assert.equal(await card.getByRole('slider',{name:'开口系数 a'}).inputValue(),'3');
@@ -342,7 +344,8 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
       const stored=(await agentCommand('get_interactive_artifact',{artifactId:snapshot.artifactId})).artifact.state;
       await agentCommand('new_session',{noProject:true});await agentCommand('open_session',{sessionId:snapshot.sessionId});await card.getByRole('button',{name:'展开',exact:true}).click();
       assert.deepEqual((await agentCommand('get_interactive_artifact',{artifactId:snapshot.artifactId})).artifact.state,stored);
-      if(marker==='UI_HEAP_TEST')assert.equal(await card.getByRole('slider',{name:'执行步骤'}).inputValue(),String(stored.step));
+      if(marker==='UI_KMP_TEST'){assert.equal(await card.getByLabel('文本串',{exact:true}).inputValue(),'AAAAAB');assert.equal(await card.getByLabel('模式串',{exact:true}).inputValue(),'AAAB');assert.equal(await card.getByRole('slider',{name:'执行步骤'}).inputValue(),String(stored.step));assert.ok((await card.locator('.kmp-result').innerText()).includes('索引：2'));}
+      else if(marker==='UI_HEAP_TEST')assert.equal(await card.getByRole('slider',{name:'执行步骤'}).inputValue(),String(stored.step));
       else if(marker==='UI_QUADRATIC_TEST')assert.equal(await card.getByRole('slider',{name:'开口系数 a'}).inputValue(),'3');
       else assert.equal(await card.getByLabel('矩阵 b（第1行第2列）',{exact:true}).inputValue(),'2');
       checks.push(marker+'：模型工具生成、控件操作和历史状态恢复');

@@ -37,7 +37,7 @@ Copy-Item -LiteralPath (Join-Path $agentDir 'memory-agent.mjs') -Destination (Jo
 foreach ($module in @('capabilities.mjs', 'browser.mjs', 'learning-tools.mjs', 'learner.mjs', 'sandbox.mjs', 'user-config.mjs', 'mcp.mjs', 'turn-outcome.mjs', 'turn-recovery.mjs', 'stream-diagnostics.mjs', 'context-policy.mjs', 'visual-review.mjs', 'memory-match.mjs', 'memory-value.mjs', 'work-memory.mjs', 'goals.mjs', 'role-features.mjs', 'vault-overview.mjs')) { Copy-Item -LiteralPath (Join-Path $agentDir $module) -Destination (Join-Path $Output "agent\$module") -Force }
 Copy-Item -LiteralPath (Join-Path $agentDir 'role-skills.mjs') -Destination (Join-Path $Output 'agent\role-skills.mjs') -Force
 New-Item -ItemType Directory -Force -Path (Join-Path $Output 'web') | Out-Null
-foreach ($sharedModule in @('quicksort-trace.mjs','heapsort-trace.mjs','execution-traces.mjs','math-models.mjs')) { Copy-Item -LiteralPath (Join-Path $desktopDir "web\$sharedModule") -Destination (Join-Path $Output "web\$sharedModule") -Force }
+foreach ($sharedModule in @('quicksort-trace.mjs','heapsort-trace.mjs','kmp-trace.mjs','execution-traces.mjs','math-models.mjs')) { Copy-Item -LiteralPath (Join-Path $desktopDir "web\$sharedModule") -Destination (Join-Path $Output "web\$sharedModule") -Force }
 New-Item -ItemType Directory -Force -Path (Join-Path $Output 'agent\interactive-ui') | Out-Null
 Copy-Item -LiteralPath (Join-Path $agentDir 'interactive-ui\artifacts.mjs') -Destination (Join-Path $Output 'agent\interactive-ui\artifacts.mjs') -Force
 Copy-Item -LiteralPath (Join-Path $agentDir 'interactive-ui\protocol.mjs') -Destination (Join-Path $Output 'agent\interactive-ui\protocol.mjs') -Force

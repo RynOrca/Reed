@@ -1,12 +1,14 @@
 import { validSortInput } from './quicksort-trace.mjs';
 import { EXECUTION_ENGINES } from './execution-traces.mjs';
 import { createBinaryTree } from './learning-svg.js';
+import { createKmpTracks } from './kmp-view.js';
 
 export function createAlgorithmPlayer(documentData, savedState, onChange) {
   const make = (tag, cls, text) => { const item = document.createElement(tag); if (cls) item.className = cls; if (text !== undefined) item.textContent = text; return item; };
   const engine=EXECUTION_ENGINES[documentData.algorithm];
   if(!engine)throw new Error('未知算法版本');
-  let input = [...(validSortInput(savedState?.input) ? savedState.input : documentData.input)];
+  const validInput=engine.validInput||validSortInput;
+  let input = structuredClone(validInput(savedState?.input) ? savedState.input : documentData.input);
   let trace = engine.trace(input), step = Math.min(Math.max(0, savedState?.step || 0), trace.length - 1);
   let playing = false, timer = null, speed = 700;
   const root = make('div', 'algorithm-player');
@@ -14,7 +16,7 @@ export function createAlgorithmPlayer(documentData, savedState, onChange) {
   const convention = make('p', 'algorithm-convention', engine.convention);
   const controls = make('div', 'algorithm-controls');
   const button = (text, action) => { const b = make('button', '', text); b.type = 'button'; b.onclick = action; return b; };
-  const persist = () => onChange({ step, input: [...input] });
+  const persist = () => onChange({ step, input: structuredClone(input) });
   const stop = () => { playing = false; clearTimeout(timer); timer = null; play.textContent = '自动播放'; };
   const move = next => { step = Math.max(0, Math.min(trace.length - 1, next)); render(); persist(); };
   const previous = button('上一步', () => { stop(); move(step - 1); });
@@ -39,10 +41,10 @@ export function createAlgorithmPlayer(documentData, savedState, onChange) {
   const status = make('div', 'algorithm-status'), action = make('strong'), count = make('span'); status.append(action, count);
   const explanation = make('p', 'algorithm-explanation'); explanation.setAttribute('aria-live', 'polite');
   const layout = make('div', 'algorithm-layout'), view = make('div', 'algorithm-view'), codePanel = make('div', 'algorithm-code-panel');
-  view.append(make('h4', '', '数组与变量'));
+  view.append(make('h4', '', engine.strings?'字符与变量':'数组与变量'));
   const array = make('div', 'algorithm-array'), variables = make('dl', 'algorithm-variables');
   variables.style.gridTemplateColumns=`repeat(${engine.variables.length},minmax(0,1fr))`;
-  const legend = make('p', 'algorithm-legend', engine.tree?'蓝色：本步涉及　绿色：已排序并退出堆　淡色：有效堆区间外':'金色：枢轴　蓝色：本步涉及　绿色：最终位置　淡色：当前区间外');
+  const legend = make('p', 'algorithm-legend', engine.strings?'蓝色：已知相等前缀　亮蓝：本次相等比较　红色：本次失配　绿色：完整匹配　␠：空格':engine.tree?'蓝色：本步涉及　绿色：已排序并退出堆　淡色：有效堆区间外':'金色：枢轴　蓝色：本步涉及　绿色：最终位置　淡色：当前区间外');
   const tree = make('div','algorithm-tree');
   if(engine.tree)view.append(make('h4','','有效堆 · 节点标注数组索引'),tree);
   const stack = make('ol', 'algorithm-stack');
@@ -51,27 +53,30 @@ export function createAlgorithmPlayer(documentData, savedState, onChange) {
   const code = make('ol', 'algorithm-code');
   const codeLines = engine.code.map(line => { const li = make('li'); li.append(make('code', '', line)); code.append(li); return li; }); codePanel.append(code);
   layout.append(view, codePanel);
-  const form = make('form', 'algorithm-input-form'), label = make('label', '', '换一个输入数组');
-  const field = make('input'); field.type = 'text'; field.value = input.join(', '); field.maxLength = 100; field.placeholder = '例如 7, 3, 9, 2, 5'; field.setAttribute('aria-label', '输入数组');
+  const form = make('form', 'algorithm-input-form'), label = make('label', '', engine.strings?'文本串':'换一个输入数组');
+  const field = make('input'); field.type = 'text'; field.value = engine.strings?input.text:input.join(', '); field.maxLength = engine.strings?48:100; field.placeholder = engine.strings?'例如 ABABABC':'例如 7, 3, 9, 2, 5'; field.setAttribute('aria-label', engine.strings?'文本串':'输入数组');
   label.append(field); const apply = make('button', '', '重新生成过程'); apply.type = 'submit';
   const error = make('p', 'interactive-card-error'); error.setAttribute('role', 'alert');
   form.append(label, apply, error);
+  const patternField=make('input');
+  if(engine.strings){form.classList.add('kmp-input-form');const patternLabel=make('label','','模式串');patternField.type='text';patternField.maxLength=24;patternField.value=input.pattern;patternField.setAttribute('aria-label','模式串');patternLabel.append(patternField);form.insertBefore(patternLabel,apply);}
   form.onsubmit = event => {
     event.preventDefault(); stop();
     const raw = field.value.trim().replace(/^\[/, '').replace(/\]$/, '').trim();
     const parts = raw ? raw.split(/[,，\s]+/) : [];
-    const candidate = parts.map(value => /^-?\d+$/.test(value) ? Number(value) : NaN);
-    if (!validSortInput(candidate)) { error.textContent = '请输入 0–12 个 -999 至 999 的整数，以逗号或空格分隔。'; return; }
+    const candidate = engine.strings?{text:field.value,pattern:patternField.value}:parts.map(value => /^-?\d+$/.test(value) ? Number(value) : NaN);
+    if (!validInput(candidate)) { error.textContent = engine.strings?'文本最多48字，模式最多24字；支持中英文等基本多文种字符，不含控制字符或 emoji。':'请输入 0–12 个 -999 至 999 的整数，以逗号或空格分隔。'; return; }
     error.textContent = ''; input = candidate; trace = engine.trace(input); step = 0; progress.max = trace.length - 1; render(); persist();
   };
   root.append(intro, convention, controls, progress, status, explanation, layout, form);
   function render() {
     const current = trace[step], vars = current.variables;
     progress.value = step; previous.disabled = step === 0; next.disabled = step === trace.length - 1;
-    action.textContent = current.action; count.textContent = `${step + 1} / ${trace.length} 步 · 比较 ${current.comparisons} · 交换 ${current.swaps}`;
+    action.textContent = current.action; count.textContent = `${step + 1} / ${trace.length} 步 · 比较 ${current.comparisons}${engine.strings?'':` · 交换 ${current.swaps}`}`;
     explanation.textContent = current.explanation;
     array.replaceChildren();
-    current.array.forEach((value, index) => {
+    if(engine.strings)array.append(createKmpTracks(input,current));
+    (current.array||[]).forEach((value, index) => {
       const outside=engine.tree?index>=current.heapSize:vars.low!==undefined&&(index<vars.low||index>vars.high);
       const cls = ['algorithm-cell', current.marks.includes(index) ? 'involved' : '', current.fixed.includes(index) ? 'settled' : '', vars.pivotIndex === index ? 'pivot' : '', outside ? 'outside' : ''].filter(Boolean).join(' ');
       const cell = make('div', cls); cell.append(make('span', 'algorithm-value', value), make('small', '', index));
@@ -79,13 +84,13 @@ export function createAlgorithmPlayer(documentData, savedState, onChange) {
       if (pointers) cell.append(make('b', 'algorithm-cell-pointer', pointers)); array.append(cell);
     });
     if(engine.tree)tree.replaceChildren(createBinaryTree(current.array,{size:current.heapSize,marks:current.marks}));
-    if (!current.array.length) array.append(make('p', '', '空数组'));
+    if (!engine.strings && !current.array.length) array.append(make('p', '', '空数组'));
     variables.replaceChildren();
     for (const key of engine.variables) { variables.append(make('dt', '', key), make('dd', '', vars[key] === undefined ? '—' : String(vars[key]))); }
     stack.replaceChildren();
     current.stack.forEach((frame, index) => {
       const li = make('li', index === current.stack.length - 1 ? 'current' : '');
-      li.textContent = engine.tree?(frame.kind==='heapSort'?'heapSort(a)':`siftDown(a, ${frame.root}, ${frame.size})`):`${frame.kind}(a, ${frame.low}, ${frame.high})${frame.p !== undefined ? ` · p=${frame.p}` : ''}`; stack.append(li);
+      li.textContent = engine.strings?'kmp(text, pattern)':engine.tree?(frame.kind==='heapSort'?'heapSort(a)':`siftDown(a, ${frame.root}, ${frame.size})`):`${frame.kind}(a, ${frame.low}, ${frame.high})${frame.p !== undefined ? ` · p=${frame.p}` : ''}`; stack.append(li);
     });
     if (!current.stack.length) stack.append(make('li', '', step === trace.length - 1 ? '调用栈已清空' : '尚未进入函数'));
     codeLines.forEach((line, index) => { line.classList.toggle('current', index + 1 === current.line); if (index + 1 === current.line) line.setAttribute('aria-current', 'step'); else line.removeAttribute('aria-current'); });
