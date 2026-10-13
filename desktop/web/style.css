@@ -297,3 +297,27 @@ body { border:0; border-radius:14px; }
 .interactive-card .interactive-reset { justify-self:start; }.interactive-source { color:#8eabc5; font-size:10px!important; }
 @media(max-width:420px) { .interactive-card { padding:11px; }.interactive-track-cell { width:24px; height:27px; }.interactive-drag-choices { font-size:9px; } }
 @media(prefers-reduced-motion:reduce) { .interactive-bar-fill { transition:none; } }
+
+.algorithm-player { display:grid; gap:12px; min-width:0; }
+.algorithm-convention,.algorithm-legend { color:#abc1d8; font-size:10px!important; }
+.algorithm-controls { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.algorithm-speed { margin-left:auto; color:#adc4df; font-size:11px; }
+.algorithm-speed select { color:#e5edf8; background:#172a3d; border:1px solid #9fc1e555; border-radius:5px; padding:5px; }
+.algorithm-progress { width:100%; accent-color:#8cc6ef; margin:0; }
+.algorithm-status { display:flex; gap:8px; flex-wrap:wrap; align-items:baseline; }
+.algorithm-status strong { font-size:13px; color:#d8ecff; }.algorithm-status span { font-size:10px; color:#abc1d8; margin-left:auto; font-variant-numeric:tabular-nums; }
+.algorithm-explanation { border-left:3px solid #8cc6ef; padding:8px 10px; background:#8cc6ef0c; min-height:38px; }
+.algorithm-layout { display:grid; grid-template-columns:minmax(0,1fr); gap:16px; min-width:0; }
+.algorithm-view,.algorithm-code-panel { min-width:0; }
+.algorithm-array { display:flex; flex-wrap:wrap; gap:6px; padding-bottom:22px; }
+.algorithm-cell { position:relative; display:grid; text-align:center; min-width:33px; border:1px solid #9ebcda55; border-radius:6px; background:#132337; padding:7px 5px 4px; font-family:Consolas,monospace; }
+.algorithm-value { font-size:14px; font-weight:600; }.algorithm-cell small { color:#9aafc7; font-size:9px; margin-top:4px; }.algorithm-cell-pointer { position:absolute; top:100%; left:0; right:0; margin-top:4px; font-size:10px; color:#a9d9ff; }
+.algorithm-cell.involved { border-color:#83c9f5; background:#275273; }.algorithm-cell.settled { border-color:#76c1a2; background:#22483e; }.algorithm-cell.pivot { border-color:#e0b573; color:#ffe0ad; }.algorithm-cell.outside { opacity:.45; }
+.algorithm-variables { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:0; margin:12px 0; border:1px solid #9ebcda26; border-radius:7px; overflow:hidden; }
+.algorithm-variables dt { grid-row:1; padding:5px 2px; text-align:center; font:11px Consolas,monospace; color:#a7bbd3; background:#11233766; }.algorithm-variables dd { grid-row:2; text-align:center; margin:0; padding:5px 2px; font:12px Consolas,monospace; }
+.algorithm-stack { list-style:none; margin:6px 0 0; padding:0; display:grid; gap:4px; }.algorithm-stack li { border-left:2px solid #72859a; padding:4px 8px; color:#9db0c7; font:11px/1.6 Consolas,monospace; overflow-wrap:anywhere; }.algorithm-stack li.current { border-color:#8cc6ef; color:#def0ff; background:#8cc6ef12; }
+.algorithm-code { counter-reset:code-line; list-style:none; padding:8px 0; margin:0; background:#101b29; border:1px solid #9ebcda26; border-radius:8px; overflow-x:auto; }
+.algorithm-code li { display:flex; width:max-content; min-width:100%; padding:2px 10px 2px 0; box-sizing:border-box; font:12px/1.7 Consolas,monospace; white-space:pre; }
+.algorithm-code li::before { counter-increment:code-line; content:counter(code-line); display:inline-block; min-width:26px; padding-right:9px; text-align:right; color:#667d99; flex:none; }.algorithm-code li.current { background:#29537588; color:#d9efff; }.algorithm-code li.current::before { color:#a9d9ff; }
+.algorithm-input-form { display:flex; align-items:end; flex-wrap:wrap; gap:8px; border-top:1px solid #ffffff20; padding-top:12px; }.algorithm-input-form label { display:grid; gap:5px; font-size:11px; color:#adc4df; flex:1; min-width:130px; }.algorithm-input-form input { width:100%; box-sizing:border-box; background:#101e2e; border:1px solid #9ebcda55; border-radius:6px; color:#e5edf8; padding:8px; font:12px Consolas,monospace; }.algorithm-input-form .interactive-card-error { flex-basis:100%; }
+@media(min-width:1000px) { .preview-full .algorithm-layout { grid-template-columns:minmax(0,1fr) minmax(0,1fr); } }

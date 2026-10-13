@@ -34,3 +34,12 @@
 运行 `node desktop/tools/create-interactive-preview.cjs` 会生成可离线打开的 `dist/interactive-components-preview.html`：四个固定样例使用相同组件渲染器，可对比外观。自动化桥接测试使用隔离模拟服务验证调用路径，不宣称真实 DeepSeek/Qwen 已通过教学质量验收。
 
 内置 Skill 附四组完整 few-shot（KMP、快排、Attention、Bellman），既做协议回归也在 Edge 中实际操作、重置。它们是组件组合与教学边界的示范，不是所有算法的固定模板。
+
+
+## 完整代码执行（优先增补阶段）
+
+新增 `mode: "algorithm"`：字段为 `{schemaVersion:1, mode:"algorithm", algorithm:"quicksort-lomuto-v1", title, question, source:{kind:"illustrative",label}, input:[整数...]}`。模型无需也不能提交代码或轨迹。`desktop/web/quicksort-trace.mjs` 作为前后端共享的版本固定核心；构建时同时复制到便携包 `web/` 供 Agent 协议校验使用。
+
+状态为 `{step, input}`，保存用户改动后的数组和进度；数组允许空数组、重复值及负数，最多12项且每项在[-999,999]。步骤上限按该数组的确定性轨迹计算。完整轨迹按当前固定代码重新计算，包含每次条件比较、原位/实际交换、分区返回和所有递归。显示代码为 Lomuto 末尾枢轴、严格小于、左侧先递归；不接受任意代码，不把此演示冒充其他快排实现。
+
+`algorithm-player.js` 提供代码高亮、数组、变量、调用栈、前后步进、进度滑块、自动播放/暂停、调速、重置和输入重算。折叠卡片暂停播放，切走页面或移除组件后停止计时；播放状态与速度不持久化，避免恢复历史时自行播放。截图与离线组合预览使用同一渲染器。原单次分区组件样例仍保留以兼容旧作品；组合预览现改为完整快排播放器。Skill 增加完整算法模式 few-shot，原四组组件 few-shot 保留用于局部概念讲解。

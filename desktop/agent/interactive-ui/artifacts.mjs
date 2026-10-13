@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { validateDocument, validateState } from './protocol.mjs';
+import { validateDocument, validateState, initialArtifactState } from './protocol.mjs';
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const validId = value => { if (typeof value !== 'string' || !ID.test(value)) throw new Error('作品或会话 ID 无效'); return value; };
@@ -17,7 +17,7 @@ export class InteractiveArtifactStore {
     }
     validateDocument(document);
     const artifactId = randomUUID();
-    const artifact = { artifactId, sessionId, parentArtifactId, createdAt: new Date().toISOString(), document, state: document.mode === 'fixture' ? { step: 0 } : { ...document.initialState } };
+    const artifact = { artifactId, sessionId, parentArtifactId, createdAt: new Date().toISOString(), document, state: initialArtifactState(document) };
     await mkdir(join(this.root, sessionId), { recursive: true });
     await this.write(sessionId, artifactId, artifact);
     return artifact;
@@ -34,7 +34,7 @@ export class InteractiveArtifactStore {
       if (artifact.sessionId !== sessionId || artifact.artifactId !== artifactId) throw new Error('作品文件格式无效');
       validateDocument(artifact.document);
       if (!validateState(artifact.document, artifact.state)) {
-        artifact.state = artifact.document.mode === 'fixture' ? { step: 0 } : { ...artifact.document.initialState };
+        artifact.state = initialArtifactState(artifact.document);
         artifact.stateWarning = '已保存的操作状态无效，已回到初始状态。';
       }
       return artifact;
@@ -49,7 +49,7 @@ export class InteractiveArtifactStore {
     const artifact = await this.read(sessionId, artifactId);
     if (!artifact) throw new Error('作品文件不可用');
     if (!validateState(artifact.document, state)) throw new Error('作品状态无效');
-    artifact.state = { ...state };
+    artifact.state = structuredClone(state);
     delete artifact.stateWarning;
     await this.write(sessionId, artifactId, artifact);
     return artifact.state;

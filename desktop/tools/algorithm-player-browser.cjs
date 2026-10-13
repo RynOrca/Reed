@@ -1,0 +1,47 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs/promises');
+const path=require('node:path');
+const {pathToFileURL}=require('node:url');
+const {chromium}=require(process.env.SUMMON_PLAYWRIGHT_PATH||'playwright');
+(async()=>{
+  const preview=await require('./create-interactive-preview.cjs').createPreview();
+  const browser=await chromium.launch({channel:'msedge',headless:true});
+  try {
+    const page=await browser.newPage({viewport:{width:1280,height:1000},hasTouch:true}),errors=[];page.on('pageerror',error=>errors.push(error.message));
+    await page.goto(pathToFileURL(preview).href);
+    const player=page.locator('.algorithm-player');await player.waitFor();
+    const range=player.getByRole('slider',{name:'执行步骤'});
+    await player.getByRole('button',{name:'下一步',exact:true}).click();
+    assert.ok((await player.locator('.algorithm-stack').innerText()).includes('quicksort(a, 0, 4)'));
+    await range.focus();await page.keyboard.press('End');
+    assert.deepEqual(await player.locator('.algorithm-value').allTextContents(),['2','3','5','7','9']);
+    assert.equal(await player.locator('.algorithm-status strong').innerText(),'排序完成');
+    assert.equal(await player.locator('.algorithm-code [aria-current="step"]').count(),1);
+    await player.getByRole('button',{name:'上一步',exact:true}).click();assert.notEqual(await player.locator('.algorithm-status strong').innerText(),'排序完成');
+    await player.getByRole('button',{name:'重置',exact:true}).click();
+    assert.deepEqual(await player.locator('.algorithm-value').allTextContents(),['7','3','9','2','5']);
+    await player.getByLabel('播放速度').selectOption('180');await player.getByRole('button',{name:'自动播放',exact:true}).click();
+    await page.waitForFunction(()=>Number(document.querySelector('.algorithm-progress').value)>=2);
+    await player.getByRole('button',{name:'暂停',exact:true}).click();
+    const stopped=await range.inputValue();await page.waitForTimeout(400);assert.equal(await range.inputValue(),stopped);
+    const card=page.locator('.interactive-card').filter({has:player});
+    await player.getByRole('button',{name:'自动播放',exact:true}).click();await card.getByRole('button',{name:'收起',exact:true}).click();
+    assert.ok((await player.locator('button').allTextContents()).includes('自动播放'));
+    await card.getByRole('button',{name:'展开',exact:true}).click();
+    await player.getByLabel('输入数组').fill('3, -1, 3, 0');await player.getByRole('button',{name:'重新生成过程'}).click();
+    assert.equal(await range.inputValue(),'0');await range.focus();await page.keyboard.press('End');
+    assert.deepEqual(await player.locator('.algorithm-value').allTextContents(),['-1','0','3','3']);
+    await player.getByLabel('输入数组').fill('1.5, nope');await player.getByRole('button',{name:'重新生成过程'}).click();
+    assert.ok((await player.getByRole('alert').innerText()).includes('整数'));
+    await player.getByLabel('输入数组').fill('[]');await player.getByRole('button',{name:'重新生成过程'}).click();
+    await range.focus();await page.keyboard.press('End');assert.equal(await player.locator('.algorithm-status strong').innerText(),'排序完成');
+    await player.getByLabel('输入数组').fill('7,3,9,2,5');await player.getByRole('button',{name:'重新生成过程'}).click();
+    await range.evaluate(el=>{el.value='14';el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));});
+    const out=path.resolve(__dirname,'../../dist/acceptance');await fs.mkdir(out,{recursive:true});
+    await page.screenshot({path:path.join(out,'quicksort-full-desktop.png'),fullPage:true});
+    await page.setViewportSize({width:360,height:800});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    await player.getByRole('button',{name:'下一步',exact:true}).tap();
+    await page.screenshot({path:path.join(out,'quicksort-full-mobile.png'),fullPage:true});
+    assert.deepEqual(errors,[]);console.log('Complete quicksort player passed: source, full trace, previous/next, autoplay/pause/collapse, speed, inputs, duplicates, empty array, 360px.');
+  } finally {await browser.close();}
+})().catch(error=>{console.error(error);process.exitCode=1;});

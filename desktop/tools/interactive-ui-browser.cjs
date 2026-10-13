@@ -13,6 +13,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH || 'playwright')
     if (request.url.startsWith('/fixture/')) {
       response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(createFixedDocument(request.url.split('/').pop()))); return;
     }
+    if (['/algorithm-player.js','/quicksort-trace.mjs'].includes(request.url)) {response.setHeader('content-type','text/javascript');response.end(await readFile(path.resolve(__dirname,'../web',request.url.slice(1))));return;}
     response.setHeader('content-type', request.url.endsWith('.js') ? 'text/javascript' : request.url === '/style.css' ? 'text/css' : 'text/html');
     response.end(request.url === '/interactive-ui.js' ? await readFile(source) : request.url === '/interactive-components.js' ? await readFile(components) : request.url === '/style.css' ? await readFile(stylesheet) : '<link rel="stylesheet" href="/style.css"><main id="cards"></main>');
   });
@@ -115,8 +116,8 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH || 'playwright')
     await touchPage.close();
     const skillText=await readFile(path.resolve(__dirname,'../agent/skills/interactive-explanation/SKILL.md'),'utf8');
     const fewshots=[...skillText.matchAll(/```json\s*([\s\S]*?)```/g)].map(match=>JSON.parse(match[1]));
-    assert.equal(fewshots.length,4);
-    for(const doc of fewshots){
+    assert.equal(fewshots.length,5);
+    for(const doc of fewshots.filter(doc=>doc.mode==='components')){
       await page.evaluate(async documentData=>{
         const {createInteractiveCard}=await import('/interactive-ui.js');
         window.fewshotState={...documentData.initialState};

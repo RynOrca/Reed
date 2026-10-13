@@ -6,6 +6,11 @@ const node = (id, type, props) => ({ id, type, props });
 
 export function createFixedDocument(topic = 'kmp') {
   switch (topic) {
+    case 'quicksort-full': return {
+      schemaVersion:1,mode:'algorithm',algorithm:'quicksort-lomuto-v1',title:'快排：跟随代码走完整个排序',
+      question:'逐步观察比较、交换、枢轴归位和左右递归，直到数组有序；可以在下方更换输入。',
+      source:{kind:'illustrative',label:'确定性代码执行轨迹'},input:[7,3,9,2,5],
+    };
     case 'kmp': return base('KMP：失配后为什么能跳过起点？', '把模式串移动到你认为下一个可能匹配的位置。', { offset: { min: 0, max: 2 } }, { offset: 0 }, [
       node('tracks', 'StringTracks', { text: 'ABABABC', pattern: 'ABABC', offsetState: 'offset', knownByState: { 0: 4, 1: 0, 2: 2 } }),
       node('range', 'HighlightRange', { label: '原始对齐时已匹配的文本区间', start: 0, end: 3 }),

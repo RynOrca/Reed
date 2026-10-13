@@ -1,3 +1,4 @@
+import { createQuicksortTrace, QUICKSORT_VERSION, validSortInput } from '../../web/quicksort-trace.mjs';
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 const keys = (value, allowed) => Object.keys(value).every(key => allowed.includes(key));
 const line = (value, max = 160) => typeof value === 'string' && value.length > 0 && value.length <= max;
@@ -11,7 +12,13 @@ const enumValues = (schema, name) => stateRef(schema, name) ? schema[name] : nul
 const exactState = (schema, state) => plain(state) && Object.keys(state).length === Object.keys(schema).length &&
   Object.entries(schema).every(([name, spec]) => Object.hasOwn(state, name) && integer(state[name]) && state[name] >= spec.min && state[name] <= spec.max);
 
+export function initialArtifactState(document) {
+  if (document.mode === 'algorithm') return {step:0,input:[...document.input]};
+  return document.mode === 'fixture' ? {step:0} : {...document.initialState};
+}
+
 export function validateState(document, state) {
+  if (document.mode === 'algorithm') return plain(state) && keys(state,['step','input']) && Object.keys(state).length===2 && validSortInput(state.input) && integer(state.step) && state.step>=0 && state.step<createQuicksortTrace(state.input).length;
   if (document.mode === 'fixture') return plain(state) && Object.keys(state).length === 1 && integer(state.step) && state.step >= 0 && state.step < document.steps.length;
   return document.mode === 'components' && exactState(document.stateSchema, state);
 }
@@ -19,6 +26,11 @@ export function validateState(document, state) {
 export function validateDocument(document) {
   if (!plain(document) || document.schemaVersion !== 1 || !line(document.title, 120)) fail('标题或版本');
   if (Buffer.byteLength(JSON.stringify(document), 'utf8') > 32768) fail('大小超过 32 KiB');
+  if (document.mode === 'algorithm') {
+    if (!keys(document,['schemaVersion','mode','algorithm','title','question','source','input']) || document.algorithm!==QUICKSORT_VERSION || !line(document.question,300) ||
+      !plain(document.source) || !keys(document.source,['kind','label']) || document.source.kind!=='illustrative' || !line(document.source.label,80) || !validSortInput(document.input)) fail('算法版本或输入');
+    return document;
+  }
   if (document.mode === 'fixture') {
     if (!keys(document, ['schemaVersion', 'mode', 'title', 'steps']) || !Array.isArray(document.steps) || document.steps.length < 2 || document.steps.length > 16 ||
       document.steps.some(step => !plain(step) || !keys(step, ['title', 'body']) || !line(step.title, 120) || !line(step.body, 1000))) fail('固定作品步骤');

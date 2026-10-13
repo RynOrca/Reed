@@ -11,6 +11,21 @@ description: 在 Reed 对话中用原生组件组合可操作的教学讲解。
 
 工具参数 document 是下述完整文档的 JSON 字符串。不要输出代码围栏让用户自己运行，不生成 HTML、JavaScript、CSS 或表达式。Reed 负责排版、交互和状态保存。最多 24 个节点、8 个整数状态、32 KiB；建议 4–6 个节点和 1–2 个状态。失败时依据工具错误修正，最多再试两次；仍失败说明局限并用文字讲解，不能声称生成成功。
 
+## 完整算法执行优先使用确定性轨迹
+
+用户要「完整快排过程」「跟随代码」「每次比较交换」「递归调用」时，不用静态 ArrayTrack 假装排序。使用 algorithm 模式，Reed 按版本固定的代码计算全过程，模型只指定输入和讲解重点。当前只支持 `quicksort-lomuto-v1`：JavaScript Lomuto 分区，最右元素作枢轴、严格小于比较、先左后右递归。卡片显示实际对应代码、变量、数组和调用栈，允许更改输入和控制播放。
+
+input 允许 0–12 个 -999 至 999 的整数。不要提交代码、执行轨迹、stateSchema、nodes 或 initialState；轨迹由宿主计算。模型传入的 question 只做问题引导，不控制执行。如果用户提供的代码不是这个版本（如 Hoare、三路分区、首元素枢轴），先说明现有演示的实现差别，不能声称逐行执行了用户原代码。任意代码执行不在此能力范围。
+
+用户：用代码完整展示 [7,3,9,2,5] 的快排，每次比较、交换和递归都要看见。
+组合：选择固定版本算法播放器；无需模型编造每一步数组。工具 generate_learning_ui 的 document 内容：
+```json
+{"schemaVersion":1,"mode":"algorithm","algorithm":"quicksort-lomuto-v1","title":"快排：跟随代码走完整个排序","question":"逐步观察 Lomuto 快排如何比较、交换、放好枢轴，并完成全部左右递归。","source":{"kind":"illustrative","label":"确定性代码执行轨迹 · Lomuto v1"},"input":[7,3,9,2,5]}
+```
+成功后说明末尾枢轴和严格小于约定，引导用户使用下一步或自动播放。执行轨迹可确定核对，模型补充的讲解仍需核验。
+
+## 自由组合组件
+
 文档结构：
 {"schemaVersion":1,"mode":"components","title":"标题","question":"让用户观察或尝试的具体问题","source":{"kind":"illustrative","label":"模型生成教学示例 · 待核验"},"stateSchema":{"choice":{"min":0,"max":2}},"initialState":{"choice":0},"nodes":[...]}
 

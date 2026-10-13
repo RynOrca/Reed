@@ -40,7 +40,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     }
     if (!memory && userText==='INTERACTIVE_MODEL_TEST' && !body.messages.slice(body.messages.lastIndexOf(lastUser)+1).some(m=>m.role==='tool')) {
       assert.ok(body.tools.some(t=>t.function?.name==='generate_learning_ui'));
-      res.write(`data: ${JSON.stringify(delta({role:'assistant',tool_calls:[{index:0,id:'desktop-ui-'+apiCalls,type:'function',function:{name:'generate_learning_ui',arguments:JSON.stringify({document:JSON.stringify(createFixedDocument('attention'))})}}]}))}\n\n`);
+      res.write(`data: ${JSON.stringify(delta({role:'assistant',tool_calls:[{index:0,id:'desktop-ui-'+apiCalls,type:'function',function:{name:'generate_learning_ui',arguments:JSON.stringify({document:JSON.stringify(createFixedDocument('quicksort-full'))})}}]}))}\n\n`);
       res.write(`data: ${JSON.stringify(delta({},'tool_calls'))}\n\n`);res.end('data: [DONE]\n\n');return;
     }
     if (!memory && ['PERMISSION_TEST','READONLY_TEST'].includes(userText) && body.messages.at(-1)?.role!=='tool') {
@@ -313,17 +313,21 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     await settings.locator('#role-interactive-enabled').check();await settings.locator('#role-form button[type="submit"]').click();
     await agentCommand('select_role',{roleId:'agent'});
     await main.locator('#prompt').fill('INTERACTIVE_MODEL_TEST');await main.locator('#send-button').click();
-    const generatedCard=main.locator('.interactive-card').filter({hasText:'Attention：'});
+    const generatedCard=main.locator('.interactive-card').filter({hasText:'快排：跟随代码'});
     await generatedCard.getByRole('button',{name:'展开'}).click();
     await main.waitForFunction(()=>document.getElementById('status').textContent==='就绪');
+    await generatedCard.getByLabel('输入数组').fill('3,-1,3,0');await generatedCard.getByRole('button',{name:'重新生成过程'}).click();
     await generatedCard.locator('input[type=range]').focus();await main.keyboard.press('End');
-    await generatedCard.locator('.interactive-bar-value').filter({hasText:'0.449'}).waitFor();
+    assert.deepEqual(await generatedCard.locator('.algorithm-value').allTextContents(),['-1','0','3','3']);
+    await generatedCard.locator('.algorithm-status strong').filter({hasText:'排序完成'}).waitFor();
     await main.screenshot({path:path.join(artifacts,'interactive-model-generated.png')});
     const generatedSession=await main.evaluate(()=>window._recoveryEvents.filter(e=>e.type==='session').at(-1).sessionId);
     await agentCommand('new_session',{noProject:true});await agentCommand('open_session',{sessionId:generatedSession});
     await generatedCard.getByRole('button',{name:'展开'}).click();
-    assert.equal(await generatedCard.locator('input[type=range]').inputValue(),'3');
-    checks.push('Planner 已移除、编辑删除右侧成组，角色开关启用真实工具生成、实时交互与历史恢复');
+    assert.equal(await generatedCard.locator('input[type=range]').inputValue(),await generatedCard.locator('input[type=range]').getAttribute('max'));
+    assert.equal(await generatedCard.getByLabel('输入数组').inputValue(),'3, -1, 3, 0');
+    assert.deepEqual(await generatedCard.locator('.algorithm-value').allTextContents(),['-1','0','3','3']);
+    checks.push('Planner 已移除、编辑删除右侧成组，角色开关启用完整快排生成、输入重算、实时交互与历史恢复');
     await settings.locator('button[data-section="models"]').click();
     const deleteProvider=settings.locator('.provider-row').filter({hasText:'桌面隔离测试'}).locator('button').filter({hasText:'删除'});
     await deleteProvider.click();assert.equal(await settings.locator('.provider-row').count(),1);await deleteProvider.filter({hasText:'确认删除'}).click();

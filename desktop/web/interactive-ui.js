@@ -1,3 +1,4 @@
+import { createAlgorithmPlayer } from './algorithm-player.js';
 import { createComponentExperience } from './interactive-components.js';
 
 export function createInteractiveCard(summary, { load, save }) {
@@ -20,6 +21,7 @@ export function createInteractiveCard(summary, { load, save }) {
   let artifact = null;
   let saving = Promise.resolve();
   let loading = false;
+  let experience = null;
   const persist = state => {
     artifact.state = { ...state };
     saving = saving.catch(() => {}).then(() => save(summary.artifactId, state)).catch(error => {
@@ -27,9 +29,16 @@ export function createInteractiveCard(summary, { load, save }) {
     });
   };
   const render = () => {
+    experience?.pause?.();
     detail.replaceChildren();
     if (!artifact) return;
     if (artifact.stateWarning) { const warning = document.createElement('p'); warning.className = 'interactive-card-error'; warning.textContent = artifact.stateWarning; detail.append(warning); }
+    if (artifact.document.mode === 'algorithm') {
+      experience = createAlgorithmPlayer(artifact.document, artifact.state, persist);
+      detail.append(experience);
+      if (summary.parentArtifactId) { const version = document.createElement('p'); version.className = 'interactive-card-version'; version.textContent = `新版本 · 前一作品 ${summary.parentArtifactId.slice(0, 8)}`; detail.append(version); }
+      return;
+    }
     if (artifact.document.mode === 'components') {
       detail.append(createComponentExperience(artifact.document, artifact.state, persist));
       if (summary.parentArtifactId) { const version = document.createElement('p'); version.className = 'interactive-card-version'; version.textContent = `新版本 · 前一作品 ${summary.parentArtifactId.slice(0, 8)}`; detail.append(version); }
@@ -54,7 +63,7 @@ export function createInteractiveCard(summary, { load, save }) {
     }
   };
   toggle.onclick = async () => {
-    if (!detail.hidden) { detail.hidden = true; toggle.textContent = '展开'; toggle.setAttribute('aria-expanded', 'false'); return; }
+    if (!detail.hidden) { experience?.pause?.(); detail.hidden = true; toggle.textContent = '展开'; toggle.setAttribute('aria-expanded', 'false'); return; }
     detail.hidden = false; toggle.textContent = '收起'; toggle.setAttribute('aria-expanded', 'true');
     if (artifact || loading) return;
     loading = true; detail.textContent = '正在读取作品…';

@@ -9,13 +9,13 @@ import { InteractiveArtifactStore, boundArtifactIds } from './artifacts.mjs';
 import { createFixedDocument } from './fixtures.mjs';
 import { validateDocument } from './protocol.mjs';
 
-test('内置 Skill 的四份完整 few-shot 均符合当前组件协议', async () => {
+test('内置 Skill 的五份完整 few-shot 均符合当前组件协议', async () => {
   const text=await readFile(new URL('../skills/interactive-explanation/SKILL.md',import.meta.url),'utf8');
   const samples=[...text.matchAll(/```json\s*([\s\S]*?)```/g)].map(match=>JSON.parse(match[1]));
-  assert.equal(samples.length,4);
+  assert.equal(samples.length,5);
   for(const sample of samples) assert.equal(validateDocument(sample),sample);
-  assert.ok(samples.some(s=>s.nodes.some(n=>n.type==='StringTracks')));
-  assert.ok(samples.some(s=>s.nodes.some(n=>n.type==='DragHandle')));
+  assert.ok(samples.some(s=>s.nodes?.some(n=>n.type==='StringTracks')));
+  assert.ok(samples.some(s=>s.nodes?.some(n=>n.type==='DragHandle')));
 });
 
 test('生成工具权限、Skill 注入、格式反馈、消息绑定和父版本分支隔离', async () => {
