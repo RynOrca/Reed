@@ -153,6 +153,8 @@ test("real PI bridge: discover, stream, remember, background memory, projects an
     goal=(await command("save_goals",{projectPath:project,revision:goal.revision,body:"# GOAL_UPDATED_SENTINEL\n- [x] 第一阶段"})).goal;
     await command("prompt",{text:"检查更新目标"});assert.match(JSON.stringify(requests.at(-1).messages[0]),/GOAL_UPDATED_SENTINEL/);
     await command("save_role", {roleId,name:"测试导师",system:"TEST_ROLE_SYSTEM_PRIORITY：用中文教学",learningGoalsEnabled:false,learnerProfileEnabled:false});
+    const disabledGoals=await command("get_goals");assert.equal(disabledGoals.enabled,false);assert.equal(disabledGoals.goal,null);
+    await assert.rejects(command("save_goals",{projectPath:project,revision:goal.revision,body:"不应写入"}),/未启用学习目标/);
     await command("prompt",{text:"项目对话"});
     const disabledSystem=JSON.stringify(requests.at(-1).messages[0]);assert.doesNotMatch(disabledSystem,/GOAL_UPDATED_SENTINEL|学习者画像（|相关知识库资料|相关历史对话片段/);
     assert.ok(!requests.at(-1).tools.some(t=>["remember","record_learning_event"].includes(t.function.name)));
