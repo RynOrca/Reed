@@ -6,7 +6,20 @@ import { createHash } from "node:crypto";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 
-export const learningEventSchema=Type.Object({kind:Type.Union(["goal","preference","concept","misconception","review"].map(v=>Type.Literal(v))),subject:Type.String({minLength:1,maxLength:100}),detail:Type.String({maxLength:1000}),evidence:Type.String({minLength:2,maxLength:1000}),operation:Type.Optional(Type.Union([Type.Literal('supplement'),Type.Literal('replace')])),targetSubject:Type.Optional(Type.String({maxLength:100})),status:Type.Optional(Type.Union(["active","completed","needs_review","resolved"].map(v=>Type.Literal(v))))});
+const learningKinds=["goal","preference","concept","misconception","review"];
+const learningStatuses=["active","completed","needs_review","resolved"];
+export const reviewResults=["independent","prompted","incorrect"];
+export const learningEventSchema=Type.Object({kind:Type.Union(learningKinds.map(v=>Type.Literal(v))),subject:Type.String({minLength:1,maxLength:100}),detail:Type.String({maxLength:1000}),evidence:Type.String({minLength:2,maxLength:1000}),operation:Type.Optional(Type.Union([Type.Literal('supplement'),Type.Literal('replace')])),targetSubject:Type.Optional(Type.String({maxLength:100})),status:Type.Optional(Type.Union(learningStatuses.map(v=>Type.Literal(v)))),result:Type.Optional(Type.Union(reviewResults.map(v=>Type.Literal(v))) )},{additionalProperties:false});
+export function validateLearningEvent(event){
+  if(!event||typeof event!="object"||!learningKinds.includes(event.kind)||typeof event.subject!=="string"||!event.subject.trim()||event.subject.length>100||typeof event.detail!=="string"||event.detail.length>1000||typeof event.evidence!=="string"||event.evidence.trim().length<2||event.evidence.length>1000)throw new Error("学习事件格式无效");
+  if(event.operation!==undefined&&!['supplement','replace'].includes(event.operation))throw new Error('学习画像更新方式无效');
+  if(event.targetSubject!==undefined&&(typeof event.targetSubject!=="string"||event.targetSubject.length>100))throw new Error('目标画像主题格式无效');
+  if(event.status!==undefined&&!learningStatuses.includes(event.status))throw new Error('学习事件状态无效');
+  if(event.kind==="review"?event.result!==undefined&&!reviewResults.includes(event.result):event.result!==undefined)throw new Error('复习结果必须与review事件匹配');
+  return {subject:event.subject.trim(),evidence:event.evidence.trim()};
+}
+const reviewDays={incorrect:1,prompted:3,independent:7};
+const nextReviewDate=(time,result)=>new Date(new Date(time).getTime()+(reviewDays[result]||1)*86400000).toISOString();
 const empty=()=>({version:1,updated:null,goals:[],knowledge:[],misconceptions:[],preferences:[],events:[]});
 export class LearnerStore {
   constructor(dir) {this.path=join(dir,"learner.json");this.state=empty();this.persistence=Promise.resolve();}
@@ -19,23 +32,27 @@ export class LearnerStore {
     Object.assign(item,{subject:event.subject,detail:event.operation==='replace'?event.detail:supplement(item.detail,event.detail,1000),evidence:event.evidence,sources:[...new Set([...(item.sources||[]),event.source])],source:event.source,updated:event.time});
     if(event.kind==="goal")item.status=event.status==="completed"?"completed":"active";
     if(event.kind==="misconception")item.status=event.status==="resolved"?"resolved":"active";
-    if(event.kind==="concept" || event.kind==="review") {item.mastery=null;item.status="needs_review";item.lastStudied=event.time;item.nextReview=new Date(new Date(event.time).getTime()+86400000).toISOString();}
+    if(event.kind==="concept" || event.kind==="review") {item.mastery=null;item.status="needs_review";item.lastStudied=event.time;item.nextReview=nextReviewDate(event.time,event.kind==="review"?event.result:undefined);item.lastReviewResult=event.kind==="review"?(reviewResults.includes(event.result)?event.result:"unknown"):null;}
     this.state.updated=event.time;
   }
-  async record(event,source,userEvidence) {
-    if(!["goal","preference","concept","misconception","review"].includes(event.kind) || typeof event.subject!=="string" || typeof event.detail!=="string" || typeof event.evidence!=="string") throw new Error("学习事件格式无效");
-    const evidence=event.evidence.trim();if(evidence.length<2 || !userEvidence.some(text=>text.includes(evidence)))throw new Error("学习事件必须引用本次对话中用户的原话；不能凭提问推测掌握程度");
-    if(event.operation&&!['supplement','replace'].includes(event.operation))throw Error('学习画像更新方式无效');
-    let subject=event.subject.trim().slice(0,100);
+  async record(event,source,userEvidence) {const saved=await this.recordWithReceipt(event,source,userEvidence);return saved===false?false:true;}
+  async recordWithReceipt(event,source,userEvidence) {
+    const validated=validateLearningEvent(event);
+    const evidence=validated.evidence;if(!Array.isArray(userEvidence)||!userEvidence.some(text=>typeof text==="string"&&text.includes(evidence)))throw new Error("学习事件必须引用本次对话中用户的原话；不能凭提问推测掌握程度");
+    let subject=validated.subject;
     const list=({goal:"goals",preference:"preferences",concept:"knowledge",misconception:"misconceptions",review:"knowledge"})[event.kind];
     const same=this.state[list].find(i=>similarTopic(i.subject,subject))||await this.matchTopic?.(subject,this.state[list],"subject",event.detail);if(same)subject=same.subject;if(!subject)throw new Error("缺少事件主题");
     if(this.agentAllowed&&!this.agentAllowed(source))throw Error("学习画像写入已关闭");
     if(event.operation==='replace'&&event.targetSubject&&!this.state[list].some(i=>similarTopic(i.subject,event.targetSubject)))throw Error('待纠正的画像主题不存在');
-    const id=createHash("sha256").update(JSON.stringify([source,event.kind,subject,evidence,event.detail,event.status,event.operation,event.targetSubject])).digest("hex");
+    const identity=[source,event.kind,subject,evidence,event.detail,event.status,event.operation,event.targetSubject];
+    if(event.result!==undefined)identity.push(event.result);
+    const id=createHash("sha256").update(JSON.stringify(identity)).digest("hex");
     if(this.state.events.some(e=>e.id===id))return false;
-    const entry={id,kind:event.kind,subject,detail:event.detail.slice(0,1000),evidence:evidence.slice(0,1000),status:event.status,operation:event.operation||'supplement',targetSubject:event.targetSubject,source,time:new Date().toISOString()};
+    const entry={id,kind:event.kind,subject,detail:event.detail,evidence,status:event.status,...(event.result===undefined?{}:{result:event.result}),operation:event.operation||'supplement',targetSubject:event.targetSubject,source,time:new Date().toISOString()};
     this.state.events.push(entry);this.rebuild();
-    const content=JSON.stringify(this.state,null,2);const operation=this.persistence.catch(()=>{}).then(async()=>{await writeFile(this.path+".tmp",content);await rename(this.path+".tmp",this.path);});this.persistence=operation;await operation;return true;
+    const content=JSON.stringify(this.state,null,2);const operation=this.persistence.catch(()=>{}).then(async()=>{await writeFile(this.path+".tmp",content);await rename(this.path+".tmp",this.path);});this.persistence=operation;await operation;
+    if(event.kind!=="review")return true;
+    return {saved:true,subject,result:event.result||"unknown",nextReview:nextReviewDate(entry.time,event.result)};
   }
   snapshot(){const {events,...profile}=this.state;return structuredClone({...profile,eventCount:events.length,recentEvents:events.slice(-8).reverse()});}
   context({review=false,query=''}={}){const {goals,knowledge,misconceptions,preferences}=this.state;const brief=(items,limit)=>{const words=query.toLowerCase().match(/[a-z0-9]+|[\u3400-\u9fff]{2}/g)||[];return items.map((i,index)=>({i,index,score:words.reduce((n,w)=>n+(`${i.subject} ${i.detail}`.toLowerCase().includes(w)?1:0),0)})).sort((a,b)=>b.score-a.score||b.index-a.index).slice(0,limit).map(({i})=>({subject:i.subject,status:i.status,detail:i.detail.slice(0,100),updated:i.updated,source:i.source}));};return JSON.stringify({progress:{studiedTopics:knowledge.length,lastStudied:this.state.updated},goals:brief(goals.filter(g=>g.status==="active"),3),knowledge:brief(knowledge.filter(k=>review||k.status!=="needs_review"),3),misconceptions:brief(misconceptions.filter(m=>m.status!=="resolved"),2),preferences:brief(preferences,3)});}
@@ -43,6 +60,6 @@ export class LearnerStore {
 }
 export function userTexts(session){return (session?.state.messages||[]).filter(m=>m.role==="user").slice(-8).map(m=>typeof m.content==="string"?m.content:(m.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n"));}
 export function learnerExtension({learner,memory,currentSession,send,judgeValue,enabled=()=>true}) {return pi=>{
-  pi.registerTool(defineTool({name:"record_learning_event",label:"整理学习画像",description:"根据用户明确陈述的目标、偏好、学过的概念、误解或完成复习记录学习事件。evidence 必须是用户原话。不把提问当作掌握情况，不猜测分数。重复事件自动去重。",parameters:learningEventSchema,async execute(_id,input,signal){if(!enabled() || !memory.state.enabled.l1)return{content:[{type:"text",text:"画像记忆已关闭"}],details:{}};const selected=currentSession();const verdict=await judgeValue?.([{area:'learningEvent',value:input}],{signal});if(!verdict?.[0]||signal?.aborted||currentSession()!==selected||!enabled()||!memory.state.enabled.l1)return skippedMemory(verdict?.diagnostics?.[0]);const saved=await learner.record(input,selected?.sessionId||"agent",userTexts(selected));if(!saved)return{content:[{type:'text',text:'已有相同学习事件，未重复保存'}],details:{skipped:true,reason:'duplicate'}};send({type:"learner",state:learner.snapshot()});return{content:[{type:"text",text:"学习事件已记录"}],details:{}};}}));
+  pi.registerTool(defineTool({name:"record_learning_event",label:"整理学习画像",description:"根据用户明确陈述的目标、偏好、学过的概念、误解或完成复习记录学习事件。evidence 必须是用户原话。不把提问当作掌握情况，不猜测分数。review的result可为independent（用户先尝试、无提示且正确）、prompted（提示后正确）或incorrect（错误或未能回忆）；未提供result按unknown保守保存并安排次日复习，未知不得表述为独立掌握。日期间隔只是计划，不代表掌握程度。只有保存成功后才引用回执中的主题和下次复习日期。重复事件自动去重。",parameters:learningEventSchema,async execute(_id,input,signal){if(!enabled() || !memory.state.enabled.l1)return{content:[{type:"text",text:"画像记忆已关闭"}],details:{}};validateLearningEvent(input);const selected=currentSession();const verdict=await judgeValue?.([{area:'learningEvent',value:input}],{signal});if(!verdict?.[0]||signal?.aborted||currentSession()!==selected||!enabled()||!memory.state.enabled.l1)return skippedMemory(verdict?.diagnostics?.[0]);const saved=input.kind==="review"?await learner.recordWithReceipt(input,selected?.sessionId||"agent",userTexts(selected)):await learner.record(input,selected?.sessionId||"agent",userTexts(selected));if(!saved)return{content:[{type:'text',text:'已有相同学习事件，未重复保存'}],details:{skipped:true,reason:'duplicate'}};send({type:"learner",state:learner.snapshot()});if(input.kind==="review")return{content:[{type:"text",text:`复习记录已保存：${saved.subject}；下次复习：${saved.nextReview}`}],details:{receipt:saved}};return{content:[{type:'text',text:`学习事件已记录：${input.subject.trim()}`}],details:{}};}}));
   pi.on("before_agent_start",async event=>{if(enabled() && memory.state.enabled.l1)event.systemPromptOptions.sections.summon_learner=`学习画像（参考，不替代用户当前要求）：${learner.context()}\n只对具有长期价值且证据充分的重要学习变化使用 record_learning_event；普通问答、一次答对和短期状态不记录。保留用户原话。未加载复习技能前不披露待复习条目；掌握程度未知时不要给百分比。`;});
 };}
