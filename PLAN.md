@@ -15,7 +15,7 @@
 - [x] 第 2 阶段：11 类受限原生组件与固定 KMP、快排、Attention、Bellman 样例；协议校验和有界状态保存；键盘、鼠标、触屏、360px 窄屏、重置及卡片重建验收。
 - [x] 第 2 阶段隔离验收：完整 93 项 Agent 测试通过；Edge 四样例交互检查和真实桌面 KMP 选择保存、重开会话恢复通过；便携包已构建。协议说明见 `desktop/agent/interactive-ui/README.md`。
 - [x] 第 3 阶段：移除 Planner、修正角色按钮对齐；任意角色可开启交互讲解，内置 Skill 含四份完整 few-shot；模型生成工具、实时卡片、版本保存与严格后端门控已完成。
-- [x] 第 3 阶段验收：96 项 Agent 测试、四固定样例与四 few-shot 的 Edge 交互检查、38 项隔离真实桌面检查通过，错误 0；工具生成卡片实时展示、操作保存和历史恢复通过。便携包 `desktop/dist-portable-20261013-092036`；离线组合预览 `dist/interactive-components-preview.html`。真实模型教学质量仍待第五阶段。
+- [x] 第 3 阶段验收：96 项 Agent 测试、四固定样例与四 few-shot 的 Edge 交互检查、38 项隔离真实桌面检查通过，错误 0；工具生成卡片实时展示、操作保存和历史恢复通过。便携包 `desktop/dist-portable-20261013-092036`；离线组合预览 `dist/interactive-components-preview.html`。真实模型教学质量仍待第五阶段。实现提交 `0437749`，版本标签 `interactive-learning-generation-v0.1`。
 - [ ] 第 4 阶段：隔离 HTML 回退与主动追问；第 5 阶段：教学事实验收及本地/云端模型矩阵。
 
 ## 2026-10-10 已确认的发布范围
