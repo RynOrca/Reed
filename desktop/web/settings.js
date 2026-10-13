@@ -256,7 +256,7 @@ function syncMcpTransport(){const http=$("mcp-transport").value==="http";$("mcp-
 $("mcp-transport").onchange=syncMcpTransport;syncMcpTransport();
 
 let overviewPath=null;
-function renderOverview(info){overviewPath=info.path||null;const working=["scanning","generating"].includes(info.state);$("vault-overview-status").textContent=info.state==="ready"?"总览已保存，后续对话将使用科目与目录导航。":info.message||"连接笔记库后自动生成。";$("generate-overview").disabled=working;$("cancel-overview").hidden=!working;$("open-overview").hidden=info.state!=="ready"||!overviewPath;}
+function renderOverview(info){overviewPath=info.path||null;const working=["scanning","generating"].includes(info.state);const status=info.state==="ready"?"总览已保存，后续对话将使用科目与目录导航。":info.message||"连接笔记库后自动生成。";$("vault-overview-status").textContent=status;$("generate-overview").disabled=working;$("cancel-overview").hidden=!working;$("open-overview").hidden=info.state!=="ready"||!overviewPath;}
 $("generate-overview").onclick=()=>action(()=>command("generate_vault_overview"));
 $("cancel-overview").onclick=()=>action(()=>command("cancel_vault_overview"));
 $("open-overview").onclick=()=>action(async()=>{if(overviewPath){const r=await command("resolve_file",{path:overviewPath});await tauri.core.invoke("open_local_file",{path:r.path});}});
