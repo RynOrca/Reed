@@ -1,6 +1,6 @@
 ## 2026-10-13 自定义作品 SDK 与可选独立审核
 
-- Git 基线：`771e885`；成果标签 `interactive-custom-sdk-v0.1`。
+- 实现提交：`fbcda6b00948f72ec409ed23554a05542ec7dce9`；Git 基线：`771e885`；成果标签 `interactive-custom-sdk-v0.1`。
 - 新增custom作品协议、UI/SVG控件SDK、声明状态恢复，模型可写render/reduce和新二维组件，不执行任意宿主HTML。
 - opaque iframe可信渲染，模型源码只在无DOM/网络的可终止Worker运行；每操作重新加载、返回即终止、1500ms超时；不提供OS级内存硬配额。
 - 新增真实沙箱试运行、有限修正、结构化反馈、按需SDK/catalog资料工具与梯度下降/循环队列/Softmax策略三份完整源码示例；常驻Skill精简，原9份few-shot移至按需原生参考。
