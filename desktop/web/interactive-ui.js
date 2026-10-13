@@ -1,10 +1,12 @@
+import { createComponentExperience } from './interactive-components.js';
+
 export function createInteractiveCard(summary, { load, save }) {
   const card = document.createElement('section');
   card.className = 'interactive-card';
   card.setAttribute('aria-label', '交互讲解作品');
   const header = document.createElement('div'); header.className = 'interactive-card-header';
   const heading = document.createElement('div'); heading.className = 'interactive-card-heading';
-  const eyebrow = document.createElement('span'); eyebrow.className = 'interactive-card-eyebrow'; eyebrow.textContent = '交互讲解 · 固定测试作品';
+  const eyebrow = document.createElement('span'); eyebrow.className = 'interactive-card-eyebrow'; eyebrow.textContent = '交互讲解 · 教学样例';
   const title = document.createElement('strong'); title.textContent = summary.title || '交互讲解作品';
   heading.append(eyebrow, title);
   const toggle = document.createElement('button'); toggle.type = 'button'; toggle.textContent = '展开'; toggle.setAttribute('aria-expanded', 'false');
@@ -18,9 +20,21 @@ export function createInteractiveCard(summary, { load, save }) {
   let artifact = null;
   let saving = Promise.resolve();
   let loading = false;
+  const persist = state => {
+    artifact.state = { ...state };
+    saving = saving.catch(() => {}).then(() => save(summary.artifactId, state)).catch(error => {
+      const note = document.createElement('p'); note.className = 'interactive-card-error'; note.textContent = `进度未保存：${error.message || error}`; detail.append(note);
+    });
+  };
   const render = () => {
     detail.replaceChildren();
     if (!artifact) return;
+    if (artifact.stateWarning) { const warning = document.createElement('p'); warning.className = 'interactive-card-error'; warning.textContent = artifact.stateWarning; detail.append(warning); }
+    if (artifact.document.mode === 'components') {
+      detail.append(createComponentExperience(artifact.document, artifact.state, persist));
+      if (summary.parentArtifactId) { const version = document.createElement('p'); version.className = 'interactive-card-version'; version.textContent = `新版本 · 前一作品 ${summary.parentArtifactId.slice(0, 8)}`; detail.append(version); }
+      return;
+    }
     const steps = artifact.document.steps;
     const index = Number.isInteger(artifact.state?.step) && artifact.state.step >= 0 && artifact.state.step < steps.length ? artifact.state.step : 0;
     const progress = document.createElement('p'); progress.className = 'interactive-card-progress'; progress.textContent = `步骤 ${index + 1} / ${steps.length}`;
@@ -31,10 +45,7 @@ export function createInteractiveCard(summary, { load, save }) {
     const next = document.createElement('button'); next.type = 'button'; next.textContent = '下一步'; next.disabled = index === steps.length - 1;
     const reset = document.createElement('button'); reset.type = 'button'; reset.textContent = '重置'; reset.disabled = index === 0;
     const move = step => {
-      artifact.state = { step }; render();
-      saving = saving.catch(() => {}).then(() => save(summary.artifactId, { step })).catch(error => {
-        const note = document.createElement('p'); note.className = 'interactive-card-error'; note.textContent = `进度未保存：${error.message || error}`; detail.append(note);
-      });
+      artifact.state = { step }; render(); persist({ step });
     };
     previous.onclick = () => move(index - 1); next.onclick = () => move(index + 1); reset.onclick = () => move(0);
     actions.append(previous, next, reset); detail.append(progress, stepTitle, body, actions);

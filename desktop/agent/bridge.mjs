@@ -12,6 +12,7 @@ import { createVisualReview, VISUAL_TOOLS } from "./visual-review.mjs";
 import { createContextPolicy } from "./context-policy.mjs";
 import { GoalStore } from "./goals.mjs";
 import { InteractiveArtifactStore, boundArtifactIds } from "./interactive-ui/artifacts.mjs";
+import { createFixedDocument } from "./interactive-ui/fixtures.mjs";
 import { roleFeatureExtension } from "./role-features.mjs";
 import { VaultOverview } from "./vault-overview.mjs";
 import { join, resolve } from "node:path";
@@ -329,12 +330,8 @@ async function handle(command) {
       case "create_interactive_fixture": {
         if (process.env.SUMMON_INTERACTIVE_UI_TEST !== "1") throw new Error("固定作品仅供隔离测试");
         if (busy || !session) throw new Error("当前会话不可创建固定作品");
-        const fixture = { schemaVersion: 1, mode: "fixture", title: "KMP 失配后如何移动？", steps: [
-          { title: "先看失配", body: "文本 ABABABC 与模式 ABABC 对齐，比较到第 5 个字符时失配。" },
-          { title: "尝试移动一位", body: "移动一位后，已知前缀与文本冲突，因此这个起点可以跳过。" },
-          { title: "移动两位", body: "AB 前缀可以复用，从下一处未知字符继续比较。" },
-        ] };
-        const message = { role: "assistant", content: [{ type: "text", text: "固定测试作品：点击卡片逐步查看 KMP 对齐。" }], timestamp: Date.now(), api: "test", provider: "fixture", model: "fixture", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" };
+        const fixture = createFixedDocument(command.topic || "kmp");
+        const message = { role: "assistant", content: [{ type: "text", text: `固定教学样例：${fixture.title}。点击卡片操作。` }], timestamp: Date.now(), api: "test", provider: "fixture", model: "fixture", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" };
         session.sessionManager.appendMessage(message);
         const messageEntryId = session.sessionManager.getBranch().findLast(entry => entry.type === "message" && entry.message?.role === "assistant")?.id;
         if (!messageEntryId) throw new Error("固定作品消息未能写入会话");

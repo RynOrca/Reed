@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { validateDocument, validateState } from './protocol.mjs';
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const validId = value => { if (typeof value !== 'string' || !ID.test(value)) throw new Error('作品或会话 ID 无效'); return value; };
-const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 
 export class InteractiveArtifactStore {
   constructor(dataDir) { this.root = join(dataDir, 'artifacts', 'interactive'); }
@@ -15,14 +15,9 @@ export class InteractiveArtifactStore {
       const parent = await this.read(sessionId, parentArtifactId);
       if (!parent) throw new Error('父作品不存在');
     }
-    if (!document || document.schemaVersion !== 1 || document.mode !== 'fixture' ||
-      typeof document.title !== 'string' || !document.title.trim() || document.title.length > 120 ||
-      !Array.isArray(document.steps) || document.steps.length < 2 || document.steps.length > 16 ||
-      document.steps.some(step => !step || typeof step.title !== 'string' || typeof step.body !== 'string' || step.title.length > 120 || step.body.length > 1000)) {
-      throw new Error('固定测试作品格式无效');
-    }
+    validateDocument(document);
     const artifactId = randomUUID();
-    const artifact = { artifactId, sessionId, parentArtifactId, createdAt: new Date().toISOString(), document, state: { step: 0 } };
+    const artifact = { artifactId, sessionId, parentArtifactId, createdAt: new Date().toISOString(), document, state: document.mode === 'fixture' ? { step: 0 } : { ...document.initialState } };
     await mkdir(join(this.root, sessionId), { recursive: true });
     await this.write(sessionId, artifactId, artifact);
     return artifact;
@@ -36,7 +31,12 @@ export class InteractiveArtifactStore {
   async read(sessionId, artifactId) {
     try {
       const artifact = JSON.parse(await readFile(this.path(sessionId, artifactId), 'utf8'));
-      if (artifact.sessionId !== sessionId || artifact.artifactId !== artifactId || artifact.document?.schemaVersion !== 1 || artifact.document?.mode !== 'fixture') throw new Error('作品文件格式无效');
+      if (artifact.sessionId !== sessionId || artifact.artifactId !== artifactId) throw new Error('作品文件格式无效');
+      validateDocument(artifact.document);
+      if (!validateState(artifact.document, artifact.state)) {
+        artifact.state = artifact.document.mode === 'fixture' ? { step: 0 } : { ...artifact.document.initialState };
+        artifact.stateWarning = '已保存的操作状态无效，已回到初始状态。';
+      }
       return artifact;
     } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   }
@@ -48,8 +48,9 @@ export class InteractiveArtifactStore {
   async saveState(sessionId, artifactId, state) {
     const artifact = await this.read(sessionId, artifactId);
     if (!artifact) throw new Error('作品文件不可用');
-    if (!state || Object.keys(state).length !== 1 || !own(state, 'step') || !Number.isInteger(state.step) || state.step < 0 || state.step >= artifact.document.steps.length) throw new Error('作品状态无效');
-    artifact.state = { step: state.step };
+    if (!validateState(artifact.document, state)) throw new Error('作品状态无效');
+    artifact.state = { ...state };
+    delete artifact.stateWarning;
     await this.write(sessionId, artifactId, artifact);
     return artifact.state;
   }

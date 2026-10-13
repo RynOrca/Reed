@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, unlink } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { InteractiveArtifactStore, boundArtifactIds } from './artifacts.mjs';
+import { createFixedDocument } from './fixtures.mjs';
 
 test('fixed artifact versions persist state and clean up with their isolated session', async () => {
   const root = await mkdtemp(join(tmpdir(), 'reed-artifact-test-'));
@@ -24,6 +25,26 @@ test('fixed artifact versions persist state and clean up with their isolated ses
     assert.equal((await store.summary(sessionId, next.artifactId)).status, 'missing');
     await store.deleteSession(sessionId);
     assert.equal(await store.read(sessionId, first.artifactId), null);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('component state persists and invalid saved state falls back without changing the document', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'reed-component-state-'));
+  const sessionId = randomUUID();
+  const store = new InteractiveArtifactStore(root);
+  try {
+    const artifact = await store.create(sessionId, createFixedDocument('attention'));
+    await store.saveState(sessionId, artifact.artifactId, { temperature: 3 });
+    assert.equal((await new InteractiveArtifactStore(root).read(sessionId, artifact.artifactId)).state.temperature, 3);
+    await assert.rejects(store.saveState(sessionId, artifact.artifactId, { temperature: 5 }), /状态无效/);
+    const path = store.path(sessionId, artifact.artifactId);
+    const onDisk = JSON.parse(await readFile(path, 'utf8'));
+    onDisk.state = { temperature: 99 };
+    await writeFile(path, JSON.stringify(onDisk));
+    const recovered = await store.read(sessionId, artifact.artifactId);
+    assert.equal(recovered.state.temperature, 1);
+    assert.match(recovered.stateWarning, /初始状态/);
+    assert.equal(recovered.document.title, artifact.document.title);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

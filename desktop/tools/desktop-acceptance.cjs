@@ -47,7 +47,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const port = 9312;
-  const child = spawn(path.join(packageDir, 'Reed.exe'), [], { windowsHide:true, cwd:packageDir, env:{ ...process.env, SUMMON_TEST_DATA_DIR:data, SUMMON_TEST_WEBVIEW_PORT:String(port) }, stdio:'ignore' });
+  const child = spawn(path.join(packageDir, 'Reed.exe'), [], { windowsHide:true, cwd:packageDir, env:{ ...process.env, SUMMON_TEST_DATA_DIR:data, SUMMON_TEST_WEBVIEW_PORT:String(port), SUMMON_INTERACTIVE_UI_TEST:'1' }, stdio:'ignore' });
   let browser; const errors = []; const checks = [];
   try {
     for (let n=0;n<50;n++) {
@@ -299,6 +299,20 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     const deleteProvider=settings.locator('.provider-row').filter({hasText:'桌面隔离测试'}).locator('button').filter({hasText:'删除'});
     await deleteProvider.click();assert.equal(await settings.locator('.provider-row').count(),1);await deleteProvider.filter({hasText:'确认删除'}).click();
     await settings.locator('.provider-row').waitFor({state:'detached'});assert.ok((await main.locator('.message-row.user').count())>0);checks.push('供应商两步确认删除，当前模型安全退回，对话历史保留');
+    await agentCommand('new_session',{noProject:true});
+    const fixtureSessionId=await main.evaluate(()=>window._recoveryEvents.filter(e=>e.type==='session').at(-1).sessionId);
+    const learningFixture=await agentCommand('create_interactive_fixture',{topic:'kmp'});
+    const learningCard=main.locator('.interactive-card').filter({hasText:'KMP：失配'});
+    await learningCard.getByRole('button',{name:'展开'}).click();
+    await learningCard.locator('input[type=range]').focus();await main.keyboard.press('End');
+    let savedLearning;
+    for(let i=0;i<20;i++){savedLearning=await agentCommand('get_interactive_artifact',{artifactId:learningFixture.artifactId});if(savedLearning.artifact.state.offset===2)break;await new Promise(resolve=>setTimeout(resolve,50));}
+    assert.equal(savedLearning.artifact.state.offset,2);
+    await main.screenshot({path:path.join(artifacts,'interactive-kmp.png')});
+    await agentCommand('new_session',{noProject:true});await agentCommand('open_session',{sessionId:fixtureSessionId});
+    await learningCard.getByRole('button',{name:'展开'}).click();
+    assert.equal(await learningCard.locator('input[type=range]').inputValue(),'2');
+    checks.push('真实桌面固定 KMP 组件卡片可操作，选择保存并在重开会话后恢复');
     assert.deepEqual(errors,[]); assert.ok(apiCalls >= 2);
     await fs.writeFile(path.join(artifacts,'report.json'),JSON.stringify({checks,errors,data,apiCalls,packageDir},null,2));
     console.log(JSON.stringify({checks,errors,artifacts,data},null,2));
