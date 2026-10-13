@@ -4,7 +4,7 @@ import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {CapabilityStore} from './capabilities.mjs';
-import {createNoteRetriever} from './note-retrieval.mjs';
+import {createNoteRetriever,NOTE_EXPANSION_MAX_TOKENS,NOTE_EXPANSION_TIMEOUT_MS} from './note-retrieval.mjs';
 import {createLearningTools} from './learning-tools.mjs';
 import {LocalSearchIndex} from './local-search.mjs';
 const fixture=async fn=>{const root=await mkdtemp(join(tmpdir(),'reed-rag-test-'));try{await mkdir(join(root,'vault'));await fn(root,join(root,'vault'));}finally{await rm(root,{recursive:true,force:true});}};
@@ -32,6 +32,16 @@ test('三条弱关键词命中仍请求模型扩词',()=>fixture(async(dir,root)
   const caps=new CapabilityStore(dir);caps.state.vaultPath=root;let calls=0;
   const retrieve=createNoteRetriever({capabilities:caps,model:()=>({provider:'test',id:'rag'}),runtime:async()=>({completeSimple:async()=>{calls++;return {stopReason:'stop',content:[{type:'text',text:'{"queries":[]}'}]};}})});
   assert.equal((await retrieve('量子纠缠')).length,3);assert.equal(calls,1);
+}));
+
+test('弱命中扩词使用有界预算、关闭思考并可实际召回同义笔记',()=>fixture(async(dir,root)=>{
+  const path=join(root,'线代.md');await writeFile(path,'# 特征值\n\n矩阵的不变方向。');
+  const caps=new CapabilityStore(dir);caps.state.vaultPath=root;let calls=0,optionsSeen;
+  const retrieve=createNoteRetriever({capabilities:caps,model:()=>({provider:'test',id:'rag'}),runtime:async()=>({completeSimple:async(_model,_request,options)=>{calls++;optionsSeen=options;return {stopReason:'stop',content:[{type:'text',text:'{"queries":["特征值"]}'}]};}})});
+  const hits=await retrieve('eigenvalue geometry');
+  assert.equal(calls,1);assert.equal(optionsSeen.maxTokens,NOTE_EXPANSION_MAX_TOKENS);assert.equal(NOTE_EXPANSION_MAX_TOKENS,1024);
+  assert.equal(optionsSeen.reasoning,'off');assert.ok(optionsSeen.signal instanceof AbortSignal);assert.equal(NOTE_EXPANSION_TIMEOUT_MS,12_000);
+  assert.ok(hits.some(hit=>hit.path===path&&hit.content.includes('不变方向')),'有效扩词应补回原文笔记');
 }));
 
 test('不完整扫描保留未检查文件旧索引并暴露扫描状态',()=>fixture(async(dir,root)=>{

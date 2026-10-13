@@ -1,5 +1,6 @@
 import { semanticMatcher } from "./memory-match.mjs";
 import { createMemoryValueGate } from './memory-value.mjs';
+import { createAuxiliaryCompleter } from './auxiliary-runtime.mjs';
 import { workMemoryExtension } from "./work-memory.mjs";
 import {LazyMcp,MCP_TOOLS} from "./mcp.mjs";
 import {UserConfig} from "./user-config.mjs";
@@ -149,6 +150,7 @@ async function getRuntime() {
       send({ type: "credential_error", message: `远程模型凭据无法读取，请重新输入 Key：${error.message}` });
     }
     await providers.install(runtime);
+    runtime.completeSimple = createAuxiliaryCompleter(runtime.completeSimple.bind(runtime));
   }
   return runtime;
 }

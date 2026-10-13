@@ -11,8 +11,22 @@ export function shellEnvironment(value) {
 }
 
 // Tool discovery describes available environments, not the environment selected by this task.
+export function requestedShellEnvironment(prompt){
+  const text=String(prompt||'');
+  const targets=[];
+  const pattern=/(?:使用|采用|指定|选择|切换到|改用|套用|调用|引用|借用|选用|启用|利用|用|\buse\b|\busing\b)\s*(?:默认(?:的)?\s*)?(windows[- ]powershell(?:\s*5(?:\.1)?)?|powershell\s*(?:v)?[5-9](?:\.\d+)?|powershell\s+core|pwsh|bash|zsh|cmd|powershell)/gi;
+  for(const match of text.matchAll(pattern)){
+    const prefix=text.slice(Math.max(0,match.index-24),match.index);
+    if(/(?:不要|别|勿|禁止|不应|避免|不|do\s+not|don't|never|avoid|rather than|instead of|no need to)(?:\s*(?:再|继续|去|直接|again|continue to))*\s*$/i.test(prefix))continue;
+    const family=shellEnvironment(match[1]);if(family)targets.push(family);
+  }
+  const unique=[...new Set(targets)];
+  if(unique.length)return unique.length===1?unique[0]:null;
+  const positive=text.split(/[，,。；;\n]/).filter(clause=>!/(?:不要|别|勿|禁止|不应|避免|不使用|不用|不采用|do\s+not|don't|never|avoid)/i.test(clause)).join('\n');
+  return shellEnvironment(positive);
+}
 export function workEnvironmentHint(prompt,messages=[]) {
-  const explicit=shellEnvironment(prompt);
+  const explicit=requestedShellEnvironment(prompt);
   if(explicit&&explicit!=='powershell-unknown')return explicit;
   const turn=messages.findLastIndex(m=>m.role==='user');
   for(const message of messages.slice(turn+1).reverse()){

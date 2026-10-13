@@ -1,8 +1,8 @@
-import {shellEnvironment} from './work-applicability.mjs';
+import {requestedShellEnvironment,applicableWork} from './work-applicability.mjs';
 export function createWorkRecaller({memory,runtime,model}){
   const plans=new Map();
-  return async(query,scope='',{force=false,environment=shellEnvironment(query)}={})=>{
-    const direct=memory.workMatches(query,scope,environment),items=memory.workItems(scope);
+  return async(query,scope='',{force=false,environment=requestedShellEnvironment(query)}={})=>{
+    const direct=memory.workMatches(query,scope,environment),items=memory.workItems(scope).filter(i=>applicableWork(i,environment));
     if(direct.length||!items.length)return {items:direct,basis:'local'};
     if(!force&&!/执行|文件|命令|运行|代码|构建|安装|路径|继续|修复|处理|工具|bash|powershell|shell|build|command|toolResult/i.test(query))return {items:[],basis:'none'};
     const selected=model?.();if(!selected||selected.provider==='unknown')return {items:[],basis:'none'};

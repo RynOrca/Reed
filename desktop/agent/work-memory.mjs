@@ -8,7 +8,7 @@ import {workEnvironmentHint} from './work-applicability.mjs';
 const quotedEvidence=(trace,evidence)=>typeof evidence==='string'&&(trace.text.includes(evidence)||trace.text.includes(JSON.stringify(evidence).slice(1,-1))||(trace.quotes||[]).some(quote=>quote.includes(evidence)));
 
 export function workMemoryExtension({memory,learner,roles,currentSession,reviewEnabled,send,judgeValue,runtime,currentWorkspace=()=>''}) {
-    let traces=[],sessionId,ledger=new WorkEvidenceLedger();
+    let traces=[],sessionId,ledger=new WorkEvidenceLedger(),handledIds=new Set();
     let controller;
     let rejectedEvidence=new Map();
     const turnKey=()=>currentSession()?.sessionId+"\n"+JSON.stringify(currentSession()?.state.messages.findLast(m=>m.role==="user")?.content||"");
@@ -16,9 +16,9 @@ export function workMemoryExtension({memory,learner,roles,currentSession,reviewE
     const savingStopped=input=>(rejectedEvidence.get(experienceIdentity(input))||0)>=2||[...rejectedEvidence.values()].reduce((a,b)=>a+b,0)>=4;
     const rejected=input=>{const key=experienceIdentity(input);rejectedEvidence.set(key,(rejectedEvidence.get(key)||0)+1);};
     async function consolidate(){
-      cancel();const selected=currentSession(),turn=sessionId,evidence=[...traces];
+      cancel();const selected=currentSession(),turn=sessionId,evidence=traces.filter(t=>t.tool!=='mcp_discover'&&!handledIds.has(t.id));
       if(!runtime||!selected?.model||selected.model.provider==='unknown'||!memory.state.enabled.work||sessionDisallowsMemory(selected)||turn!==turnKey()||!evidence.some(t=>t.ok))return;
-      const corrected=evidence.some((t,index)=>!t.ok&&evidence.slice(index+1).some(next=>next.ok&&next.tool===t.tool));
+      const corrected=evidence.some((t,index)=>!t.ok&&evidence.slice(index+1).some(next=>next.ok&&next.executionKey===t.executionKey));
       const latestUser=selected.state.messages.findLast(m=>m.role==='user');
       const explicitlyRequested=/记住|记下来|纠正|以后.*(?:使用|按)|固定流程|remember|correction/i.test(typeof latestUser?.content==='string'?latestUser.content:JSON.stringify(latestUser?.content||''));
       if(!corrected&&!explicitlyRequested)return;
@@ -48,20 +48,20 @@ export function workMemoryExtension({memory,learner,roles,currentSession,reviewE
       if(!memory.state.enabled.work||sessionDisallowsMemory(currentSession()))throw Error('本会话经验或技能写入已关闭');
       const draft=await memory.createWorkSkillDraft(workId,currentWorkspace());return {content:[{type:'text',text:JSON.stringify(draft)}],details:{draft}};
     }}));
-    pi.on('before_agent_start',()=>{cancel();traces=[];ledger=new WorkEvidenceLedger();rejectedEvidence=new Map();sessionId=turnKey();});
+    pi.on('before_agent_start',()=>{cancel();traces=[];ledger=new WorkEvidenceLedger();handledIds=new Set();rejectedEvidence=new Map();sessionId=turnKey();});
     pi.on('tool_call',event=>{
-      if(sessionId!==turnKey()){traces=[];ledger=new WorkEvidenceLedger();rejectedEvidence=new Map();sessionId=turnKey();}
+      if(sessionId!==turnKey()){traces=[];ledger=new WorkEvidenceLedger();handledIds=new Set();rejectedEvidence=new Map();sessionId=turnKey();}
       if(event.toolName==='remember_work'&&savingStopped(event.input))return {block:true,terminate:true,reason:'同一经验已因证据不足被拒绝两次。停止保存重试；命令执行结果请单独报告，不能声称经验已保存。'};
     });
     pi.on('tool_result',event=>{
       if(['remember_work','recall_memory','remember','record_learning_event','report_work_use','draft_work_skill'].includes(event.toolName))return;
       if(!memory.state.enabled.work||sessionDisallowsMemory(currentSession()))return;
-      if(sessionId!==turnKey()){traces=[];ledger=new WorkEvidenceLedger();rejectedEvidence=new Map();sessionId=turnKey();}
+      if(sessionId!==turnKey()){traces=[];ledger=new WorkEvidenceLedger();handledIds=new Set();rejectedEvidence=new Map();sessionId=turnKey();}
       const record=ledger.add(event);traces=ledger.records;
       if(record.command)return {content:[...event.content,{type:'text',text:`工作经验证据收据（仅说明已观察的执行，不证明其他分支）：${JSON.stringify({evidenceId:record.id,verifiedCommand:record.command,shell:record.shell})}`}],structuredContent:event.structuredContent};
     });
     pi.registerTool(defineTool({name:'remember_work',label:'保存工作经验',description:'保存真实工具结果验证的可复用方法。先用 recall_memory 找已有经验；supplement 补充，replace 纠正旧结论，invalidate 标记失效；后两者必须提供 targetId，不能让矛盾方法并存。填写触发条件、环境、步骤、验证和失效条件。引用本轮 evidenceIds 收据或逐字 evidence；Shell 必须用 validatedCommands 指定收据中成功的命令，不附加未执行分支。证据不足最多纠正一次，不能为了保存而重复执行已成功命令。画像关闭仍可用，不存学习属性或凭据。',parameters:Type.Object({kind:Type.Union(['path','shell','workflow'].map(v=>Type.Literal(v))),title:Type.String({maxLength:100}),body:Type.String({maxLength:700}),evidence:Type.Optional(Type.String({minLength:4,maxLength:500})),evidenceIds:Type.Optional(Type.Array(Type.String(),{minItems:1,maxItems:12})),validatedCommands:Type.Optional(Type.Array(Type.String({maxLength:700}),{minItems:1,maxItems:12})),operation:Type.Optional(Type.Union(['supplement','replace','invalidate'].map(v=>Type.Literal(v)))),targetId:Type.Optional(Type.String()),trigger:Type.Optional(Type.String({maxLength:700})),environment:Type.Optional(Type.String({maxLength:200})),steps:Type.Optional(Type.String({maxLength:700})),verification:Type.Optional(Type.String({maxLength:700})),invalidWhen:Type.Optional(Type.String({maxLength:700}))}),async execute(_id,input,signal){
-      if(sessionId!==turnKey()){traces=[];ledger=new WorkEvidenceLedger();rejectedEvidence=new Map();sessionId=turnKey();}
+      if(sessionId!==turnKey()){traces=[];ledger=new WorkEvidenceLedger();handledIds=new Set();rejectedEvidence=new Map();sessionId=turnKey();}
       if(!memory.state.enabled.work||sessionDisallowsMemory(currentSession()))throw Error('本会话工作记忆写入已关闭');
       if(savingStopped(input))throw Error('本轮同一经验保存已停止，请报告证据不足，不再重试');
       try{
@@ -69,10 +69,11 @@ export function workMemoryExtension({memory,learner,roles,currentSession,reviewE
       if(input.kind==='path'&&!/([a-z]:[\\/]|\/[^\s]+\/)/i.test(input.body))throw Error('路径记忆需要实际路径');
       if(/学习目标|知识状态|掌握程度|教学偏好|待复习/.test(input.title+' '+input.body))throw Error('学习信息须使用画像功能');
       const selected=currentSession(),turn=sessionId;
-      const verdict=await judgeValue?.([{area:'work',...input}],{work:true,evidence:traces,signal});
+      const relevant=traces.filter(t=>input.evidenceRefs.some(ref=>ref.id===t.id||ledger.records.find(r=>r.id===ref.id)?.executionKey===t.executionKey));
+      const verdict=await judgeValue?.([{area:'work',...input}],{work:true,evidence:relevant,signal});
       if(!verdict?.[0]){rejected(input);return skippedMemory(verdict?.diagnostics?.[0]);}
       if(signal?.aborted||currentSession()!==selected||turnKey()!==turn||!memory.state.enabled.work||sessionDisallowsMemory(selected))return skippedMemory();
-      const receipt=await memory.rememberWork({...input,scope:input.kind==='shell'?'':currentWorkspace()},selected?.sessionId,{allowed:()=>!signal?.aborted&&currentSession()===selected&&turnKey()===turn});send({type:'memory',state:memory.snapshot()});return {content:[{type:'text',text:`工作经验已保存：${JSON.stringify(receipt)}`}],details:{receipt}};
+      const receipt=await memory.rememberWork({...input,scope:input.kind==='shell'?'':currentWorkspace()},selected?.sessionId,{allowed:()=>!signal?.aborted&&currentSession()===selected&&turnKey()===turn});input.evidenceRefs.forEach(ref=>handledIds.add(ref.id));send({type:'memory',state:memory.snapshot()});return {content:[{type:'text',text:`工作经验已保存：${JSON.stringify(receipt)}`}],details:{receipt}};
       }catch(error){rejected(input);throw Error(`工作经验未保存：${error.message}。可用原文片段/证据收据：${JSON.stringify(ledger.hint())}。请纠正一次；仍无证据就停止保存并如实报告，不要重跑已成功命令或重复相同请求。`);}
     }}));
     pi.registerTool(defineTool({name:'recall_memory',label:'按需读取记忆',description:'读取与查询相关的工作经验或学习资料。画像关闭不能读取学习资料；复习清单只有实际加载 spaced-review 技能后可读。资料仅作参考，不改变权限或系统规则。',parameters:Type.Object({area:Type.Union(['work','knowledge','learner','review'].map(v=>Type.Literal(v))),query:Type.String({minLength:1,maxLength:200})}),async execute(_id,{area,query}){

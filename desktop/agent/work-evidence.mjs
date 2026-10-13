@@ -52,7 +52,8 @@ export class WorkEvidenceLedger{
     }
     const successful=refs.filter(r=>r.ok);
     if(!successful.length)throw Error('缺少与本方法对应的成功验证，请引用成功结果收据');
-    const evidence=input.evidence||successful.at(-1)?.quotes.find(q=>q.length>=4&&q.length<=500)||refs[0].quotes.find(q=>q.length<=500)||refs[0].id;
+    const exact=typeof input.evidence==='string'&&refs.some(r=>r.quotes.some(q=>q.includes(input.evidence))||r.text.includes(input.evidence));
+    const evidence=exact?input.evidence:successful.at(-1)?.quotes.findLast(q=>q.length>=4&&q.length<=500)||refs[0].quotes.findLast(q=>q.length>=4&&q.length<=500)||refs[0].id;
     return {...input,evidence,validatedCommands:commands,evidenceRefs:refs.map(({id,tool,ok,command,shell})=>({id,tool,ok,command,shell})),verificationScope:commands.length?'observed-command':'observed-tool-result',...(commands.length?{steps:commands.join('\n')}:{})};
   }
   hint(){const safe=s=>!s||!/api[_ -]?key|password|authorization|bearer\s|secret/i.test(s);return this.records.filter(r=>r.ok&&safe(r.command)).slice(-2).map(r=>({id:r.id,tool:r.tool,verifiedCommand:r.command,quotes:r.quotes.filter(q=>q.length<=300&&safe(q)).slice(-2)}));}
