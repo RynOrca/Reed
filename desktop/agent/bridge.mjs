@@ -379,9 +379,11 @@ async function handle(command) {
         send({type:"queue",steering:session.getSteeringMessages(),followUp:session.getFollowUpMessages()});send({type:"ack",id});break;
       }
       case "get_goals": {
-        send({type:"goals",id,goal:projectPath?await goals.read(projectPath):null,enabled:roles.current().learningGoalsEnabled});break;
+        const enabled=roles.current().learningGoalsEnabled===true;
+        send({type:"goals",id,goal:enabled&&projectPath?await goals.read(projectPath):null,enabled});break;
       }
       case "save_goals": {
+        if(!roles.current().learningGoalsEnabled)throw new Error("当前角色未启用学习目标");
         if(command.projectPath!==projectPath)throw new Error("项目已切换，草稿未写入，请重新打开目标");
         const goal=await goals.save(projectPath,command.body,command.revision);
         send({type:"goals",id,goal,enabled:roles.current().learningGoalsEnabled});break;
