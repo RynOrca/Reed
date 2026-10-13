@@ -451,7 +451,7 @@ async function handle(command) {
         send({ type: "ack", id });
         break;
       case "memory_work_delete":
-        await memory.deleteWork(command.title);send({type:"memory",state:memory.snapshot()});send({type:"ack",id});break;
+        workingTools.cancel();await memory.deleteWork(command.title,command.workId);send({type:"memory",state:memory.snapshot()});send({type:"ack",id});break;
       case "memory_fact_delete":
         memoryAgent.cancel(); await memory.deleteFact(command.key);
         send({ type: "memory", state: memory.snapshot() }); send({ type: "ack", id }); break;

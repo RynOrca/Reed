@@ -28,6 +28,9 @@ test('相同标题但不同 Shell、路径或项目不能误合并',()=>fixture(
   assert.equal(memory.workItems('project-b').filter(i=>i.kind==='workflow').length,1);
   assert.equal(memory.workItems('project-c').filter(i=>i.kind==='workflow').length,0);
   assert.doesNotMatch(memory.workContext('构建','project-c'),/构建流程/);
+  await assert.rejects(memory.deleteWork('构建流程'),/同名/);
+  const target=memory.workItems('project-a').find(i=>i.kind==='workflow');await memory.deleteWork(undefined,target.id);
+  assert.equal(memory.workItems('project-b').filter(i=>i.kind==='workflow').length,1);assert.equal(memory.state.working.length,5);
 }));
 
 test('无成功工具证据或新轮次到来时不保存后台经验',()=>fixture(async(_root,memory)=>{

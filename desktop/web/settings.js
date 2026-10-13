@@ -199,7 +199,8 @@ function renderMemory() {
       const content = document.createElement("div"), title = document.createElement("h3"), text = document.createElement("p"), source = document.createElement("small");
       title.textContent = item.title || item.key; text.textContent = item.body || item.content;
       source.textContent = item.updated ? `更新于 ${new Date(item.updated).toLocaleString()}${item.source ? " · 来源会话 " + item.source.slice(0, 8) : ""}` : "已有记忆";
-      content.append(title, text, source); row.append(content, deletionButton("删除", () => command(id === "facts" ? "memory_fact_delete" : id === "working" ? "memory_work_delete" : "memory_note_delete", id === "facts" ? { key: item.key } : id === "working" ? {title:item.title} : { noteId: item.id }))); list.append(row);
+      if(id==="working")source.textContent+=` · ${item.scope?"项目："+item.scope:"全局经验"}`;
+      content.append(title, text, source); row.append(content, deletionButton("删除", () => command(id === "facts" ? "memory_fact_delete" : id === "working" ? "memory_work_delete" : "memory_note_delete", id === "facts" ? { key: item.key } : id === "working" ? {title:item.title,workId:item.id} : { noteId: item.id }))); list.append(row);
     }
     if (!entries.length) { const p = document.createElement("p"); p.className = "hint"; p.textContent = "尚无内容，Agent 会从对话中整理。"; list.append(p); }
   }

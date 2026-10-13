@@ -96,7 +96,7 @@ export class MemoryStore {
     this.state.profile = typeof saved.profile === "string" ? saved.profile.slice(0, MAX_PROFILE) : "";
     this.state.facts = Array.isArray(saved.facts) ? saved.facts.slice(0, 40).filter((fact) => typeof fact.key === "string" && typeof fact.content === "string") : [];
     if (!this.state.facts.length && this.state.profile) this.state.facts.push({ key: "已有画像", content: this.state.profile, source: "legacy" });
-    this.state.working = Array.isArray(saved.working) ? saved.working.filter(i=>["path","shell","workflow"].includes(i.kind)&&typeof i.title==="string"&&typeof i.body==="string").slice(-50) : [];
+    this.state.working = Array.isArray(saved.working) ? saved.working.filter(i=>["path","shell","workflow"].includes(i.kind)&&typeof i.title==="string"&&typeof i.body==="string").slice(-50).map(i=>({...i,id:typeof i.id==='string'?i.id:randomUUID()})) : [];
     this.state.notes = Array.isArray(saved.notes) ? saved.notes.filter((note) =>
       typeof note?.id === "string" && typeof note.title === "string" && typeof note.body === "string")
       .slice(0, MAX_NOTES).map((note) => ({ id: note.id, title: note.title.slice(0, 100), body: note.body.slice(0, MAX_NOTE_BODY), source: note.source, updated: note.updated, reviewOnly:note.reviewOnly===true })) : [];
@@ -177,7 +177,10 @@ export class MemoryStore {
     await this.persist();
   }
 
-  async deleteWork(title) {this.state.working=this.state.working.filter(i=>i.title!==title);await this.persist();}
+  async deleteWork(title,workId) {
+    if(!workId&&this.state.working.filter(i=>i.title===title).length>1)throw Error("存在同名工作经验，请按条目删除");
+    this.state.working=this.state.working.filter(i=>workId?i.id!==workId:i.title!==title);await this.persist();
+  }
   async deleteFact(key) {
     this.state.facts = this.state.facts.filter((fact) => fact.key !== key);
     this.state.profile = this.state.facts.map((fact) => `${fact.key}：${fact.content}`).join("\n").slice(0, MAX_PROFILE);
@@ -192,7 +195,7 @@ export class MemoryStore {
     const candidates=this.state.working.filter(i=>i.kind===value.kind&&workEnvironment(i)===workEnvironment(value));
     const old=candidates.find(i=>similarTopic(i.title,value.title))||await this.matchWorkTopic?.(value.title,candidates,"title",value.body);
     if(!allowed()||!this.state.enabled.work||(this.workAllowed&&!this.workAllowed(source)))throw Error("工作记忆写入已关闭或轮次已改变");
-    if(old){const body=supplement(old.body,value.body,Infinity);if(body.length>4000)throw Error("工作经验条目过长，需要先精简再补充");Object.assign(old,{...value,title:old.title,body});}else{this.state.working.push(value);this.state.working=this.state.working.slice(-50);}
+    if(old){const body=supplement(old.body,value.body,Infinity);if(body.length>4000)throw Error("工作经验条目过长，需要先精简再补充");Object.assign(old,{...value,id:old.id||randomUUID(),title:old.title,body});}else{this.state.working.push({...value,id:randomUUID()});this.state.working=this.state.working.slice(-50);}
     await this.persist();
   }
   workItems(scope=''){const normalize=s=>process.platform==='win32'?s.replaceAll('/','\\').toLowerCase():s;return this.state.enabled.work?this.state.working.filter(i=>!i.scope||normalize(i.scope)===normalize(scope||'')):[];}
