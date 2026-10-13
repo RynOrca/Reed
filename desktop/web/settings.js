@@ -189,14 +189,15 @@ function renderRoles(roles) {
     const row = document.createElement("div"); row.className = "memory-item";
     const name = document.createElement("strong"); name.textContent = role.name;
     const edit = document.createElement("button"); edit.className = "secondary"; edit.textContent = "编辑";
-    edit.onclick = () => { roleId = role.id; $("role-name").value = role.name; $("role-system").value = role.system || ""; $("role-goals-enabled").checked=role.learningGoalsEnabled===true; $("role-profile-enabled").checked=role.learnerProfileEnabled===true; roleSkills.set(role.skills); $("role-form").scrollIntoView(); };
-    row.append(name, edit);
-    if (!role.builtin) row.append(deletionButton("删除", () => command("delete_role", { roleId: role.id })));
+    edit.onclick = () => { roleId = role.id; $("role-name").value = role.name; $("role-system").value = role.system || ""; $("role-goals-enabled").checked=role.learningGoalsEnabled===true; $("role-profile-enabled").checked=role.learnerProfileEnabled===true; $("role-interactive-enabled").checked=role.interactiveUiEnabled===true; roleSkills.set(role.skills); $("role-form").scrollIntoView(); };
+    const actions = document.createElement("div"); actions.className = "role-list-actions"; actions.append(edit);
+    if (!role.builtin) actions.append(deletionButton("删除", () => command("delete_role", { roleId: role.id })));
+    row.classList.add("role-list-row"); row.append(name, actions);
     $("role-list").append(row);
   }
 }
 $("role-new").onclick = () => { roleId = null; $("role-form").reset(); roleSkills.set(); $("role-name").focus(); };
-$("role-form").onsubmit = event => { event.preventDefault(); void action(async () => { await command("save_role", { roleId, name: $("role-name").value, system: $("role-system").value, skills: roleSkills.get(), learningGoalsEnabled:$("role-goals-enabled").checked, learnerProfileEnabled:$("role-profile-enabled").checked }); roleId = null; $("role-form").reset(); roleSkills.set(); notice("角色已保存，可在对话窗口选择。"); }); };
+$("role-form").onsubmit = event => { event.preventDefault(); void action(async () => { await command("save_role", { roleId, name: $("role-name").value, system: $("role-system").value, skills: roleSkills.get(), learningGoalsEnabled:$("role-goals-enabled").checked, learnerProfileEnabled:$("role-profile-enabled").checked, interactiveUiEnabled:$("role-interactive-enabled").checked }); roleId = null; $("role-form").reset(); roleSkills.set(); notice("角色已保存，可在对话窗口选择。"); }); };
 for(const id of ['appearance-theme','appearance-icon']) $(id).onchange=()=>action(()=>saveAppearance($("appearance-icon").value,$("appearance-theme").value));
 $("autostart").onchange = () => action(async () => { try { await tauri.core.invoke("set_autostart", { enabled: $("autostart").checked }); } catch(error) { $("autostart").checked = !$("autostart").checked; throw error; } });
 async function finishRecording() { recording = false; $("shortcut").textContent = savedShortcut || "录入快捷键"; await tauri.core.invoke("capture_shortcut", { active: false }); }

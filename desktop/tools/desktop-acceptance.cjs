@@ -11,6 +11,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
   const data = await fs.mkdtemp(path.join(os.tmpdir(), 'summon-desktop-data-'));
   const packageDir = await require('./isolated-package.cjs')(process.env.SUMMON_TEST_PACKAGE, data);
   const artifacts = path.resolve(__dirname, '../../dist/acceptance'); await fs.mkdir(artifacts, { recursive: true });
+  const {createFixedDocument}=await import('../agent/interactive-ui/fixtures.mjs');
   let apiCalls = 0;
   let receivedImage=false;
   const recoveryCalls = new Map(), recoveryRequests = [], releaseRecovery = new Map();
@@ -36,6 +37,11 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
       res.write(`data: ${JSON.stringify(delta({}, success ? 'stop' : 'length'))}\n\n`);
       res.write(`data: ${JSON.stringify({...delta({}), choices:[], usage:{prompt_tokens:100,completion_tokens:12,total_tokens:112}})}\n\n`);
       res.end('data: [DONE]\n\n'); return;
+    }
+    if (!memory && userText==='INTERACTIVE_MODEL_TEST' && !body.messages.slice(body.messages.lastIndexOf(lastUser)+1).some(m=>m.role==='tool')) {
+      assert.ok(body.tools.some(t=>t.function?.name==='generate_learning_ui'));
+      res.write(`data: ${JSON.stringify(delta({role:'assistant',tool_calls:[{index:0,id:'desktop-ui-'+apiCalls,type:'function',function:{name:'generate_learning_ui',arguments:JSON.stringify({document:JSON.stringify(createFixedDocument('attention'))})}}]}))}\n\n`);
+      res.write(`data: ${JSON.stringify(delta({},'tool_calls'))}\n\n`);res.end('data: [DONE]\n\n');return;
     }
     if (!memory && ['PERMISSION_TEST','READONLY_TEST'].includes(userText) && body.messages.at(-1)?.role!=='tool') {
       res.write(`data: ${JSON.stringify(delta({role:'assistant',reasoning_content:'先创建隔离测试文件。'}))}\n\n`);
@@ -296,6 +302,29 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
       assert.equal(requests[1].body.max_tokens ?? requests[1].body.max_completion_tokens,32768);
       assert.ok(JSON.stringify(requests[1].body.messages).includes(marker),'恢复丢失原始任务');
     }
+    await settings.locator('button[data-section="roles"]').click();
+    assert.equal(await settings.locator('#role-list strong').filter({hasText:'Planner'}).count(),0);
+    const customActions=settings.locator('#role-list .memory-item').filter({hasText:'绑定技能测试'}).locator('.role-list-actions');
+    const editBox=await customActions.getByRole('button',{name:'编辑',exact:true}).boundingBox(), deleteBox=await customActions.getByRole('button',{name:'删除',exact:true}).boundingBox();
+    assert.ok(Math.abs(editBox.y-deleteBox.y)<2 && deleteBox.x-editBox.x-editBox.width<12);
+    await settings.screenshot({path:path.join(artifacts,'roles-actions-aligned.png')});
+    await settings.locator('#role-list .memory-item').filter({hasText:'Agent'}).getByRole('button',{name:'编辑',exact:true}).click();
+    assert.equal(await settings.locator('#role-interactive-enabled').isChecked(),false);
+    await settings.locator('#role-interactive-enabled').check();await settings.locator('#role-form button[type="submit"]').click();
+    await agentCommand('select_role',{roleId:'agent'});
+    await main.locator('#prompt').fill('INTERACTIVE_MODEL_TEST');await main.locator('#send-button').click();
+    const generatedCard=main.locator('.interactive-card').filter({hasText:'Attention：'});
+    await generatedCard.getByRole('button',{name:'展开'}).click();
+    await main.waitForFunction(()=>document.getElementById('status').textContent==='就绪');
+    await generatedCard.locator('input[type=range]').focus();await main.keyboard.press('End');
+    await generatedCard.locator('.interactive-bar-value').filter({hasText:'0.449'}).waitFor();
+    await main.screenshot({path:path.join(artifacts,'interactive-model-generated.png')});
+    const generatedSession=await main.evaluate(()=>window._recoveryEvents.filter(e=>e.type==='session').at(-1).sessionId);
+    await agentCommand('new_session',{noProject:true});await agentCommand('open_session',{sessionId:generatedSession});
+    await generatedCard.getByRole('button',{name:'展开'}).click();
+    assert.equal(await generatedCard.locator('input[type=range]').inputValue(),'3');
+    checks.push('Planner 已移除、编辑删除右侧成组，角色开关启用真实工具生成、实时交互与历史恢复');
+    await settings.locator('button[data-section="models"]').click();
     const deleteProvider=settings.locator('.provider-row').filter({hasText:'桌面隔离测试'}).locator('button').filter({hasText:'删除'});
     await deleteProvider.click();assert.equal(await settings.locator('.provider-row').count(),1);await deleteProvider.filter({hasText:'确认删除'}).click();
     await settings.locator('.provider-row').waitFor({state:'detached'});assert.ok((await main.locator('.message-row.user').count())>0);checks.push('供应商两步确认删除，当前模型安全退回，对话历史保留');

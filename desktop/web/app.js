@@ -373,6 +373,7 @@ function renderRoles() {
       $("role-system").value = role.system || "";
       $("role-goals-enabled").checked = role.learningGoalsEnabled === true;
       $("role-profile-enabled").checked = role.learnerProfileEnabled === true;
+      $("role-interactive-enabled").checked = role.interactiveUiEnabled === true;
       roleSkills.set(role.skills);
       $("role-editor").hidden = false;
       $("role-name").focus();
@@ -471,6 +472,15 @@ function onEvent(event) {
     case "memory_status": if (!running) status(response.status === "organizing" ? "Agent 正在整理记忆…" : "就绪"); break;
     case "sessions": renderSessions(response.sessions || []); break;
     case "history": restoreHistory(response.messages || []); status("就绪"); break;
+    case "interactive_artifact": {
+      if (response.sessionId !== activeSessionId) break;
+      const content = messageRow("assistant");
+      content.closest(".message-col").append(createInteractiveCard(response.summary, {
+        load: async artifactId => (await command("get_interactive_artifact", { artifactId }, true)).artifact,
+        save: async (artifactId, state) => (await command("save_interactive_artifact_state", { artifactId, state }, true)).state,
+      }));
+      scrollToLatest(); break;
+    }
     case "delta": {
       if (response.kind === "thinking") {
         if (!thinkingRow) { thinkingRow = disclosure({ kind: "thinking", title: "思考过程", state: "running" }); thinkingRow.head.click(); }
@@ -672,7 +682,7 @@ $("roles-new").addEventListener("click", () => {
   editingRoleId = null;
   $("role-name").value = "";
   $("role-system").value = "";
-  $("role-goals-enabled").checked=false;$("role-profile-enabled").checked=false;
+  $("role-goals-enabled").checked=false;$("role-profile-enabled").checked=false;$("role-interactive-enabled").checked=false;
   roleSkills.set();
   $("role-editor").hidden = false;
   $("role-name").focus();
@@ -681,7 +691,7 @@ $("role-cancel").addEventListener("click", () => { $("role-editor").hidden = tru
 $("role-save").addEventListener("click", async () => {
   $("role-error").hidden = true;
   try {
-    await command("save_role", { roleId: editingRoleId, name: $("role-name").value, system: $("role-system").value, skills: roleSkills.get(), learningGoalsEnabled:$("role-goals-enabled").checked, learnerProfileEnabled:$("role-profile-enabled").checked }, true);
+    await command("save_role", { roleId: editingRoleId, name: $("role-name").value, system: $("role-system").value, skills: roleSkills.get(), learningGoalsEnabled:$("role-goals-enabled").checked, learnerProfileEnabled:$("role-profile-enabled").checked, interactiveUiEnabled:$("role-interactive-enabled").checked }, true);
     $("role-editor").hidden = true;
     editingRoleId = null;
   } catch (error) { roleError(error); }

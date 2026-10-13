@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
+import { createFixedDocument } from "./interactive-ui/fixtures.mjs";
 import { ProviderStore, normalizeDiscoveredModel } from "./providers.mjs";
 import { MemoryStore } from "./memory.mjs";
 import { createMemoryAgent } from "./memory-agent.mjs";
@@ -62,6 +63,8 @@ test("real PI bridge: discover, stream, remember, background memory, projects an
     if (body.messages.some(m=>typeof m.content==='string'&&m.content.includes('记忆价值审查器'))) {
       const payload=JSON.parse(typeof lastUser.content==='string'?lastUser.content:lastUser.content.filter(b=>b.type==='text').map(b=>b.text).join(''));
       delta={content:JSON.stringify({decisions:payload.candidates.map(c=>({id:c.id,supported:c.area!=='notes',durable:true,useful:c.area!=='notes',requested:false,confidence:0.95}))})};finish='stop';
+    } else if (JSON.stringify(lastUser?.content).includes("UI_GENERATION_TEST") && !body.messages.slice(body.messages.lastIndexOf(lastUser)+1).some(m=>m.role==="tool")) {
+      delta={tool_calls:[{index:0,id:"ui-test-call",type:"function",function:{name:"generate_learning_ui",arguments:JSON.stringify({document:JSON.stringify(createFixedDocument("kmp"))})}}]};finish="tool_calls";
     } else if (consolidating) { delta = { content: '{"facts":[{"key":"学习目标","content":"学习线性代数"}],"notes":[{"title":"矩阵","body":"矩阵用于表示线性变换。"}],"learningEvents":[{"kind":"goal","subject":"线性代数","detail":"学习线性代数","evidence":"我在学习线性代数","status":"active"}]}' }; finish = "stop"; }
     else if (body.tools?.length && !usedTool && body.messages.some(m => m.role === "user" && JSON.stringify(m.content).includes("记住"))) {
       delta = { tool_calls: [{ index: 0, id: "remember-test", type: "function", function: { name: "remember", arguments: JSON.stringify({ layer: "profile", key: "学习目标", content: "学习线性代数" }) } }] }; finish = "tool_calls";
@@ -194,10 +197,26 @@ test("real PI bridge: discover, stream, remember, background memory, projects an
     await command("compact");assert.ok(messages.some(m=>m.type==="compaction" && m.status==="done"));
     await command("archive_session",{sessionId:first});assert.equal((await command("list_sessions")).sessions.find(s=>s.id===first).archived,true);
     await command("archive_session",{sessionId:first,archived:false});assert.equal((await command("list_sessions")).sessions.find(s=>s.id===first).archived,false);
-    await command("select_role",{roleId:"planner"});await command("prompt",{text:"Planner 规划测试"});
-    const plannerTools=requests.at(-1).tools.map(t=>t.function?.name);assert.ok(!plannerTools.includes("write")&&!plannerTools.includes("mcp_call"));assert.ok(plannerTools.includes("read"));
-    assert.match(JSON.stringify(requests.at(-1).messages[0]),/Planner/);
-    const plannerId=messages.filter(m=>m.type==="session").at(-1).sessionId;await command("delete_session",{sessionId:plannerId,confirm:true});assert.ok(!(await command("list_sessions")).sessions.some(s=>s.id===plannerId));
+    await command("select_role",{roleId:"quick"});await command("prompt",{text:"快捷角色测试"});
+    assert.ok(!requests.at(-1).tools.some(t=>t.function?.name==="generate_learning_ui"));
+    await command("save_role",{roleId:"quick",name:"快捷对话",system:"简洁回答",interactiveUiEnabled:true});
+    await command("prompt",{text:"UI_GENERATION_TEST 讲解 KMP"});
+    assert.ok(requests.at(-1).tools.some(t=>t.function?.name==="generate_learning_ui"));
+    assert.match(JSON.stringify(requests.at(-1).messages),/交互讲解/);
+    const createdUi=messages.filter(m=>m.type==="interactive_artifact").at(-1);assert.ok(createdUi,"真实工具调用必须发出作品事件");
+    const uiId=createdUi.summary.artifactId;
+    assert.equal((await command("get_interactive_artifact",{artifactId:uiId})).artifact.document.mode,"components");
+    await command("save_interactive_artifact_state",{artifactId:uiId,state:{offset:2}});
+    const uiSession=messages.filter(m=>m.type==="session").at(-1).sessionId;
+    await command("open_session",{sessionId:uiSession});
+    assert.ok(messages.filter(m=>m.type==="history").at(-1).messages.some(m=>m.interactiveArtifacts?.some(a=>a.artifactId===uiId)));
+    assert.equal((await command("get_interactive_artifact",{artifactId:uiId})).artifact.state.offset,2);
+    await command("save_role",{roleId:"quick",name:"快捷对话",system:"简洁回答",interactiveUiEnabled:false});
+    await command("prompt",{text:"关闭交互能力后的普通聊天"});
+    assert.ok(!requests.at(-1).tools.some(t=>t.function?.name==="generate_learning_ui"));
+    assert.ok(!JSON.stringify(requests.at(-1).messages[0]).includes("# 交互讲解"));
+    assert.equal((await command("get_interactive_artifact",{artifactId:uiId})).artifact.state.offset,2,"关闭生成能力仍可查看已有作品");
+    const quickId=messages.filter(m=>m.type==="session").at(-1).sessionId;await command("delete_session",{sessionId:quickId,confirm:true});assert.ok(!(await command("list_sessions")).sessions.some(s=>s.id===quickId));
     await command("select_role",{roleId});await command("open_session",{sessionId:first});
     const unknown=messages.filter(m=>m.type==="models").at(-1).models.find(m=>m.id==="unknown-model");assert.equal(unknown.reasoning,null);assert.deepEqual(unknown.thinkingLevels,["off","low","medium","high","xhigh"]);
     await command("select_model",{provider:provider.providerId,model:"unknown-model",thinkingLevel:"xhigh"});assert.equal(messages.filter(m=>m.type==="session").at(-1).thinkingLevel,"xhigh");

@@ -12,6 +12,7 @@ import { createVisualReview, VISUAL_TOOLS } from "./visual-review.mjs";
 import { createContextPolicy } from "./context-policy.mjs";
 import { GoalStore } from "./goals.mjs";
 import { InteractiveArtifactStore, boundArtifactIds } from "./interactive-ui/artifacts.mjs";
+import { createInteractiveGeneration, INTERACTIVE_TOOL } from './interactive-ui/generation.mjs';
 import { createFixedDocument } from "./interactive-ui/fixtures.mjs";
 import { roleFeatureExtension } from "./role-features.mjs";
 import { VaultOverview } from "./vault-overview.mjs";
@@ -123,6 +124,7 @@ async function prepareSkills(text) {
 const learningTools = createLearningTools({ capabilities, currentWorkspace: () => cwd, roles, send, scope, vaultOverview, roleSkillInstructions: prompt=>preparedSkills.get(roles.activeId+'\n'+prompt)||'' });
 const learnerTools = learnerExtension({ learner, memory, judgeValue, currentSession: () => session, send, enabled:()=>roles.current().learnerProfileEnabled === true });
 const roleFeatures = roleFeatureExtension({roles,goals,project:()=>projectPath,learner,memory,currentSession:()=>session,reviewEnabled});
+const interactiveGeneration = await createInteractiveGeneration({roles,currentSession:()=>session,store:interactiveArtifacts,send});
 let generationStart = null, firstDelta = null, outputTokens = 0, generationMs = 0, missingUsage = false;
 function emitTelemetry() {
   const model = session?.model;
@@ -173,12 +175,7 @@ async function openSession(provider, modelId, sessionManager) {
     noExtensions: true,
     noSkills: true,
     additionalSkillPaths: capabilities.enabledSkills(),
-    extensionFactories: [pi => scope.extension(pi), roleFeatures, pi => {
-      pi.on("tool_call",event=>{
-        const readonly=["read","ls","find","grep","current_time","web_search","fetch_url","search_notes","recall_memory"];
-        if(roles.activeId==="planner" && !readonly.includes(event.toolName)) return {block:true,terminate:true,reason:"Planner 仅允许只读调查，请切换 Agent 执行操作"};
-      });
-    }, approvalGate.extension, workingTools, reviewGate, memoryAgent.extension, learningTools.extension, learnerTools,pi=>mcp.extension(pi),contextPolicy.extension,turnRecovery.extension,visualReview.extension],
+    extensionFactories: [pi => scope.extension(pi), roleFeatures, interactiveGeneration.extension, approvalGate.extension, workingTools, reviewGate, memoryAgent.extension, learningTools.extension, learnerTools,pi=>mcp.extension(pi),contextPolicy.extension,turnRecovery.extension,visualReview.extension],
     appendSystemPromptOverride: (base) => {
       const instructions = roles.current()?.system;
       return instructions ? [...base, instructions] : base;
@@ -190,7 +187,7 @@ async function openSession(provider, modelId, sessionManager) {
     agentDir,
     modelRuntime: models,
     model,
-    tools: roles.activeId==="planner" ? ["read","ls","find","grep","current_time","web_search","fetch_url","search_notes"] : [...FILE_TOOLS, "remember_work", "recall_memory", ...(roles.current().learnerProfileEnabled ? ["remember", "record_learning_event"] : []), ...LEARNING_TOOLS,...MCP_TOOLS,...VISUAL_TOOLS],
+    tools: [...(roles.current().interactiveUiEnabled ? [INTERACTIVE_TOOL] : []), ...FILE_TOOLS, "remember_work", "recall_memory", ...(roles.current().learnerProfileEnabled ? ["remember", "record_learning_event"] : []), ...LEARNING_TOOLS,...MCP_TOOLS,...VISUAL_TOOLS],
     customTools: sandboxTools(scope),
     sessionManager,
     settingsManager,

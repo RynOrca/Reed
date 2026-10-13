@@ -32,3 +32,7 @@ header .icon { display:grid; place-items:center; width:34px; height:34px; } main
 .edge-North,.edge-South { left:12px; right:12px; height:5px; cursor:ns-resize; }.edge-North { top:0; }.edge-South { bottom:0; }
 .edge-East,.edge-West { top:12px; bottom:12px; width:5px; cursor:ew-resize; }.edge-East { right:0; }.edge-West { left:0; }
 .edge-NorthEast,.edge-NorthWest,.edge-SouthEast,.edge-SouthWest { width:12px; height:12px; }.edge-NorthEast { top:0;right:0;cursor:nesw-resize; }.edge-NorthWest { top:0;left:0;cursor:nwse-resize; }.edge-SouthEast { bottom:0;right:0;cursor:nwse-resize; }.edge-SouthWest { bottom:0;left:0;cursor:nesw-resize; }
+
+.role-list-row { align-items:center; gap:12px; }
+.role-list-row > strong { min-width:0; overflow-wrap:anywhere; }
+.role-list-actions { display:flex; flex:none; align-items:center; gap:8px; margin-left:auto; }

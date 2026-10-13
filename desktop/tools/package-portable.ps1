@@ -39,6 +39,7 @@ Copy-Item -LiteralPath (Join-Path $agentDir 'role-skills.mjs') -Destination (Joi
 New-Item -ItemType Directory -Force -Path (Join-Path $Output 'agent\interactive-ui') | Out-Null
 Copy-Item -LiteralPath (Join-Path $agentDir 'interactive-ui\artifacts.mjs') -Destination (Join-Path $Output 'agent\interactive-ui\artifacts.mjs') -Force
 Copy-Item -LiteralPath (Join-Path $agentDir 'interactive-ui\protocol.mjs') -Destination (Join-Path $Output 'agent\interactive-ui\protocol.mjs') -Force
+Copy-Item -LiteralPath (Join-Path $agentDir 'interactive-ui\generation.mjs') -Destination (Join-Path $Output 'agent\interactive-ui\generation.mjs') -Force
 Copy-Item -LiteralPath (Join-Path $agentDir 'interactive-ui\fixtures.mjs') -Destination (Join-Path $Output 'agent\interactive-ui\fixtures.mjs') -Force
 Copy-Item -LiteralPath (Join-Path $agentDir 'skills') -Destination (Join-Path $Output 'agent\skills') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $agentDir 'package.json') -Destination (Join-Path $Output 'agent\package.json') -Force

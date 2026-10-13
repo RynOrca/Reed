@@ -113,6 +113,34 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH || 'playwright')
     await touchPage.waitForFunction(() => window.touchState.cut === 2);
     assert.equal(await touchPage.getByRole('slider', { name: '拖动分界线' }).getAttribute('aria-valuenow'), '2');
     await touchPage.close();
+    const skillText=await readFile(path.resolve(__dirname,'../agent/skills/interactive-explanation/SKILL.md'),'utf8');
+    const fewshots=[...skillText.matchAll(/```json\s*([\s\S]*?)```/g)].map(match=>JSON.parse(match[1]));
+    assert.equal(fewshots.length,4);
+    for(const doc of fewshots){
+      await page.evaluate(async documentData=>{
+        const {createInteractiveCard}=await import('/interactive-ui.js');
+        window.fewshotState={...documentData.initialState};
+        document.querySelector('#cards').replaceChildren(createInteractiveCard({artifactId:'fewshot',title:documentData.title,status:'available'}, {load:async()=>({document:documentData,state:window.fewshotState}),save:async(_id,state)=>{window.fewshotState=state;}}));
+      },doc);
+      await page.getByRole('button',{name:'展开'}).click();
+      await page.getByRole('slider').focus();await page.keyboard.press('End');
+      const [key,spec]=Object.entries(doc.stateSchema)[0];
+      await page.waitForFunction(({key,max})=>window.fewshotState[key]===max,{key,max:spec.max});
+      assert.ok(await page.locator('.interactive-feedback').innerText());
+      await page.locator('.interactive-experience button').last().click();
+      await page.waitForFunction(initial=>JSON.stringify(window.fewshotState)===JSON.stringify(initial),doc.initialState);
+    }
+    const preview=await require('./create-interactive-preview.cjs').createPreview();
+    const gallery=await browser.newPage({viewport:{width:1280,height:1100}});
+    const galleryErrors=[];gallery.on('pageerror',error=>galleryErrors.push(error.message));
+    await gallery.goto(require('node:url').pathToFileURL(preview).href);
+    await gallery.locator('.interactive-experience').first().waitFor();
+    assert.equal(await gallery.locator('.interactive-card').count(),4);
+    await require('node:fs/promises').mkdir(path.resolve(__dirname,'../../dist/acceptance'),{recursive:true});
+    await gallery.screenshot({path:path.resolve(__dirname,'../../dist/acceptance/interactive-components-gallery.png'),fullPage:true});
+    await gallery.setViewportSize({width:360,height:740});
+    assert.ok(await gallery.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    assert.deepEqual(galleryErrors,[]);await gallery.close();
     console.log('Interactive card browser checks passed: 4 topics, keyboard, mouse/touch drag, state restoration, reset, missing file and 360px layout.');
   } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

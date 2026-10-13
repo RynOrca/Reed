@@ -4,7 +4,6 @@ import { join } from "node:path";
 
 const builtins = [
   { id: "agent", name: "Agent", system: "你是 Agent，负责理解用户任务、执行获准操作并验证结果。用中文清晰回复，遵守权限范围和当前角色的系统规则。", builtin: true },
-  { id: "planner", name: "Planner", system: "你是 Planner，只负责分析、调查和制定计划。你可以读取资料、检索知识与查看当前时间；不能创建、修改、移动或删除文件，也不能执行有副作用的工具。即使用户要求立即执行，也应输出可执行的步骤与验收条件，说明需要切换 Agent 才能实施。用中文回复。", builtin: true },
   { id: "quick", name: "快捷对话", system: "你是一个简洁、直接的中文助手。", builtin: true },
 ];
 
@@ -21,7 +20,7 @@ export class RoleStore {
   constructor(directory,config=null) {
     this.config=config;
     this.path = join(directory, "roles.json");
-    this.roles = builtins.map((role) => ({ ...role, skills: [], learningGoalsEnabled: false, learnerProfileEnabled: false }));
+    this.roles = builtins.map((role) => ({ ...role, skills: [], learningGoalsEnabled: false, learnerProfileEnabled: false, interactiveUiEnabled: false }));
     this.activeId = "agent";
   }
 
@@ -42,8 +41,9 @@ export class RoleStore {
         builtin.skills = normalizeBindings(role.skills || []);
         builtin.learningGoalsEnabled = role.learningGoalsEnabled === true;
         builtin.learnerProfileEnabled = role.learnerProfileEnabled === true;
+        builtin.interactiveUiEnabled = role.interactiveUiEnabled === true;
       } else if (/^role-[a-z0-9-]{1,64}$/.test(role.id) && this.roles.length < 50) {
-        this.roles.push({ id: role.id, name: role.name.slice(0, 60), system: role.system.slice(0, 20000), builtin: false, skills: normalizeBindings(role.skills || []), learningGoalsEnabled: role.learningGoalsEnabled === true, learnerProfileEnabled: role.learnerProfileEnabled === true });
+        this.roles.push({ id: role.id, name: role.name.slice(0, 60), system: role.system.slice(0, 20000), builtin: false, skills: normalizeBindings(role.skills || []), learningGoalsEnabled: role.learningGoalsEnabled === true, learnerProfileEnabled: role.learnerProfileEnabled === true, interactiveUiEnabled: role.interactiveUiEnabled === true });
       }
     }
     if (this.roles.some((role) => role.id === saved.activeId)) this.activeId = saved.activeId;
@@ -64,20 +64,20 @@ export class RoleStore {
     const system = typeof input.system === "string" ? input.system.trim() : "";
     if (!name || name.length > 60 || system.length > 20000) throw new Error("角色名称或说明长度不合适");
     const skills = input.skills === undefined ? undefined : normalizeBindings(input.skills);
-    for (const key of ["learningGoalsEnabled", "learnerProfileEnabled"]) if (input[key] !== undefined && typeof input[key] !== "boolean") throw new Error("角色功能开关必须为布尔值");
+    for (const key of ["learningGoalsEnabled", "learnerProfileEnabled", "interactiveUiEnabled"]) if (input[key] !== undefined && typeof input[key] !== "boolean") throw new Error("角色功能开关必须为布尔值");
     if (input.roleId) {
       const role = this.roles.find((item) => item.id === input.roleId);
       if (!role) throw new Error("找不到该角色");
       role.name = name;
       role.system = system;
       if (skills !== undefined) role.skills = skills;
-      for (const key of ["learningGoalsEnabled", "learnerProfileEnabled"]) if (input[key] !== undefined) role[key] = input[key];
+      for (const key of ["learningGoalsEnabled", "learnerProfileEnabled", "interactiveUiEnabled"]) if (input[key] !== undefined) role[key] = input[key];
       await this.persist();
       return role.id;
     }
     if (this.roles.length >= 50) throw new Error("角色数量已达到上限");
     const id = `role-${randomUUID()}`;
-    this.roles.push({ id, name, system, builtin: false, skills: skills || [], learningGoalsEnabled: input.learningGoalsEnabled === true, learnerProfileEnabled: input.learnerProfileEnabled === true });
+    this.roles.push({ id, name, system, builtin: false, skills: skills || [], learningGoalsEnabled: input.learningGoalsEnabled === true, learnerProfileEnabled: input.learnerProfileEnabled === true, interactiveUiEnabled: input.interactiveUiEnabled === true });
     await this.persist();
     return id;
   }
