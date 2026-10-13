@@ -56,12 +56,19 @@ test('自动上下文无模型前置等待，已有原文允许直接引用',()=
 
 test('忽略取消的扩词服务也在截止后回退，晚到结果不会进入检索',()=>fixture(async(dir,root)=>{
   await writeFile(join(root,'矩阵.md'),'# 矩阵\n\n线性变换');const caps=new CapabilityStore(dir);caps.state.vaultPath=root;
-  let finish,signalSeen;const phases=[];
-  const retrieve=createNoteRetriever({capabilities:caps,model:()=>({provider:'test',id:'rag'}),expansionTimeoutMs:25,runtime:async()=>({completeSimple:async(_m,_c,options)=>{signalSeen=options.signal;return new Promise(resolve=>finish=resolve);}})});
+  let finish,signalSeen,calls=0;const phases=[];
+  const retrieve=createNoteRetriever({capabilities:caps,model:()=>({provider:'test',id:'rag'}),expansionTimeoutMs:25,runtime:async()=>({completeSimple:async(_m,_c,options)=>{calls++;if(calls>1)return {stopReason:'stop',content:[{type:'text',text:'{"queries":[]}'}]};signalSeen=options.signal;return new Promise(resolve=>finish=resolve);}})});
   const hits=await retrieve('矩阵变换如何理解',{onProgress:p=>phases.push(p.phase)});
   assert.ok(hits.some(h=>h.content.includes('线性变换')));assert.equal(signalSeen.aborted,true);assert.deepEqual(phases,['local','expanding','fallback']);
   finish({stopReason:'stop',content:[{type:'text',text:'{"queries":["秘密旧内容"]}'}]});
-  const again=await retrieve('矩阵变换如何理解');assert.deepEqual(again,hits,'迟到结果不能改写已截止计划');
+  const again=await retrieve('矩阵变换如何理解');assert.deepEqual(again,hits,'迟到结果不能污染后续计划');assert.equal(calls,2,'取消后后续查询可以重试扩词');
+  await retrieve('矩阵变换如何理解');assert.equal(calls,2,'成功的空计划仍缓存，避免重复扩词');
+}));
+
+test('扩词服务错误不缓存为永久空结果，下一次按需查询可恢复',()=>fixture(async(dir,root)=>{
+  await writeFile(join(root,'矩阵.md'),'# 矩阵\n\n线性变换');const caps=new CapabilityStore(dir);caps.state.vaultPath=root;let calls=0;
+  const retrieve=createNoteRetriever({capabilities:caps,model:()=>({provider:'test',id:'rag'}),runtime:async()=>({completeSimple:async()=>{calls++;if(calls===1)throw Error('502');return {stopReason:'stop',content:[{type:'text',text:'{"queries":["矩阵"]}'}]};}})});
+  await retrieve('linear algebra');assert.ok((await retrieve('linear algebra')).some(h=>h.content.includes('线性变换')));assert.equal(calls,2);
 }));
 
 test('不完整扫描保留未检查文件旧索引并暴露扫描状态',()=>fixture(async(dir,root)=>{

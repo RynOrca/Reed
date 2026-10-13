@@ -15,7 +15,7 @@ export function createNoteRetriever({capabilities,runtime,model,expansionTimeout
     const pending=(async()=>{
       const deadline=new AbortController();
       const combined=AbortSignal.any([deadline.signal,...(signal?[signal]:[])]);
-      let timer,onAbort;
+      let timer,onAbort,cacheable=false;
       try{
         const cancelled=new Promise(resolve=>{onAbort=()=>resolve([]);combined.addEventListener('abort',onAbort,{once:true});if(combined.aborted)onAbort();});
         timer=setTimeout(()=>deadline.abort(),expansionTimeoutMs);
@@ -24,10 +24,10 @@ export function createNoteRetriever({capabilities,runtime,model,expansionTimeout
         if(combined.aborted)return [];
         if(['error','aborted','length'].includes(response.stopReason))return [];
         const text=response.content.filter(b=>b.type==='text').map(b=>b.text).join('').trim().replace(/^```(?:json)?\s*|\s*```$/g,'');
-        const queries=JSON.parse(text).queries;return Array.isArray(queries)?[...new Set(queries.filter(q=>typeof q==='string'&&q.trim()&&q.length<=120).map(q=>q.trim()))].slice(0,3):[];
+        const queries=JSON.parse(text).queries;cacheable=Array.isArray(queries);return cacheable?[...new Set(queries.filter(q=>typeof q==='string'&&q.trim()&&q.length<=120).map(q=>q.trim()))].slice(0,3):[];
         })();
         return await Promise.race([completion,cancelled]);
-      }catch{return [];}finally{clearTimeout(timer);combined.removeEventListener('abort',onAbort);}
+      }catch{return [];}finally{clearTimeout(timer);combined.removeEventListener('abort',onAbort);if(!cacheable&&plans.get(key)===pending)plans.delete(key);}
     })();
     plans.set(key,pending);if(plans.size>8)plans.delete(plans.keys().next().value);return pending;
   }
