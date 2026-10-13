@@ -1,5 +1,6 @@
 import { similarTopic, supplement, reviewOnly } from "./memory-match.mjs";
 import { LocalSearchIndex } from './local-search.mjs';
+import { applicableWork, shellEnvironment } from './work-applicability.mjs';
 import { randomUUID } from "node:crypto";
 import { readFile, readdir, rename, stat, writeFile, mkdir, appendFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -11,9 +12,16 @@ const defaultState = () => ({ enabled: { l1: true, l2: true, l3: true, work:true
 const historyCache = new Map();
 function workEnvironment(item){
   const text=`${item.title} ${item.body}`.toLowerCase();
-  const shells=[...new Set((text.match(/powershell|pwsh|\bbash\b|\bzsh\b|\bcmd\b/g)||[]).map(s=>s==='pwsh'?'powershell':s))].sort();
+  const observed=(item.evidenceRefs||[]).map(r=>shellEnvironment(r.shell)).filter(Boolean);
+  const family=shellEnvironment(item.environment)||shellEnvironment(text);
+  const shells=[...new Set(observed.length?observed:family?[family]:[])].sort();
   const paths=item.kind==='path'?[...new Set(text.match(/[a-z]:[\\/][^\s，。；;"']+|\/(?:home|users|opt|usr)\/[^\s，。；;"']+/g)||[])].sort():[];
   return JSON.stringify({shells,paths,scope:item.scope||''});
+}
+function sameEnvironment(a,b){
+  if(!a||!b||a===b)return true;
+  const left=shellEnvironment(a),right=shellEnvironment(b);
+  return !!left&&left===right;
 }
 
 function terms(text) {
@@ -202,18 +210,21 @@ export class MemoryStore {
     if(operation!=='supplement'&&!input.targetId)throw Error('纠正或失效必须指定已有经验 ID');
     const value={kind:input.kind,title:input.title.slice(0,100),body:input.body.slice(0,700),...(typeof input.scope==='string'?{scope:input.scope}:{}),source,updated:new Date().toISOString()};
     for(const field of ['trigger','environment','steps','verification','invalidWhen','evidence'])if(typeof input[field]==='string')value[field]=input[field].slice(0,700);
+    if(Array.isArray(input.validatedCommands))value.validatedCommands=input.validatedCommands.slice(0,12).map(s=>String(s).slice(0,700));
+    if(Array.isArray(input.evidenceRefs))value.evidenceRefs=input.evidenceRefs.slice(0,12).map(({id,tool,ok,command,shell})=>({id,tool,ok,command,shell}));
+    if(typeof input.verificationScope==='string')value.verificationScope=input.verificationScope;
     if(/api[_ -]?key|password|密码|令牌|secret|bearer\s/i.test(JSON.stringify(value)))throw Error("工作记忆不能保存凭据");
-    const candidates=this.state.working.filter(i=>i.status!=='invalidated'&&i.kind===value.kind&&workEnvironment(i)===workEnvironment(value)&&(!i.environment||!value.environment||i.environment===value.environment));
+    const candidates=this.state.working.filter(i=>i.status!=='invalidated'&&i.kind===value.kind&&workEnvironment(i)===workEnvironment(value)&&sameEnvironment(i.environment,value.environment));
     const old=input.targetId?this.state.working.find(i=>i.id===input.targetId):candidates.find(i=>similarTopic(i.title,value.title))||await this.matchWorkTopic?.(value.title,candidates,"title",value.body);
     if(input.targetId&&(!old||old.kind!==value.kind||(old.scope||'')!==(value.scope||'')))throw Error('经验 ID 不存在或不属于当前项目/类型');
-    if(old&&input.targetId&&operation==='supplement'&&(workEnvironment(old)!==workEnvironment(value)||(old.environment&&value.environment&&old.environment!==value.environment)))throw Error('不同环境的方法不能直接补充到同一经验');
+    if(old&&input.targetId&&operation==='supplement'&&(workEnvironment(old)!==workEnvironment(value)||!sameEnvironment(old.environment,value.environment)))throw Error('不同环境的方法不能直接补充到同一经验');
     if(old?.status==='invalidated'&&operation==='supplement')throw Error('已失效经验不能补充，请明确纠正并重新验证');
     if(!allowed()||!this.state.enabled.work||(this.workAllowed&&!this.workAllowed(source)))throw Error("工作记忆写入已关闭或轮次已改变");
     const body=old&&operation==='supplement'?supplement(old.body,value.body,Infinity):value.body;
     if(body.length>4000)throw Error("工作经验条目过长，需要先精简再补充");
     const revision=(old?.revision||0)+1,status=operation==='invalidate'?'invalidated':'active';
     const history=[...(old?.revisions||[])];if(old&&!history.length)history.push({revision:old.revision||1,operation:'legacy',body:old.body,source:old.source,time:old.updated});
-    const corrections=operation==='replace'?{trigger:value.trigger||'',steps:value.steps||body,verification:value.verification||value.evidence||'',invalidWhen:value.invalidWhen||''}:{};
+    const corrections=operation==='replace'?{trigger:value.trigger||'',steps:value.steps||body,verification:value.verification||value.evidence||'',invalidWhen:value.invalidWhen||'',validatedCommands:value.validatedCommands||[],evidenceRefs:value.evidenceRefs||[],verificationScope:value.verificationScope||'legacy-unverified'}:{};
     history.push({...value,...corrections,revision,operation,body,evidence:value.evidence||'',source,time:value.updated});
     const record={...old,...value,...corrections,id:old?.id||randomUUID(),title:old?.title||value.title,body,status,revision,revisions:history};
     if(old)Object.assign(old,record);else this.state.working.push(record);
@@ -239,8 +250,7 @@ export class MemoryStore {
   }
   workItems(scope=''){const normalize=s=>process.platform==='win32'?s.replaceAll('/','\\').toLowerCase():s;return this.state.enabled.work?this.state.working.filter(i=>i.status!=='invalidated'&&(!i.scope||normalize(i.scope)===normalize(scope||''))):[];}
   workMatches(query,scope='',shellHint=''){
-    const shells=shellHint?[shellHint]:[...new Set((query.toLowerCase().match(/powershell|pwsh|\bbash\b|\bzsh\b|\bcmd\b/g)||[]).map(s=>s==='pwsh'?'powershell':s))];
-    const allItems=this.workItems(scope),items=allItems.filter(i=>{const saved=JSON.parse(workEnvironment(i)).shells;return shells.length!==1||!saved.length||saved.includes(shells[0]);});if(!items.length)return [];
+    const allItems=this.workItems(scope),items=allItems.filter(i=>applicableWork(i,shellHint||query));if(!items.length)return [];
     let index;
     try{
       index=new LocalSearchIndex(join(this.path,'..','local-search.sqlite'));
