@@ -51,9 +51,17 @@ export class CapabilityStore {
   }
   async toggleSkill(id,enabled) { const s=this.state.skills.find(s=>s.id===id); if(!s) throw new Error("技能不存在"); s.enabled=!!enabled; await this.persist(); }
   enabledSkills() { return this.state.skills.filter(s=>s.enabled).map(s=>s.path); }
+  async browseNotes(offset=0) {
+    if(!this.state.vaultPath)return {results:[],next:null,total:0};
+    if(!Number.isSafeInteger(offset)||offset<0)throw Error("浏览位置无效");
+    const root=this.state.vaultPath,files=(await walk(root,p=>extname(p).toLowerCase()===".md"&&basename(p)!=="Reed-笔记库总览.md")).sort((a,b)=>relative(root,a.path).localeCompare(relative(root,b.path),"zh-CN"));
+    const readable=[];for(const file of files)if(file.size<=1024*1024&&(!this.canRead||await this.canRead(file.path)))readable.push(file);
+    const results=[];for(const file of readable.slice(offset,offset+5)){const body=await readFile(file.path,"utf8");results.push({path:file.path,title:relative(root,file.path),content:body.slice(0,400),url:`summon-file:${encodeURIComponent(file.path)}`});}
+    return {results,total:readable.length,next:offset+results.length<readable.length?offset+results.length:null};
+  }
   async searchNotes(query,limit=4) {
     if(!this.state.vaultPath) return [];
-    const root=this.state.vaultPath, files=await walk(root,p=>extname(p).toLowerCase()===".md"), active=new Set(files.map(f=>f.path));
+    const root=this.state.vaultPath, files=await walk(root,p=>extname(p).toLowerCase()===".md"&&basename(p)!=="Reed-笔记库总览.md"), active=new Set(files.map(f=>f.path));
     for(const p of this.cache.keys()) if(!active.has(p)) this.cache.delete(p);
     const needles=terms(query); if(!needles.length) return [];
     const hits=[];

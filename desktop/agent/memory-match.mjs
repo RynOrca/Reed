@@ -21,7 +21,7 @@ export function semanticMatcher({runtime,model,allowed=()=>true}) {
   return async (title,items,key,detail='')=>{
     const local=items.find(i=>similarTopic(title,i[key]));if(local)return local;
     if(!items.length||!allowed()||!model())return null;
-    const choices=items.slice(-40);
+    const choices=items.slice(-50);
     const candidates=choices.map((item,index)=>({index,title:item[key],detail:String(item.content||item.detail||item.body||'').slice(0,120)}));
     try {
       const api=await runtime();

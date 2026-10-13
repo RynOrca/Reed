@@ -47,10 +47,13 @@ test("cancelled background consolidation cannot write delayed results", async ()
 test("real PI bridge: discover, stream, remember, background memory, projects and restart", { timeout: 60000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "summon-full-flow-"));
   const requests = [];
+  let overviewRequests=0;
   const server = createServer(async (request, response) => {
     if (request.url === "/v1/models") { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ data: [{ id: "test-model", context_length: 65536, supports_reasoning: true, reasoning_efforts: ["off", "low", "high"] },{id:"unknown-model",context_length:65536}] })); return; }
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
-    const body = JSON.parse(Buffer.concat(chunks).toString()); if(!body.messages.some(m=>/笔记库导航整理器|根据分批笔记浏览结果|合并笔记目录导航/.test(typeof m.content==="string"?m.content:"")))requests.push(body);
+    const body = JSON.parse(Buffer.concat(chunks).toString());
+    if(body.messages.some(m=>/笔记库导航整理器|根据分批笔记浏览结果|合并笔记目录导航/.test(typeof m.content==='string'?m.content:'')))overviewRequests++;
+    if(!body.messages.some(m=>/笔记库导航整理器|根据分批笔记浏览结果|合并笔记目录导航|个人笔记检索规划器|工作经验整理器/.test(typeof m.content==="string"?m.content:"")))requests.push(body);
     if (body.messages.some(m => m.role === "user" && JSON.stringify(m.content).includes("模拟鉴权失败"))) {
       response.writeHead(401, { "content-type": "application/json" }); response.end(JSON.stringify({ error: { message: "isolated authentication failure", type: "authentication_error" } })); return;
     }
@@ -59,7 +62,9 @@ test("real PI bridge: discover, stream, remember, background memory, projects an
     const lastUser=body.messages.filter(m=>m.role==="user").at(-1);
     if(JSON.stringify(lastUser?.content).includes("QUEUE_START")) await new Promise(r=>setTimeout(r,500));
     let delta, finish;
-    if (body.messages.some(m=>typeof m.content==='string'&&m.content.includes('记忆价值审查器'))) {
+    if(body.messages.some(m=>typeof m.content==='string'&&m.content.includes('个人笔记检索规划器'))){delta={content:'{"queries":["线性代数"]}'};finish='stop';}
+    else if(body.messages.some(m=>typeof m.content==='string'&&m.content.includes('工作经验整理器'))){delta={content:'{"items":[]}'};finish='stop';}
+    else if (body.messages.some(m=>typeof m.content==='string'&&m.content.includes('记忆价值审查器'))) {
       const payload=JSON.parse(typeof lastUser.content==='string'?lastUser.content:lastUser.content.filter(b=>b.type==='text').map(b=>b.text).join(''));
       delta={content:JSON.stringify({decisions:payload.candidates.map(c=>({id:c.id,supported:c.area!=='notes',durable:true,useful:c.area!=='notes',requested:false,confidence:0.95}))})};finish='stop';
     } else if (consolidating) { delta = { content: '{"facts":[{"key":"学习目标","content":"学习线性代数"}],"notes":[{"title":"矩阵","body":"矩阵用于表示线性变换。"}],"learningEvents":[{"kind":"goal","subject":"线性代数","detail":"学习线性代数","evidence":"我在学习线性代数","status":"active"}]}' }; finish = "stop"; }
@@ -162,8 +167,14 @@ test("real PI bridge: discover, stream, remember, background memory, projects an
     const list = await command("list_sessions");
     assert.ok(list.sessions.some(m => m.id === first && m.projectPath === null));
     assert.ok(list.sessions.some(m => m.projectPath === project));
-    await command("open_session", { sessionId: first }); await stop();
-    start(); await until(m => m.type === "ready"); await command("init");
+    await command("open_session", { sessionId: first });
+    await until(m=>m.type==='vault_overview'&&m.state==='ready');
+    const overviewBody=await readFile(join(vault,'Reed-笔记库总览.md'),'utf8'),overviewCalls=overviewRequests;
+    await stop();
+    start(); await until(m => m.type === "ready");
+    assert.equal(messages.find(m=>m.type==='vault_overview').state,'ready','进程就绪前恢复总览，不能先显示空状态');
+    await command("init");await command('get_state');
+    assert.equal(overviewRequests,overviewCalls,'重启不得重复调用总览模型');assert.equal(await readFile(join(vault,'Reed-笔记库总览.md'),'utf8'),overviewBody);
     assert.deepEqual(messages.filter(m=>m.type==="agent_capabilities").at(-1).customReadOnly,[readonly]);
     await command("remove_readonly",{path:readonly});assert.deepEqual(messages.filter(m=>m.type==="agent_capabilities").at(-1).customReadOnly,[]);
     assert.equal(messages.filter(m => m.type === "session").at(-1).sessionId, first);

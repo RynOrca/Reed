@@ -90,6 +90,7 @@ const scope = new FileScope({ workspace: () => cwd, readOnly: () => [capabilitie
 ] });
 capabilities.canRead = async path => {try {await scope.check(path);return true;}catch{return false;}};
 const vaultOverview = new VaultOverview({capabilities,runtime:getRuntime,model:()=>session?.model,send,canRead:capabilities.canRead});
+await vaultOverview.restore();
 const visualReview = createVisualReview({ scope, send, enabled: () => capabilities.state.browserEnabled });
 const mcp=new LazyMcp({config:userConfig,scope,send});await mcp.load();
 const approvalGate = createApprovalGate(send, undefined, () => security.approval);
@@ -103,7 +104,7 @@ const preparedSkills=new Map(),preparedReviews=new Set();
 let reviewReadKey=null;
 const lastUserPrompt=()=>{const u=session?.state.messages.findLast(m=>m.role==="user");return typeof u?.content==="string"?u.content:(u?.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");};
 const reviewEnabled=(prompt=lastUserPrompt())=>reviewReadKey===session?.sessionId+"\n"+prompt||preparedReviews.has(roles.activeId+"\n"+prompt);
-const workingTools=workMemoryExtension({memory,learner,roles,currentSession:()=>session,reviewEnabled,send,judgeValue});
+const workingTools=workMemoryExtension({memory,learner,roles,currentSession:()=>session,reviewEnabled,send,judgeValue,runtime:getRuntime,currentWorkspace:()=>cwd});
 const reviewGate=pi=>pi.on("tool_result",event=>{
   if(event.toolName!=="read"||event.isError||!roles.current().learnerProfileEnabled)return;
   const skill=capabilities.state.skills.find(s=>s.name==="spaced-review"&&s.enabled&&roles.current().skills.some(b=>b.skillId===s.id));
@@ -117,9 +118,9 @@ async function prepareSkills(text) {
   if(hasRequiredReview(roles.current(),capabilities,text))preparedReviews.add(key);
   if(preparedSkills.size>100){const oldest=preparedSkills.keys().next().value;preparedSkills.delete(oldest);preparedReviews.delete(oldest);}
 }
-const learningTools = createLearningTools({ capabilities, currentWorkspace: () => cwd, roles, send, scope, vaultOverview, roleSkillInstructions: prompt=>preparedSkills.get(roles.activeId+'\n'+prompt)||'' });
+const learningTools = createLearningTools({ capabilities, currentWorkspace: () => cwd, roles, send, scope, vaultOverview,runtime:getRuntime,model:()=>session?.model, roleSkillInstructions: prompt=>preparedSkills.get(roles.activeId+'\n'+prompt)||'' });
 const learnerTools = learnerExtension({ learner, memory, judgeValue, currentSession: () => session, send, enabled:()=>roles.current().learnerProfileEnabled === true });
-const roleFeatures = roleFeatureExtension({roles,goals,project:()=>projectPath,learner,memory,currentSession:()=>session,reviewEnabled});
+const roleFeatures = roleFeatureExtension({roles,goals,project:()=>projectPath,workspace:()=>cwd,learner,memory,currentSession:()=>session,reviewEnabled});
 let generationStart = null, firstDelta = null, outputTokens = 0, generationMs = 0, missingUsage = false;
 function emitTelemetry() {
   const model = session?.model;
@@ -150,6 +151,7 @@ async function getRuntime() {
 
 async function openSession(provider, modelId, sessionManager) {
   memoryAgent.cancel();
+  workingTools.cancel();
   if (!sessionManager) {
     if (session) sessionManager = session.sessionManager;
     else {
@@ -371,6 +373,8 @@ async function handle(command) {
       }
       case "search_notes":
         send({ type: "ack", id, results: await capabilities.searchNotes(command.query || "", 8) }); break;
+      case "browse_notes":
+        send({type:"ack",id,...await capabilities.browseNotes(command.offset)});break;
       case "skill_detail": {
         const skill = capabilities.state.skills.find(s => s.id === command.skillId);
         if (!skill) throw new Error("技能不存在");
@@ -647,7 +651,7 @@ async function handle(command) {
             if (lastAssistant) session.sessionManager.appendCustomEntry("reed_turn_verification", { messageEntryId: lastAssistant.id, outcome, review: visualReview.snapshot() });
           }
           send({ type: "done", id, outcome });
-          if (outcome.status === "complete") memoryAgent.schedule();
+          if (outcome.status === "complete") {memoryAgent.schedule();void workingTools.consolidate();}
         } finally {
           turnRecovery.end();
           busy = false;
@@ -688,6 +692,7 @@ for await (const line of createInterface({ input: process.stdin })) {
 }
 await queue;vaultOverview.cancel();await mcp.closeAll();
 memoryAgent.cancel();
+workingTools.cancel();
 learningTools.close();
 session?.dispose();
 approvalGate.cancel("Agent 进程已退出");

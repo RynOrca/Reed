@@ -8,6 +8,12 @@ const MAX_NOTES = 100;
 const MAX_NOTE_BODY = 20000;
 const defaultState = () => ({ enabled: { l1: true, l2: true, l3: true, work:true }, profile: "", facts: [], notes: [], working: [] });
 const historyCache = new Map();
+function workEnvironment(item){
+  const text=`${item.title} ${item.body}`.toLowerCase();
+  const shells=[...new Set((text.match(/powershell|pwsh|\bbash\b|\bzsh\b|\bcmd\b/g)||[]).map(s=>s==='pwsh'?'powershell':s))].sort();
+  const paths=item.kind==='path'?[...new Set(text.match(/[a-z]:[\\/][^\s，。；;"']+|\/(?:home|users|opt|usr)\/[^\s，。；;"']+/g)||[])].sort():[];
+  return JSON.stringify({shells,paths,scope:item.scope||''});
+}
 
 function terms(text) {
   const normalized = String(text).toLowerCase();
@@ -95,7 +101,7 @@ export class MemoryStore {
       typeof note?.id === "string" && typeof note.title === "string" && typeof note.body === "string")
       .slice(0, MAX_NOTES).map((note) => ({ id: note.id, title: note.title.slice(0, 100), body: note.body.slice(0, MAX_NOTE_BODY), source: note.source, updated: note.updated, reviewOnly:note.reviewOnly===true })) : [];
     for(const [list,key,body] of [["facts","key","content"],["notes","title","body"],["working","title","body"]]) {
-      const merged=[];for(const item of this.state[list]){const old=merged.find(i=>similarTopic(i[key],item[key])&&(list!=="working"||i.kind===item.kind));if(old)Object.assign(old,{[body]:supplement(old[body],item[body],list==="notes"?MAX_NOTE_BODY:700),updated:item.updated||old.updated});else merged.push(item);}this.state[list]=merged;
+      const merged=[];for(const item of this.state[list]){const old=merged.find(i=>similarTopic(i[key],item[key])&&(list!=="working"||(i.kind===item.kind&&workEnvironment(i)===workEnvironment(item))));if(old)Object.assign(old,{[body]:supplement(old[body],item[body],list==="notes"?MAX_NOTE_BODY:list==="working"?4000:700),updated:item.updated||old.updated});else merged.push(item);}this.state[list]=merged;
     }
     this.state.profile=this.state.facts.map(f=>`${f.key}：${f.content}`).join("\n").slice(0,MAX_PROFILE);
   }
@@ -178,17 +184,19 @@ export class MemoryStore {
     await this.persist();
   }
 
-  async rememberWork(input,source) {
+  async rememberWork(input,source,{allowed=()=>true}={}) {
     if(!this.state.enabled.work)return;
     if(!["path","shell","workflow"].includes(input.kind)||typeof input.title!=="string"||typeof input.body!=="string")throw Error("工作记忆格式无效");
-    const value={kind:input.kind,title:input.title.slice(0,100),body:input.body.slice(0,700),source,updated:new Date().toISOString()};
+    const value={kind:input.kind,title:input.title.slice(0,100),body:input.body.slice(0,700),...(typeof input.scope==='string'?{scope:input.scope}:{}),source,updated:new Date().toISOString()};
     if(/api[_ -]?key|password|密码|令牌|secret|bearer\s/i.test(value.body))throw Error("工作记忆不能保存凭据");
-    const old=this.state.working.find(i=>i.kind===value.kind&&similarTopic(i.title,value.title))||await this.matchWorkTopic?.(value.title,this.state.working.filter(i=>i.kind===value.kind),"title",value.body);
-    if(!this.state.enabled.work||(this.workAllowed&&!this.workAllowed(source)))throw Error("工作记忆写入已关闭");
-    if(old)Object.assign(old,{...value,title:old.title,body:supplement(old.body,value.body,700)});else{this.state.working.push(value);this.state.working=this.state.working.slice(-50);}
+    const candidates=this.state.working.filter(i=>i.kind===value.kind&&workEnvironment(i)===workEnvironment(value));
+    const old=candidates.find(i=>similarTopic(i.title,value.title))||await this.matchWorkTopic?.(value.title,candidates,"title",value.body);
+    if(!allowed()||!this.state.enabled.work||(this.workAllowed&&!this.workAllowed(source)))throw Error("工作记忆写入已关闭或轮次已改变");
+    if(old){const body=supplement(old.body,value.body,Infinity);if(body.length>4000)throw Error("工作经验条目过长，需要先精简再补充");Object.assign(old,{...value,title:old.title,body});}else{this.state.working.push(value);this.state.working=this.state.working.slice(-50);}
     await this.persist();
   }
-  workContext(query){if(!this.state.enabled.work)return "";return this.state.working.map(i=>({i,score:score(query,i.title+" "+i.body)})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score).slice(0,3).map(({i})=>`${i.title}：${i.body.slice(0,240)}`).join("\n").slice(0,800);}
+  workItems(scope=''){const normalize=s=>process.platform==='win32'?s.replaceAll('/','\\').toLowerCase():s;return this.state.enabled.work?this.state.working.filter(i=>!i.scope||normalize(i.scope)===normalize(scope||'')):[];}
+  workContext(query,scope=''){return this.workItems(scope).map(i=>({i,score:score(query,i.title+" "+i.body)})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score).slice(0,3).map(({i})=>`${i.title}：${i.body.slice(0,700)}`).join("\n").slice(0,2400);}
   recallNotes(query,{review=false}={}){if(!this.state.enabled.l2)return [];return this.state.notes.filter(n=>(review||!(n.reviewOnly||reviewOnly(n.title+" "+n.body)))&&score(query,n.title+" "+n.body)>0).sort((a,b)=>score(query,b.title+" "+b.body)-score(query,a.title+" "+a.body)).slice(0,3);}
   async context(query, currentSessionId, {review=false}={}) {
     const parts=[];

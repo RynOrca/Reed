@@ -8,6 +8,21 @@ const tauri = window.__TAURI__;
 await initBrand(tauri);
 let sequence = 0, templates = [], providers = [], editing = null, providerId = null, recording = false, savedShortcut = "", memory = {}, roleId = null;
 const pending = new Map();
+let browseRoot=null,browseNext=0,browseVersion=0,browseBusy=false;
+const browseList=element("div"),browseMore=element("button","继续浏览","secondary"),browseStatus=element("p","","hint");
+browseList.id="vault-browse";browseMore.id="vault-browse-more";browseMore.type="button";browseMore.hidden=true;
+$("vault-results").after(browseList,browseMore,browseStatus);
+browseMore.onclick=()=>action(()=>browseNotes());
+async function browseNotes(reset=false){
+  if(reset){browseVersion++;browseBusy=false;browseNext=0;browseList.replaceChildren();browseMore.hidden=true;browseStatus.textContent="";}
+  if(!browseRoot||browseBusy||browseNext===null)return;
+  const version=browseVersion,offset=browseNext;browseBusy=true;browseMore.disabled=true;
+  try{const reply=await command("browse_notes",{offset});if(version!==browseVersion)return;
+    for(const hit of reply.results||[]){const row=element("div",undefined,"card"),link=element("button",hit.title,"note-link");link.onclick=()=>action(async()=>{const file=await command("resolve_file",{path:hit.url});await tauri.core.invoke("open_local_file",{path:file.path});});row.append(link,element("p",hit.content,"note-excerpt"));browseList.append(row);}
+    browseNext=reply.next;browseMore.hidden=browseNext===null;browseStatus.textContent=reply.total?`已展示 ${offset+reply.results.length} / ${reply.total} 篇${browseNext===null?"，已全部展示。":""}`:"笔记库暂无可浏览的 Markdown 笔记。";
+  }catch(error){if(version===browseVersion){browseMore.hidden=false;browseStatus.textContent=`浏览失败：${error.message}，点击继续浏览重试。`;}}
+  finally{if(version===browseVersion){browseBusy=false;browseMore.disabled=false;}}
+}
 function notice(text, error = false) { $("notice").hidden = !text; $("notice").textContent = text; $("notice").classList.toggle("error", error); }
 async function action(work) { try { await work(); } catch (error) { notice(String(error.message || error), true); } }
 function command(type, args = {}) {
@@ -39,6 +54,7 @@ $("file-access").onchange = () => action(async()=>{try { await command("set_file
 let capabilities = {};
 function element(tag, text, className) { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (className) e.className = className; return e; }
 function renderCapabilities(state) {
+  if(browseRoot!==(state.vaultPath||null)){browseRoot=state.vaultPath||null;void browseNotes(true);}
   capabilities = state;
   roleSkills.update(state.skills || []);
   $("vault-path").textContent = state.vaultPath || "未选择笔记库";
@@ -155,10 +171,16 @@ $("discover").onclick = () => action(async () => {
   finally { $("discover").disabled = false; }
 });
 $("manual-save").onclick = () => action(async () => {
+  const button=$("manual-save");button.disabled=true;button.textContent="保存中…";
+  try{
   await saveProvider(); const value = $("manual-reasoning").value;
   const model = { id: $("manual-model").value.trim(), vision:$("manual-vision").checked, ...($("manual-context").value ? { contextWindow: Number($("manual-context").value) } : {}), ...($("manual-output").value ? { maxTokens: Number($("manual-output").value) } : {}), ...(value !== "unknown" ? { reasoning: value === "yes" } : {}), thinkingFormat: $("thinking-format").value };
   if ($("manual-levels").value.trim()) model.thinkingLevels = $("manual-levels").value.split(/[,，\s]+/).filter(Boolean);
-  await command("update_model", { providerId, model }); notice("模型信息已保存。");
+  await command("update_model", { providerId, model });
+  document.querySelector(".advanced").open=false;$("provider-form").hidden=true;editing=null;providerId=null;
+  notice(`模型 ${model.id} 信息已保存。`);$("notice").scrollIntoView({block:"nearest"});
+  }catch(error){notice(`保存失败：${error.message}`,true);$("notice").scrollIntoView({block:"nearest"});}
+  finally{button.disabled=false;button.textContent="保存模型信息";}
 });
 $("cancel-provider").onclick = () => { $("provider-form").hidden = true; editing = null; providerId = null; };
 function deletionButton(label, work) {
@@ -303,7 +325,7 @@ function syncMcpTransport(){const http=$("mcp-transport").value==="http";$("mcp-
 $("mcp-transport").onchange=syncMcpTransport;syncMcpTransport();
 
 let overviewPath=null;
-function renderOverview(info){overviewPath=info.path||null;const working=["scanning","generating"].includes(info.state);const status=info.state==="ready"?"总览已保存，后续对话将使用科目与目录导航。":info.message||"连接笔记库后自动生成。";$("vault-overview-status").textContent=status;$("generate-overview").disabled=working;$("cancel-overview").hidden=!working;$("open-overview").hidden=info.state!=="ready"||!overviewPath;}
+function renderOverview(info){overviewPath=info.path||null;const working=["scanning","generating"].includes(info.state);const status=info.state==="ready"?`总览已保存${info.model?` · ${info.model}`:" · 历史文件未记录模型"}。后续对话将使用科目与目录导航。\n${overviewPath}`:info.message||"连接笔记库后自动生成。";$("vault-overview-status").textContent=status;$("generate-overview").disabled=working;$("cancel-overview").hidden=!working;$("open-overview").hidden=info.state!=="ready"||!overviewPath;}
 $("generate-overview").onclick=()=>action(()=>command("generate_vault_overview"));
 $("cancel-overview").onclick=()=>action(()=>command("cancel_vault_overview"));
 $("open-overview").onclick=()=>action(async()=>{if(overviewPath){const r=await command("resolve_file",{path:overviewPath});await tauri.core.invoke("open_local_file",{path:r.path});}});
