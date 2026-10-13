@@ -13,7 +13,7 @@ description: 在 Reed 对话中用原生组件组合可操作的教学讲解。
 
 ## 完整算法执行优先使用确定性轨迹
 
-用户要「完整快排过程」「跟随代码」「每次比较交换」「递归调用」时，不用静态 ArrayTrack 假装排序。使用 algorithm 模式，Reed 按版本固定的代码计算全过程，模型只指定输入和讲解重点。当前只支持 `quicksort-lomuto-v1`：JavaScript Lomuto 分区，最右元素作枢轴、严格小于比较、先左后右递归。卡片显示实际对应代码、变量、数组和调用栈，允许更改输入和控制播放。
+用户要「完整快排过程」「跟随代码」「每次比较交换」「递归调用」时，不用静态 ArrayTrack 假装排序。使用 algorithm 模式，Reed 按版本固定的代码计算全过程，模型只指定输入和讲解重点。快排版本为 `quicksort-lomuto-v1`：JavaScript Lomuto 分区，最右元素作枢轴、严格小于比较、先左后右递归。卡片显示实际对应代码、变量、数组和调用栈，允许更改输入和控制播放。
 
 input 允许 0–12 个 -999 至 999 的整数。不要提交代码、执行轨迹、stateSchema、nodes 或 initialState；轨迹由宿主计算。模型传入的 question 只做问题引导，不控制执行。如果用户提供的代码不是这个版本（如 Hoare、三路分区、首元素枢轴），先说明现有演示的实现差别，不能声称逐行执行了用户原代码。任意代码执行不在此能力范围。
 
@@ -86,3 +86,33 @@ input 允许 0–12 个 -999 至 999 的整数。不要提交代码、执行轨�
 {"schemaVersion":1,"mode":"components","title":"Attention：温度如何改变权重？","question":"固定注意力分数 [1,2,0]，调节温度观察 softmax(score/T)。","source":{"kind":"illustrative","label":"模型生成教学示例 · 待核验"},"stateSchema":{"temperature":{"min":1,"max":3}},"initialState":{"temperature":1},"nodes":[{"id":"plot","type":"Plot","props":{"label":"softmax(score/T)，按三位小数显示","max":1,"variantState":"temperature","valuesByState":{"1":[{"label":"词 A","value":0.245},{"label":"词 B","value":0.665},{"label":"词 C","value":0.09}],"2":[{"label":"词 A","value":0.307},{"label":"词 B","value":0.506},{"label":"词 C","value":0.186}],"3":[{"label":"词 A","value":0.322},{"label":"词 B","value":0.449},{"label":"词 C","value":0.23}]}}},{"id":"slider","type":"DiscreteSlider","props":{"label":"温度 T","state":"temperature","labels":["T=1","T=2","T=3"]}},{"id":"feedback","type":"ChoiceFeedback","props":{"state":"temperature","cases":[{"value":1,"reason":"词B权重约为0.665，较高分数占较大权重。"},{"value":2,"reason":"词B降到约0.506，分布更平。"},{"value":3,"reason":"词B约0.449，权重更接近均匀；分数排序仍不变。"}]}},{"id":"reveal","type":"StageReveal","props":{"state":"temperature","equals":3,"title":"推理边界","body":"这里只改变 softmax 温度，不改变查询、键、值向量；数值为三位小数近似，和可能不恰为1。"}},{"id":"reset","type":"Reset","props":{"label":"重置温度"}}]}
 ```
 成功后简短说明卡片操作及简化范围，不宣称用户已掌握。
+
+## 堆排序与数学：先选择内置计算模型
+
+当前另有 `heapsort-max-v1`：大顶堆、从最后一个非叶节点自底向上建堆、迭代 siftDown、反复交换堆顶与末尾。它复用算法播放器并提供数组/有效堆二叉树双视图；排序尾部退出树。不要把它冒充小顶堆或其他源码版本。input 限制与快排相同。
+
+数学使用 `mode: math`，不是 components 条形图。文档只含 schemaVersion、mode、math、title、question、source、initialState；不接收表达式、代码或模型生成采样点。`quadratic-v1` 表示 y=a(x−h)²+k，initialState 必须恰有 a∈[-3,3]、h,k∈[-4,4]、x∈[-5,5]。Reed 计算曲线、顶点、函数值与导数斜率，允许拖动探查位置。a=0 是常数函数，不称其有唯一顶点。
+
+`linear-transform-2d-v1` 的 initialState 必须恰有 a,b,c,d,vx,vy∈[-3,3]，t∈[0,1]；矩阵按行 A=[[a,b],[c,d]]，v=(vx,vy)，当前显示 B(t)=(1−t)I+tA。显示目标与当前变换、基向量、单位方形的像、行列式与面积缩放。det A 的符号表示目标方向，|det A| 表示目标面积倍率；det B(t) 是当前插值矩阵，两者不能混淆。插值可能经过奇异矩阵，即使目标可逆。当前不支持任意函数表达式、三维或任意维矩阵；遇到不支持的题目用文字说明，不能伪造图形能力。
+
+### 完整堆排序 few-shot
+用户：用二叉树完整展示 [4,10,3,5,1] 的堆排序，比较和交换要与代码同步。
+工具 generate_learning_ui 的 document 内容：
+```json
+{"schemaVersion":1,"mode":"algorithm","algorithm":"heapsort-max-v1","title":"堆排序：数组与二叉树同步执行","question":"观察自底向上建大顶堆、下沉及最大值退出有效堆的全过程。","source":{"kind":"illustrative","label":"确定性代码执行轨迹 · 大顶堆"},"input":[4,10,3,5,1]}
+```
+
+### 函数图 few-shot
+用户：二次函数的 a、h、k 分别怎样影响曲线？能看切线吗？
+工具 generate_learning_ui 的 document 内容：
+```json
+{"schemaVersion":1,"mode":"math","math":"quadratic-v1","title":"二次函数：参数怎样改变曲线？","question":"调节参数并拖动探查位置，观察顶点、函数值与切线斜率。","source":{"kind":"illustrative","label":"确定性函数计算"},"initialState":{"a":1,"h":0,"k":0,"x":1}}
+```
+
+### 线性代数 few-shot
+用户：矩阵 [[1,1],[0,1]] 为什么叫剪切？面积为什么不变？
+工具 generate_learning_ui 的 document 内容：
+```json
+{"schemaVersion":1,"mode":"math","math":"linear-transform-2d-v1","title":"二维线性变换：剪切与面积","question":"改变矩阵和变换进度，观察网格、基向量与单位正方形的像。","source":{"kind":"illustrative","label":"确定性矩阵计算"},"initialState":{"a":1,"b":1,"c":0,"d":1,"vx":1,"vy":1,"t":1}}
+```
+成功后指出默认剪切矩阵 det A=1，保持有向面积；更换参数后据实际值解释。图中超出固定视窗的部分会裁切，不能据可见面积估计行列式。

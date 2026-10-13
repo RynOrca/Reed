@@ -1,13 +1,17 @@
-import { createQuicksortTrace, QUICKSORT_CODE, validSortInput } from './quicksort-trace.mjs';
+import { validSortInput } from './quicksort-trace.mjs';
+import { EXECUTION_ENGINES } from './execution-traces.mjs';
+import { createBinaryTree } from './learning-svg.js';
 
 export function createAlgorithmPlayer(documentData, savedState, onChange) {
   const make = (tag, cls, text) => { const item = document.createElement(tag); if (cls) item.className = cls; if (text !== undefined) item.textContent = text; return item; };
+  const engine=EXECUTION_ENGINES[documentData.algorithm];
+  if(!engine)throw new Error('未知算法版本');
   let input = [...(validSortInput(savedState?.input) ? savedState.input : documentData.input)];
-  let trace = createQuicksortTrace(input), step = Math.min(Math.max(0, savedState?.step || 0), trace.length - 1);
+  let trace = engine.trace(input), step = Math.min(Math.max(0, savedState?.step || 0), trace.length - 1);
   let playing = false, timer = null, speed = 700;
   const root = make('div', 'algorithm-player');
   const intro = make('p', 'interactive-question', documentData.question);
-  const convention = make('p', 'algorithm-convention', 'Lomuto 分区 · 末尾元素为枢轴 · 严格小于 · 索引从 0 开始');
+  const convention = make('p', 'algorithm-convention', engine.convention);
   const controls = make('div', 'algorithm-controls');
   const button = (text, action) => { const b = make('button', '', text); b.type = 'button'; b.onclick = action; return b; };
   const persist = () => onChange({ step, input: [...input] });
@@ -37,12 +41,15 @@ export function createAlgorithmPlayer(documentData, savedState, onChange) {
   const layout = make('div', 'algorithm-layout'), view = make('div', 'algorithm-view'), codePanel = make('div', 'algorithm-code-panel');
   view.append(make('h4', '', '数组与变量'));
   const array = make('div', 'algorithm-array'), variables = make('dl', 'algorithm-variables');
-  const legend = make('p', 'algorithm-legend', '金色：枢轴　蓝色：本步涉及　绿色：最终位置　淡色：当前区间外');
+  variables.style.gridTemplateColumns=`repeat(${engine.variables.length},minmax(0,1fr))`;
+  const legend = make('p', 'algorithm-legend', engine.tree?'蓝色：本步涉及　绿色：已排序并退出堆　淡色：有效堆区间外':'金色：枢轴　蓝色：本步涉及　绿色：最终位置　淡色：当前区间外');
+  const tree = make('div','algorithm-tree');
+  if(engine.tree)view.append(make('h4','','有效堆 · 节点标注数组索引'),tree);
   const stack = make('ol', 'algorithm-stack');
   view.append(array, legend, variables, make('h4', '', '调用栈 · 栈顶在下'), stack);
   codePanel.append(make('h4', '', '正在执行的 JavaScript'));
   const code = make('ol', 'algorithm-code');
-  const codeLines = QUICKSORT_CODE.map(line => { const li = make('li'); li.append(make('code', '', line)); code.append(li); return li; }); codePanel.append(code);
+  const codeLines = engine.code.map(line => { const li = make('li'); li.append(make('code', '', line)); code.append(li); return li; }); codePanel.append(code);
   layout.append(view, codePanel);
   const form = make('form', 'algorithm-input-form'), label = make('label', '', '换一个输入数组');
   const field = make('input'); field.type = 'text'; field.value = input.join(', '); field.maxLength = 100; field.placeholder = '例如 7, 3, 9, 2, 5'; field.setAttribute('aria-label', '输入数组');
@@ -55,7 +62,7 @@ export function createAlgorithmPlayer(documentData, savedState, onChange) {
     const parts = raw ? raw.split(/[,，\s]+/) : [];
     const candidate = parts.map(value => /^-?\d+$/.test(value) ? Number(value) : NaN);
     if (!validSortInput(candidate)) { error.textContent = '请输入 0–12 个 -999 至 999 的整数，以逗号或空格分隔。'; return; }
-    error.textContent = ''; input = candidate; trace = createQuicksortTrace(input); step = 0; progress.max = trace.length - 1; render(); persist();
+    error.textContent = ''; input = candidate; trace = engine.trace(input); step = 0; progress.max = trace.length - 1; render(); persist();
   };
   root.append(intro, convention, controls, progress, status, explanation, layout, form);
   function render() {
@@ -65,18 +72,20 @@ export function createAlgorithmPlayer(documentData, savedState, onChange) {
     explanation.textContent = current.explanation;
     array.replaceChildren();
     current.array.forEach((value, index) => {
-      const cls = ['algorithm-cell', current.marks.includes(index) ? 'involved' : '', current.fixed.includes(index) ? 'settled' : '', vars.pivotIndex === index ? 'pivot' : '', vars.low !== undefined && (index < vars.low || index > vars.high) ? 'outside' : ''].filter(Boolean).join(' ');
+      const outside=engine.tree?index>=current.heapSize:vars.low!==undefined&&(index<vars.low||index>vars.high);
+      const cls = ['algorithm-cell', current.marks.includes(index) ? 'involved' : '', current.fixed.includes(index) ? 'settled' : '', vars.pivotIndex === index ? 'pivot' : '', outside ? 'outside' : ''].filter(Boolean).join(' ');
       const cell = make('div', cls); cell.append(make('span', 'algorithm-value', value), make('small', '', index));
-      const pointers = ['i', 'j'].filter(key => vars[key] === index).join(', ');
+      const pointers = (engine.tree?['root','child']:['i','j']).filter(key => vars[key] === index).join(', ');
       if (pointers) cell.append(make('b', 'algorithm-cell-pointer', pointers)); array.append(cell);
     });
+    if(engine.tree)tree.replaceChildren(createBinaryTree(current.array,{size:current.heapSize,marks:current.marks}));
     if (!current.array.length) array.append(make('p', '', '空数组'));
     variables.replaceChildren();
-    for (const key of ['low', 'high', 'pivot', 'i', 'j', 'p']) { variables.append(make('dt', '', key), make('dd', '', vars[key] === undefined ? '—' : String(vars[key]))); }
+    for (const key of engine.variables) { variables.append(make('dt', '', key), make('dd', '', vars[key] === undefined ? '—' : String(vars[key]))); }
     stack.replaceChildren();
     current.stack.forEach((frame, index) => {
       const li = make('li', index === current.stack.length - 1 ? 'current' : '');
-      li.textContent = `${frame.kind}(a, ${frame.low}, ${frame.high})${frame.p !== undefined ? ` · p=${frame.p}` : ''}`; stack.append(li);
+      li.textContent = engine.tree?(frame.kind==='heapSort'?'heapSort(a)':`siftDown(a, ${frame.root}, ${frame.size})`):`${frame.kind}(a, ${frame.low}, ${frame.high})${frame.p !== undefined ? ` · p=${frame.p}` : ''}`; stack.append(li);
     });
     if (!current.stack.length) stack.append(make('li', '', step === trace.length - 1 ? '调用栈已清空' : '尚未进入函数'));
     codeLines.forEach((line, index) => { line.classList.toggle('current', index + 1 === current.line); if (index + 1 === current.line) line.setAttribute('aria-current', 'step'); else line.removeAttribute('aria-current'); });

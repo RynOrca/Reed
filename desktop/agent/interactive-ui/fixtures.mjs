@@ -6,6 +6,9 @@ const node = (id, type, props) => ({ id, type, props });
 
 export function createFixedDocument(topic = 'kmp') {
   switch (topic) {
+    case 'heapsort': return {schemaVersion:1,mode:'algorithm',algorithm:'heapsort-max-v1',title:'堆排序：数组与二叉树同步执行',question:'观察自底向上建堆、父子比较、下沉与取出最大值的完整过程；树中只保留有效堆。',source:{kind:'illustrative',label:'确定性代码执行轨迹 · 大顶堆'},input:[4,10,3,5,1]};
+    case 'quadratic': return {schemaVersion:1,mode:'math',math:'quadratic-v1',title:'二次函数：参数怎样改变曲线？',question:'调节 a、h、k，拖动探查位置，观察顶点、函数值与切线斜率。',source:{kind:'illustrative',label:'确定性函数计算'},initialState:{a:1,h:0,k:0,x:1}};
+    case 'linear-transform': return {schemaVersion:1,mode:'math',math:'linear-transform-2d-v1',title:'线性代数：矩阵怎样变换平面？',question:'编辑目标矩阵和向量，调节变换进度，观察基向量、网格与面积如何变化。',source:{kind:'illustrative',label:'确定性矩阵计算'},initialState:{a:1,b:1,c:0,d:1,vx:1,vy:1,t:1}};
     case 'quicksort-full': return {
       schemaVersion:1,mode:'algorithm',algorithm:'quicksort-lomuto-v1',title:'快排：跟随代码走完整个排序',
       question:'逐步观察比较、交换、枢轴归位和左右递归，直到数组有序；可以在下方更换输入。',

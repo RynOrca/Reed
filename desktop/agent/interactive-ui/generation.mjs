@@ -34,7 +34,7 @@ export async function createInteractiveGeneration({ roles, currentSession, store
         if (input.parentArtifactId && !boundArtifactIds(branch).has(input.parentArtifactId)) throw new Error('父作品不属于当前会话分支');
         let document;
         try { document = JSON.parse(input.document); } catch { throw new Error('document 必须是合法 JSON 字符串，请修正后重试'); }
-        if (!['components','algorithm'].includes(document?.mode)) throw new Error('模型生成仅支持 components 或 algorithm 模式');
+        if (!['components','algorithm','math'].includes(document?.mode)) throw new Error('模型生成仅支持 components、algorithm 或 math 模式');
         const artifact = await store.create(session.sessionId, document, { parentArtifactId: input.parentArtifactId || null });
         session.sessionManager.appendCustomEntry('reed_interactive_artifact', { messageEntryId: owner.id, artifactId: artifact.artifactId });
         const summary = await store.summary(session.sessionId, artifact.artifactId);

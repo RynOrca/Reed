@@ -1,4 +1,6 @@
-import { createQuicksortTrace, QUICKSORT_VERSION, validSortInput } from '../../web/quicksort-trace.mjs';
+import { EXECUTION_ENGINES } from '../../web/execution-traces.mjs';
+import { MATH_SPECS, validMathState } from '../../web/math-models.mjs';
+import { validSortInput } from '../../web/quicksort-trace.mjs';
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 const keys = (value, allowed) => Object.keys(value).every(key => allowed.includes(key));
 const line = (value, max = 160) => typeof value === 'string' && value.length > 0 && value.length <= max;
@@ -14,11 +16,13 @@ const exactState = (schema, state) => plain(state) && Object.keys(state).length 
 
 export function initialArtifactState(document) {
   if (document.mode === 'algorithm') return {step:0,input:[...document.input]};
+  if (document.mode === 'math') return {...document.initialState};
   return document.mode === 'fixture' ? {step:0} : {...document.initialState};
 }
 
 export function validateState(document, state) {
-  if (document.mode === 'algorithm') return plain(state) && keys(state,['step','input']) && Object.keys(state).length===2 && validSortInput(state.input) && integer(state.step) && state.step>=0 && state.step<createQuicksortTrace(state.input).length;
+  if (document.mode === 'algorithm') return plain(state) && keys(state,['step','input']) && Object.keys(state).length===2 && validSortInput(state.input) && integer(state.step) && state.step>=0 && state.step<EXECUTION_ENGINES[document.algorithm].trace(state.input).length;
+  if (document.mode === 'math') return validMathState(document.math,state);
   if (document.mode === 'fixture') return plain(state) && Object.keys(state).length === 1 && integer(state.step) && state.step >= 0 && state.step < document.steps.length;
   return document.mode === 'components' && exactState(document.stateSchema, state);
 }
@@ -27,8 +31,12 @@ export function validateDocument(document) {
   if (!plain(document) || document.schemaVersion !== 1 || !line(document.title, 120)) fail('标题或版本');
   if (Buffer.byteLength(JSON.stringify(document), 'utf8') > 32768) fail('大小超过 32 KiB');
   if (document.mode === 'algorithm') {
-    if (!keys(document,['schemaVersion','mode','algorithm','title','question','source','input']) || document.algorithm!==QUICKSORT_VERSION || !line(document.question,300) ||
+    if (!keys(document,['schemaVersion','mode','algorithm','title','question','source','input']) || !Object.hasOwn(EXECUTION_ENGINES,document.algorithm) || !line(document.question,300) ||
       !plain(document.source) || !keys(document.source,['kind','label']) || document.source.kind!=='illustrative' || !line(document.source.label,80) || !validSortInput(document.input)) fail('算法版本或输入');
+    return document;
+  }
+  if(document.mode === 'math') {
+    if(!keys(document,['schemaVersion','mode','math','title','question','source','initialState']) || !Object.hasOwn(MATH_SPECS,document.math) || !line(document.question,300) || !plain(document.source) || !keys(document.source,['kind','label']) || document.source.kind!=='illustrative' || !line(document.source.label,80) || !plain(document.initialState) || !validMathState(document.math,document.initialState))fail('数学模型或参数');
     return document;
   }
   if (document.mode === 'fixture') {
