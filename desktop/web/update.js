@@ -1,23 +1,20 @@
 // 版本号与「关于 → 检查更新」。
 //
-// 两条路径，按配置自动选择：
-//   1. 已配置更新公钥（tauri.conf.json plugins.updater.pubkey）→ Tauri 官方 updater，
-//      下载后验签，验签通过才安装并重启。这是「一键更新」。
-//   2. 尚未配置公钥（例如源码构建）→ 只用 GitHub 发布页做版本比对，提示并跳转下载，
-//      不下载、不安装，绝不假装已经更新。
+// 两条路径，由**一个**来源决定：tauri.conf.json 的 plugins.updater.pubkey。
+//   - 配了公钥 → Tauri 官方 updater：检查 → 下载 → 验签 → 安装 → 重启，即一键更新。
+//   - 没配公钥 → 只比对版本并跳转下载页，不下载不安装。
 //
-// 公钥缺失时**不能**退回静默安装：那等于跳过验签，任何人都能塞一个包进来。
+// 公钥只在 tauri.conf.json 里存一份。前端不复制它，而是问 Rust「配了吗」
+// （update_key_configured），避免两处配置漂移成「说有新版、装却签名不对」。
+//
+// 公钥缺失时**绝不**退回静默安装：那等于跳过验签，任何人都能塞一个包进来。
 
 const RELEASE_PAGE = "https://github.com/RynOrca/Reed/releases/latest";
 const RELEASE_API = "https://api.github.com/repos/RynOrca/Reed/releases/latest";
 const CHECK_TIMEOUT_MS = 20000;
 
-// 更新公钥（minisign，由 `tauri signer generate` 生成）。
-// 留空表示尚未启用签名校验：此时只做版本比对并跳转下载页，**不会**下载安装。
-// 填入后「一键更新」才生效；对应的私钥用于签发布产物，绝不进仓库。
-const UPDATE_PUBKEY = "";
-
 let cachedVersion = null;
+let cachedKeyConfigured = null;
 
 /** 读取应用版本号（来自构建时的 tauri.conf.json）。读不到就返回 null，不猜。 */
 export async function appVersion(tauri = globalThis.__TAURI__) {
@@ -25,6 +22,14 @@ export async function appVersion(tauri = globalThis.__TAURI__) {
   try { cachedVersion = String(await tauri.core.invoke("app_version")); }
   catch { cachedVersion = null; }
   return cachedVersion;
+}
+
+/** 构建时是否配了更新公钥。未知时按「没配」处理，宁可提示手动下载也不假装能装。 */
+export async function updaterConfigured(tauri = globalThis.__TAURI__) {
+  if (cachedKeyConfigured !== null) return cachedKeyConfigured;
+  try { cachedKeyConfigured = (await tauri.core.invoke("update_key_configured")) === true; }
+  catch { cachedKeyConfigured = false; }
+  return cachedKeyConfigured;
 }
 
 /** 把版本号填进启动动画（元素不存在时静默跳过，设置页没有这个元素）。 */
@@ -61,8 +66,8 @@ export async function checkForUpdate(tauri = globalThis.__TAURI__) {
   const current = await appVersion(tauri);
   if (!current) return { status: "unsupported", reason: "无法读取当前版本号" };
 
-  // 路径 1：官方 updater（已配置公钥时）
-  if (UPDATE_PUBKEY) {
+  // 路径 1：官方 updater（构建时已配公钥）
+  if (await updaterConfigured(tauri)) {
     try {
       const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check();

@@ -179,6 +179,21 @@ fn app_version(app: tauri::AppHandle) -> String {
     app.package_info().version.to_string()
 }
 
+/// 构建时是否配置了更新公钥。
+/// 公钥只在 tauri.conf.json 里存一份，前端靠这个命令判断能否走应用内一键更新，
+/// 从而避免同一个公钥在前端再抄一份、两处漂移。
+#[tauri::command]
+fn update_key_configured(app: tauri::AppHandle) -> bool {
+    app.config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|updater| updater.get("pubkey"))
+        .and_then(|pubkey| pubkey.as_str())
+        .map(|pubkey| !pubkey.trim().is_empty())
+        .unwrap_or(false)
+}
+
 /// 只在系统浏览器里打开 https 链接（「关于 → 检查更新」的手动下载入口）。
 /// 只接受 https://，避免被当成任意命令或本地路径执行。
 #[tauri::command]
@@ -597,7 +612,7 @@ fn run_desktop() -> tauri::Result<()> {
         .plugin(shortcuts)
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![dismiss, window_pinned, set_window_pinned, agent_command, choose_workspace, open_local_file, desktop_preferences, set_shortcut, set_autostart, open_settings, capture_shortcut, drag_window, resize_window, update_brand_icon, set_appearance, ui_ready, app_version, open_external_url])
+        .invoke_handler(tauri::generate_handler![dismiss, window_pinned, set_window_pinned, agent_command, choose_workspace, open_local_file, desktop_preferences, set_shortcut, set_autostart, open_settings, capture_shortcut, drag_window, resize_window, update_brand_icon, set_appearance, ui_ready, app_version, update_key_configured, open_external_url])
         .setup(|app| {
             startup_log("Creating Tauri window");
             let webview_dir = profile::directory()?.join("webview");
