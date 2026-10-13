@@ -190,8 +190,12 @@ function renderRoles(roles) {
     const name = document.createElement("strong"); name.textContent = role.name;
     const edit = document.createElement("button"); edit.className = "secondary"; edit.textContent = "编辑";
     edit.onclick = () => { roleId = role.id; $("role-name").value = role.name; $("role-system").value = role.system || ""; $("role-goals-enabled").checked=role.learningGoalsEnabled===true; $("role-profile-enabled").checked=role.learnerProfileEnabled===true; roleSkills.set(role.skills); $("role-form").scrollIntoView(); };
-    row.append(name, edit);
-    if (!role.builtin) row.append(deletionButton("删除", () => command("delete_role", { roleId: role.id })));
+    // 按钮成组放在行尾：内置角色只有一个「编辑」，自定义角色还有「删除」，
+    // 不分组的话 space-between 会让前者与后者错位（见 .row-actions 注释）。
+    const actions = document.createElement("div"); actions.className = "row-actions";
+    actions.append(edit);
+    if (!role.builtin) actions.append(deletionButton("删除", () => command("delete_role", { roleId: role.id })));
+    row.append(name, actions);
     $("role-list").append(row);
   }
 }

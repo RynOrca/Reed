@@ -12,7 +12,9 @@ label { display:grid; gap:6px; margin:12px 0; font-size:12px; color:#b4b7bf; } i
 #provider-form { margin-top:20px; }
 .capability-label { display:flex; align-items:center; gap:9px; margin:16px 0; }.capability-checkbox:not(.switch) { width:17px; height:17px; padding:0; accent-color:#b8cdf5; }.model-actions { display:flex; align-items:center; gap:7px; }
 .configured { align-items:center; gap:12px; }
-.memory-item { display:flex; gap:18px; justify-content:space-between; padding:15px 18px; margin-bottom:8px; background:#ffffff04; border:1px solid #373a40; border-radius:10px; }.memory-item p { white-space:pre-wrap; font-size:13px; }.memory-item small { color:#777d88; font-size:11px; }.memory-item button { align-self:flex-start; }.confirm { color:#ffb6b4!important; border-color:#944545!important; background:#632a2a!important; } #notice { padding:11px 15px; border-radius:8px; background:#ffffff0a; color:#bcd1f8; } #notice.error { background:#ff777710; color:#ffb0ad; }
+.memory-item { display:flex; gap:18px; justify-content:space-between; padding:15px 18px; margin-bottom:8px; background:#ffffff04; border:1px solid #373a40; border-radius:10px; }.memory-item p { white-space:pre-wrap; font-size:13px; }.memory-item small { color:#777d88; font-size:11px; }.memory-item button { align-self:flex-start; }
+/* 行尾按钮成组靠右；否则 space-between 会把「编辑」推到偏左，与只有单个按钮的行对不齐 */
+.row-actions { display:flex; align-items:flex-start; gap:10px; margin-left:auto; flex:none; }.confirm { color:#ffb6b4!important; border-color:#944545!important; background:#632a2a!important; } #notice { padding:11px 15px; border-radius:8px; background:#ffffff0a; color:#bcd1f8; } #notice.error { background:#ff777710; color:#ffb0ad; }
 @media(max-width:820px) { body { grid-template-columns:160px 1fr; } main { padding-inline:22px; } .template-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 textarea { width:100%; resize:vertical; background:#191a1d; color:#eee; border:1px solid #42454c; border-radius:8px; padding:10px; font:inherit; }
 .profile-overview { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-bottom:18px; }
