@@ -1,3 +1,4 @@
+import { createCustomExample } from './custom-examples.mjs';
 const base = (title, question, stateSchema, initialState, nodes) => ({
   schemaVersion: 1, mode: 'components', title, question,
   source: { kind: 'illustrative', label: '固定教学样例' }, stateSchema, initialState, nodes,
@@ -6,6 +7,9 @@ const node = (id, type, props) => ({ id, type, props });
 
 export function createFixedDocument(topic = 'kmp') {
   switch (topic) {
+    case 'custom-gradient': return createCustomExample('gradient');
+    case 'custom-queue': return createCustomExample('queue');
+    case 'custom-policy': return createCustomExample('policy');
     case 'kmp-full': return {schemaVersion:1,mode:'algorithm',algorithm:'kmp-prefix-first-v1',title:'KMP：前缀表与完整匹配过程',question:'逐步观察 pi 表构建和文本匹配，失配时 i 不回退；可以更换文本和模式串。',source:{kind:'illustrative',label:'确定性代码执行轨迹 · pi 前缀函数'},input:{text:'ABABABC',pattern:'ABABC'}};
     case 'heapsort': return {schemaVersion:1,mode:'algorithm',algorithm:'heapsort-max-v1',title:'堆排序：数组与二叉树同步执行',question:'观察自底向上建堆、父子比较、下沉与取出最大值的完整过程；树中只保留有效堆。',source:{kind:'illustrative',label:'确定性代码执行轨迹 · 大顶堆'},input:[4,10,3,5,1]};
     case 'quadratic': return {schemaVersion:1,mode:'math',math:'quadratic-v1',title:'二次函数：参数怎样改变曲线？',question:'调节 a、h、k，拖动探查位置，观察顶点、函数值与切线斜率。',source:{kind:'illustrative',label:'确定性函数计算'},initialState:{a:1,h:0,k:0,x:1}};

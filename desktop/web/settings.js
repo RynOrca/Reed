@@ -7,6 +7,17 @@ const tauri = window.__TAURI__;
 await initBrand(tauri);
 let sequence = 0, templates = [], providers = [], editing = null, providerId = null, recording = false, savedShortcut = "", memory = {}, roleId = null;
 const pending = new Map();
+let reviewModels=[],reviewSettings={enabled:false,provider:'',modelId:'',reasoning:'off'};
+function renderReview(){
+  const select=$('interactive-review-model');select.replaceChildren(element('option','请选择已配置模型'));select.firstChild.value='';
+  for(const model of reviewModels){const option=element('option',`${model.providerName||model.provider} / ${model.name||model.id}`);option.value=JSON.stringify([model.provider,model.id]);select.append(option);}
+  const chosen=reviewSettings.provider&&reviewSettings.modelId?JSON.stringify([reviewSettings.provider,reviewSettings.modelId]):'';
+  if(chosen&&!reviewModels.some(m=>m.provider===reviewSettings.provider&&m.id===reviewSettings.modelId)){const missing=element('option','原审核模型不可用，请重新选择');missing.value=chosen;select.append(missing);}
+  select.value=chosen;$('interactive-review-enabled').checked=reviewSettings.enabled;renderReviewThinking();
+}
+function renderReviewThinking(){const model=reviewModels.find(m=>JSON.stringify([m.provider,m.id])===$('interactive-review-model').value),select=$('interactive-review-thinking');select.replaceChildren();for(const level of model?.thinkingLevels||['off']){const option=element('option',level);option.value=level;select.append(option);}select.value=[...select.options].some(o=>o.value===reviewSettings.reasoning)?reviewSettings.reasoning:'off';}
+$('interactive-review-model').onchange=renderReviewThinking;
+$('interactive-review-form').onsubmit=e=>{e.preventDefault();void action(async()=>{const [provider='',modelId='']=$('interactive-review-model').value?JSON.parse($('interactive-review-model').value):[];await command('save_interactive_review',{settings:{enabled:$('interactive-review-enabled').checked,provider,modelId,reasoning:$('interactive-review-thinking').value}});notice('独立审核设置已保存，不改变当前聊天模型。');});};
 function notice(text, error = false) { $("notice").hidden = !text; $("notice").textContent = text; $("notice").classList.toggle("error", error); }
 async function action(work) { try { await work(); } catch (error) { notice(String(error.message || error), true); } }
 function command(type, args = {}) {
@@ -224,6 +235,8 @@ if (tauri) {
       const r = event.payload;
       if (r.id && pending.has(r.id) && ["ack", "error"].includes(r.type)) { const p = pending.get(r.id); clearTimeout(p.timer); pending.delete(r.id); r.type === "error" ? p.reject(new Error(r.message)) : p.resolve(r); }
       if (r.type === "providers") { templates = r.templates || []; providers = r.providers || []; renderProviders(); }
+      if(r.type==='models'){reviewModels=r.models||[];renderReview();}
+      if(r.type==='interactive_review'){reviewSettings=r.settings;renderReview();}
       if (r.type === "memory") { memory = r.state; renderMemory(); }
       if (r.type === "learner") renderLearner(r.state);
       if (r.type === "capabilities") renderCapabilities(r.state);

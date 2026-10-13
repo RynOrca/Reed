@@ -14,6 +14,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
   const {createFixedDocument}=await import('../agent/interactive-ui/fixtures.mjs');
   let apiCalls = 0;
   let receivedImage=false;
+  const independentReviews=[];
   const recoveryCalls = new Map(), recoveryRequests = [], releaseRecovery = new Map();
   const server = createServer(async (req, res) => {
     if (req.url === '/v1/models') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: [{ id: 'isolated-learning-model', context_length: 65536, supports_reasoning: true, reasoning_efforts: ['off','low','high'] }] })); return; }
@@ -26,6 +27,9 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     const text = valuing ? JSON.stringify({decisions:JSON.parse(userText).candidates.map(c=>({id:c.id,supported:true,durable:true,useful:true,requested:false,confidence:0.95}))}) : memory ? '{"facts":[{"key":"学习目标","content":"学习线性代数"}],"notes":[],"learningEvents":[{"kind":"goal","subject":"线性代数","detail":"学习线性代数","evidence":"我在学习线性代数","status":"active"}]}' : '这是桌面验收的流式回答。\n\n| 概念 | 含义 |\n| --- | --- |\n| 矩阵 | 线性变换 |\n\n[打开生成的 HTML](preview.html)';
     const delta = (value, finish_reason = null) => ({ id:'desktop-test', object:'chat.completion.chunk', model:body.model, created:1, choices:[{index:0,delta:value,finish_reason}] });
     res.setHeader('content-type','text/event-stream');
+    if(body.messages.some(m=>typeof m.content==='string'&&m.content.includes('你是独立交互教学审核员'))){
+      independentReviews.push(body);res.write(`data: ${JSON.stringify(delta({role:'assistant',content:JSON.stringify({verdict:'pass',summary:'隔离审核响应：梯度与更新公式一致',issues:[]})}))}\n\n`);res.write(`data: ${JSON.stringify(delta({},'stop'))}\n\n`);res.end('data: [DONE]\n\n');return;
+    }
     if (!memory && ['RECOVER_SUCCESS_TEST', 'RECOVER_LENGTH_TEST', 'RECOVER_SSE_SUCCESS_TEST', 'RECOVER_SSE_FAILURE_TEST'].includes(userText)) {
       const attempt = (recoveryCalls.get(userText) || 0) + 1;
       recoveryCalls.set(userText, attempt); recoveryRequests.push({ userText, attempt, body });
@@ -38,9 +42,9 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
       res.write(`data: ${JSON.stringify({...delta({}), choices:[], usage:{prompt_tokens:100,completion_tokens:12,total_tokens:112}})}\n\n`);
       res.end('data: [DONE]\n\n'); return;
     }
-    if (!memory && ['INTERACTIVE_MODEL_TEST','UI_KMP_TEST','UI_HEAP_TEST','UI_QUADRATIC_TEST','UI_LINEAR_TEST'].includes(userText) && !body.messages.slice(body.messages.lastIndexOf(lastUser)+1).some(m=>m.role==='tool')) {
+    if (!memory && ['INTERACTIVE_MODEL_TEST','UI_CUSTOM_TEST','UI_KMP_TEST','UI_HEAP_TEST','UI_QUADRATIC_TEST','UI_LINEAR_TEST'].includes(userText) && !body.messages.slice(body.messages.lastIndexOf(lastUser)+1).some(m=>m.role==='tool')) {
       assert.ok(body.tools.some(t=>t.function?.name==='generate_learning_ui'));
-      res.write(`data: ${JSON.stringify(delta({role:'assistant',tool_calls:[{index:0,id:'desktop-ui-'+apiCalls,type:'function',function:{name:'generate_learning_ui',arguments:JSON.stringify({document:JSON.stringify(createFixedDocument(({UI_KMP_TEST:'kmp-full',UI_HEAP_TEST:'heapsort',UI_QUADRATIC_TEST:'quadratic',UI_LINEAR_TEST:'linear-transform'})[userText]||'quicksort-full'))})}}]}))}\n\n`);
+      res.write(`data: ${JSON.stringify(delta({role:'assistant',tool_calls:[{index:0,id:'desktop-ui-'+apiCalls,type:'function',function:{name:'generate_learning_ui',arguments:JSON.stringify({document:JSON.stringify(createFixedDocument(({UI_CUSTOM_TEST:'custom-gradient',UI_KMP_TEST:'kmp-full',UI_HEAP_TEST:'heapsort',UI_QUADRATIC_TEST:'quadratic',UI_LINEAR_TEST:'linear-transform'})[userText]||'quicksort-full'))})}}]}))}\n\n`);
       res.write(`data: ${JSON.stringify(delta({},'tool_calls'))}\n\n`);res.end('data: [DONE]\n\n');return;
     }
     if (!memory && ['PERMISSION_TEST','READONLY_TEST'].includes(userText) && body.messages.at(-1)?.role!=='tool') {
@@ -351,6 +355,22 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
       checks.push(marker+'：模型工具生成、控件操作和历史状态恢复');
     }
     await settings.locator('button[data-section="models"]').click();
+    const reviewProvider=(await agentCommand('save_provider',{template:'custom',name:'独立审核隔离测试',protocol:'openai-completions',baseUrl:`http://127.0.0.1:${server.address().port}/review/v1`})).providerId;
+    await agentCommand('update_model',{providerId:reviewProvider,model:{id:'isolated-review-model',name:'isolated-review-model',contextWindow:65536,reasoning:true,thinkingLevels:['off','low'],thinkingFormat:'openai'}});
+    const modelLabelBeforeReview=await main.locator('#status-model').innerText();
+    await settings.locator('#interactive-review-enabled').check();await settings.locator('#interactive-review-model').selectOption(JSON.stringify([reviewProvider,'isolated-review-model']));await settings.locator('#interactive-review-thinking').selectOption('low');await settings.locator('#interactive-review-form button[type=submit]').click();
+    await settings.locator('#notice').filter({hasText:'独立审核设置已保存'}).waitFor();
+    const savedReview=JSON.parse(await fs.readFile(path.join(data,'user-config.json'),'utf8')).interactiveReview;assert.equal(savedReview.enabled,true);assert.equal(savedReview.reasoning,'low');assert.ok(!Object.hasOwn(savedReview,'maxTokens'));
+    await agentCommand('new_session',{noProject:true});await main.locator('#prompt').fill('UI_CUSTOM_TEST');await main.locator('#send-button').click();
+    const customCard=main.locator('.interactive-card').filter({hasText:'自定义：梯度下降'});await customCard.getByRole('button',{name:'展开',exact:true}).click({timeout:30000});await customCard.locator('.custom-status').filter({hasText:'运行检查通过'}).waitFor();await main.waitForFunction(()=>document.getElementById('status').textContent==='就绪');
+    const customFrame=customCard.frameLocator('iframe');await customFrame.getByRole('button',{name:'迭代一步'}).click();await customFrame.getByText('第 1 步；x=4.4000；f(x)=5.7600',{exact:true}).waitFor();
+    const customSnapshot=await main.evaluate(()=>({sessionId:window._recoveryEvents.filter(e=>e.type==='session').at(-1).sessionId,artifactId:window._recoveryEvents.filter(e=>e.type==='interactive_artifact').at(-1).summary.artifactId}));
+    const customArtifact=(await agentCommand('get_interactive_artifact',{artifactId:customSnapshot.artifactId})).artifact;assert.equal(customArtifact.quality.review.enabled,true);assert.equal(customArtifact.quality.facts,'unverified');assert.equal(customArtifact.state.x,4.4);assert.equal(independentReviews.length,1);assert.equal(independentReviews[0].model,'isolated-review-model');assert.equal(independentReviews[0].reasoning_effort,'low');assert.equal(await main.locator('#status-model').innerText(),modelLabelBeforeReview);
+    assert.equal(await customCard.locator('iframe').getAttribute('sandbox'),'allow-scripts');const actualFrame=await customCard.locator('iframe').elementHandle().then(el=>el.contentFrame());assert.equal(await actualFrame.evaluate(()=>{try{return !!parent.document.body&&false;}catch{return true;}}),true);
+    await agentCommand('new_session',{noProject:true});await agentCommand('open_session',{sessionId:customSnapshot.sessionId});await customCard.getByRole('button',{name:'展开',exact:true}).click();await customFrame.getByText('第 1 步；x=4.4000；f(x)=5.7600',{exact:true}).waitFor();
+    await main.screenshot({path:path.join(artifacts,'custom-ui-desktop.png')});await settings.screenshot({path:path.join(artifacts,'independent-review-settings.png')});
+    checks.push('自定义组件真实Worker试运行、WebView2隔离、另一提供商独立审核、自动输出上限、控件操作与历史恢复');
+    await agentCommand('save_interactive_review',{settings:{enabled:false,provider:'',modelId:'',reasoning:'off'}});await agentCommand('delete_provider',{providerId:reviewProvider});
     const deleteProvider=settings.locator('.provider-row').filter({hasText:'桌面隔离测试'}).locator('button').filter({hasText:'删除'});
     await deleteProvider.click();assert.equal(await settings.locator('.provider-row').count(),1);await deleteProvider.filter({hasText:'确认删除'}).click();
     await settings.locator('.provider-row').waitFor({state:'detached'});assert.ok((await main.locator('.message-row.user').count())>0);checks.push('供应商两步确认删除，当前模型安全退回，对话历史保留');

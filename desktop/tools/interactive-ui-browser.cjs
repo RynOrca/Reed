@@ -13,7 +13,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH || 'playwright')
     if (request.url.startsWith('/fixture/')) {
       response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(createFixedDocument(request.url.split('/').pop()))); return;
     }
-    if (['/algorithm-player.js','/kmp-trace.mjs','/kmp-view.js','/quicksort-trace.mjs','/heapsort-trace.mjs','/execution-traces.mjs','/math-models.mjs','/learning-svg.js','/math-explorer.js'].includes(request.url)) {response.setHeader('content-type','text/javascript');response.end(await readFile(path.resolve(__dirname,'../web',request.url.slice(1))));return;}
+    if (['/custom-sandbox.js','/custom-contract.mjs','/custom-frame.js','/algorithm-player.js','/kmp-trace.mjs','/kmp-view.js','/quicksort-trace.mjs','/heapsort-trace.mjs','/execution-traces.mjs','/math-models.mjs','/learning-svg.js','/math-explorer.js'].includes(request.url)) {response.setHeader('content-type','text/javascript');response.end(await readFile(path.resolve(__dirname,'../web',request.url.slice(1))));return;}
     response.setHeader('content-type', request.url.endsWith('.js') ? 'text/javascript' : request.url === '/style.css' ? 'text/css' : 'text/html');
     response.end(request.url === '/interactive-ui.js' ? await readFile(source) : request.url === '/interactive-components.js' ? await readFile(components) : request.url === '/style.css' ? await readFile(stylesheet) : '<link rel="stylesheet" href="/style.css"><main id="cards"></main>');
   });
@@ -114,7 +114,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH || 'playwright')
     await touchPage.waitForFunction(() => window.touchState.cut === 2);
     assert.equal(await touchPage.getByRole('slider', { name: '拖动分界线' }).getAttribute('aria-valuenow'), '2');
     await touchPage.close();
-    const skillText=await readFile(path.resolve(__dirname,'../agent/skills/interactive-explanation/SKILL.md'),'utf8');
+    const skillText=await readFile(path.resolve(__dirname,'../agent/skills/interactive-explanation/COMPONENTS.md'),'utf8');
     const fewshots=[...skillText.matchAll(/```json\s*([\s\S]*?)```/g)].map(match=>JSON.parse(match[1]));
     assert.equal(fewshots.length,9);
     for(const doc of fewshots.filter(doc=>doc.mode==='components')){
@@ -136,7 +136,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH || 'playwright')
     const galleryErrors=[];gallery.on('pageerror',error=>galleryErrors.push(error.message));
     await gallery.goto(require('node:url').pathToFileURL(preview).href);
     await gallery.locator('.interactive-experience').first().waitFor();
-    assert.equal(await gallery.locator('.interactive-card').count(),8);
+    assert.equal(await gallery.locator('.interactive-card').count(),11);
     await require('node:fs/promises').mkdir(path.resolve(__dirname,'../../dist/acceptance'),{recursive:true});
     await gallery.screenshot({path:path.resolve(__dirname,'../../dist/acceptance/interactive-components-gallery.png'),fullPage:true});
     await gallery.setViewportSize({width:360,height:740});

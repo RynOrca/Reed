@@ -2,6 +2,8 @@ param([string]$Output = "")
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'executable-integrity.ps1')
 $desktopDir = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+& node.exe (Join-Path $PSScriptRoot 'build-custom-sdk.cjs')
+if ($LASTEXITCODE -ne 0) { throw 'Custom SDK bundle failed' }
 $projectDir = Join-Path $desktopDir 'src-tauri'
 $agentDir = Join-Path $desktopDir 'agent'
 if (-not (Test-Path (Join-Path $agentDir 'node_modules'))) {
@@ -37,12 +39,13 @@ Copy-Item -LiteralPath (Join-Path $agentDir 'memory-agent.mjs') -Destination (Jo
 foreach ($module in @('capabilities.mjs', 'browser.mjs', 'learning-tools.mjs', 'learner.mjs', 'sandbox.mjs', 'user-config.mjs', 'mcp.mjs', 'turn-outcome.mjs', 'turn-recovery.mjs', 'stream-diagnostics.mjs', 'context-policy.mjs', 'visual-review.mjs', 'memory-match.mjs', 'memory-value.mjs', 'work-memory.mjs', 'goals.mjs', 'role-features.mjs', 'vault-overview.mjs')) { Copy-Item -LiteralPath (Join-Path $agentDir $module) -Destination (Join-Path $Output "agent\$module") -Force }
 Copy-Item -LiteralPath (Join-Path $agentDir 'role-skills.mjs') -Destination (Join-Path $Output 'agent\role-skills.mjs') -Force
 New-Item -ItemType Directory -Force -Path (Join-Path $Output 'web') | Out-Null
-foreach ($sharedModule in @('quicksort-trace.mjs','heapsort-trace.mjs','kmp-trace.mjs','execution-traces.mjs','math-models.mjs')) { Copy-Item -LiteralPath (Join-Path $desktopDir "web\$sharedModule") -Destination (Join-Path $Output "web\$sharedModule") -Force }
+foreach ($sharedModule in @('quicksort-trace.mjs','heapsort-trace.mjs','kmp-trace.mjs','execution-traces.mjs','math-models.mjs','custom-contract.mjs','custom-sandbox.js','custom-frame.html','custom-frame.js')) { Copy-Item -LiteralPath (Join-Path $desktopDir "web\$sharedModule") -Destination (Join-Path $Output "web\$sharedModule") -Force }
 New-Item -ItemType Directory -Force -Path (Join-Path $Output 'agent\interactive-ui') | Out-Null
 Copy-Item -LiteralPath (Join-Path $agentDir 'interactive-ui\artifacts.mjs') -Destination (Join-Path $Output 'agent\interactive-ui\artifacts.mjs') -Force
 Copy-Item -LiteralPath (Join-Path $agentDir 'interactive-ui\protocol.mjs') -Destination (Join-Path $Output 'agent\interactive-ui\protocol.mjs') -Force
 Copy-Item -LiteralPath (Join-Path $agentDir 'interactive-ui\generation.mjs') -Destination (Join-Path $Output 'agent\interactive-ui\generation.mjs') -Force
 Copy-Item -LiteralPath (Join-Path $agentDir 'interactive-ui\fixtures.mjs') -Destination (Join-Path $Output 'agent\interactive-ui\fixtures.mjs') -Force
+foreach ($module in @('custom-validation.mjs','custom-examples.mjs','reviewer.mjs')) { Copy-Item -LiteralPath (Join-Path $agentDir "interactive-ui\$module") -Destination (Join-Path $Output "agent\interactive-ui\$module") -Force }
 Copy-Item -LiteralPath (Join-Path $agentDir 'skills') -Destination (Join-Path $Output 'agent\skills') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $agentDir 'package.json') -Destination (Join-Path $Output 'agent\package.json') -Force
 # Copy dependency trees without mirroring/deleting destination files.

@@ -10,7 +10,7 @@ import { createFixedDocument } from './fixtures.mjs';
 import { validateDocument } from './protocol.mjs';
 
 test('内置 Skill 的九份完整 few-shot 均符合当前组件协议', async () => {
-  const text=await readFile(new URL('../skills/interactive-explanation/SKILL.md',import.meta.url),'utf8');
+  const text=await readFile(new URL('../skills/interactive-explanation/COMPONENTS.md',import.meta.url),'utf8');
   const samples=[...text.matchAll(/```json\s*([\s\S]*?)```/g)].map(match=>JSON.parse(match[1]));
   assert.equal(samples.length,9);
   for(const sample of samples) assert.equal(validateDocument(sample),sample);
@@ -32,9 +32,9 @@ test('生成工具权限、Skill 注入、格式反馈、消息绑定和父版�
     assert.equal(hooks.context_with_system({messages:[{role:'system'}]}).messages.at(-1).sections.reed_interactive_skill,null);
     assert.equal(hooks.tool_call({toolName:INTERACTIVE_TOOL}).block,true);
     role.interactiveUiEnabled=true;generator.extension(pi);
-    assert.equal(tools.length,1);
-    assert.match(hooks.context_with_system({messages:[{role:'system'}]}).messages.at(-1).sections.reed_interactive_skill,/valuesByState/);
-    const tool=tools[0], document=JSON.stringify(createFixedDocument('attention'));
+    assert.equal(tools.length,2);
+    assert.match(hooks.context_with_system({messages:[{role:'system'}]}).messages.at(-1).sections.reed_interactive_skill,/get_interactive_reference/);
+    const tool=tools.find(t=>t.name===INTERACTIVE_TOOL), document=JSON.stringify(createFixedDocument('attention'));
     await assert.rejects(tool.execute('call',{document:'broken'}),/合法 JSON/);
     await assert.rejects(tool.execute('call',{document:JSON.stringify({schemaVersion:1,mode:'components',title:'bad'})}),/格式无效/);
     await assert.rejects(tool.execute('missing',{document}),/助手消息/);

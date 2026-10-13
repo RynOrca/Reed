@@ -61,3 +61,15 @@
 复用算法播放器，`kmp-view.js` 提供两阶段字符对齐、i/j 指针、未知/已知 pi 表和结果；失配回退不移动文本 i。未计算前缀项显示问号。用户可以修改字符串并重算，输入和进度保存恢复，控件不会调用模型。`kmp-trace.mjs` 为前后端共享的版本固定核心，便携构建复制同一模块。
 
 `kmp.test.mjs` 对965组输入逐次比较展示源码的真实运行、回退、pi写入；另以原生 indexOf 和独立暴力前后缀枚举验证结果。浏览器覆盖每步代码行/pi、鼠标键盘触屏、中文、空串与360px长字符串；隔离桌面用模拟模型验证生成工具和修改输入后的历史恢复，不代表实际 DeepSeek/Qwen 教学质量通过。
+
+## 自定义作品与独立审核（SDK v1）
+
+新增 `mode: custom`：schemaVersion/sdkVersion/stateVersion均为1；文档含title、question、source、stateSchema、initialState、script、checks，文档上限64KiB、脚本48000字符。状态最多16键，支持有界数字、布尔、枚举、有界数字数组；协议见 `desktop/web/custom-contract.mjs`，生成写法见 `desktop/agent/skills/interactive-explanation/SDK.md`。
+
+模型用 `Reed.register({render,reduce})` 编写新计算和新SVG视图，复用可信按钮、滑块、输入、选择、可拖动点和布局。每次操作新建Worker，返回结果后即终止；超时1500ms强制终止；Worker无DOM、Tauri、网络、导入和定时器。必须通过声明状态恢复，不能依赖闭包。可信opaque iframe仅渲染校验过的UI树，sandbox仅allow-scripts，CSP限制连接和资源；来源窗口和随机nonce验证消息。卸载/折叠清理，重开恢复参数。不是任意HTML/React执行环境，不提供动画tick、Canvas/WebGL；也不宣称Worker提供操作系统级内存硬配额。
+
+生成入口先解析、校验，再使用独立Edge真实试运行初始UI和最多6个声明操作，失败不发布；这些操作不构成教学事实证明。同一用户请求最多3次生成尝试，修复反馈包含stage、message、next和剩余次数。get_interactive_reference只返回打包SDK、从实际校验注册表导出的catalog、3份完整源码示例（gradient、queue、policy）和修复指导。原9份JSON few-shot保留。独立实验服务不参与生产运行。
+
+模型设置页可选“自定义交互作品·独立审核”，默认关闭，复用已配置提供商、模型和思考档位。开启即发送该作品源码、题目和试运行状态到所选服务；不发API Key或完整聊天，也不切换聊天模型。审核是文本/源码审核，当前不传截图；失败、要求修正、截断或超时不发布。用户不必设置maxTokens，SDK沿用模型配置/默认；审核通过仍记录facts:unverified，不冒充事实认证。取消生成不发布。
+
+离线预览现为11张卡片：原8张加3个自定义例子。离线file预览嵌入可信frame bundle，生产加载打包frame；模型源码仍仅进入Worker。新增定向验收 `custom.test.mjs`、`custom-browser.cjs`、`custom-desktop.cjs`。用户要求开发阶段不反复全量测试，后续接近整体完成再统一大验收。真实本地/云端模型陌生题质量仍待验证。

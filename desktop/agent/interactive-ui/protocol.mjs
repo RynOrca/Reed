@@ -1,6 +1,7 @@
 import { EXECUTION_ENGINES } from '../../web/execution-traces.mjs';
 import { MATH_SPECS, validMathState } from '../../web/math-models.mjs';
 import { validSortInput } from '../../web/quicksort-trace.mjs';
+import { validCustomDocument, validCustomState } from '../../web/custom-contract.mjs';
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 const keys = (value, allowed) => Object.keys(value).every(key => allowed.includes(key));
 const line = (value, max = 160) => typeof value === 'string' && value.length > 0 && value.length <= max;
@@ -21,6 +22,7 @@ export function initialArtifactState(document) {
 }
 
 export function validateState(document, state) {
+  if(document.mode==='custom')return validCustomState(document.stateSchema,state);
   if (document.mode === 'algorithm') { const engine=EXECUTION_ENGINES[document.algorithm];return !!engine && plain(state) && keys(state,['step','input']) && Object.keys(state).length===2 && (engine.validInput||validSortInput)(state.input) && integer(state.step) && state.step>=0 && state.step<engine.trace(state.input).length; }
   if (document.mode === 'math') return validMathState(document.math,state);
   if (document.mode === 'fixture') return plain(state) && Object.keys(state).length === 1 && integer(state.step) && state.step >= 0 && state.step < document.steps.length;
@@ -29,7 +31,8 @@ export function validateState(document, state) {
 
 export function validateDocument(document) {
   if (!plain(document) || document.schemaVersion !== 1 || !line(document.title, 120)) fail('标题或版本');
-  if (Buffer.byteLength(JSON.stringify(document), 'utf8') > 32768) fail('大小超过 32 KiB');
+  if (Buffer.byteLength(JSON.stringify(document), 'utf8') > (document.mode==='custom'?65536:32768)) fail('文档大小超出上限');
+  if(document.mode==='custom'){if(!validCustomDocument(document))fail('自定义 SDK、状态或源码格式');return document;}
   if (document.mode === 'algorithm') {
     if (!keys(document,['schemaVersion','mode','algorithm','title','question','source','input']) || !Object.hasOwn(EXECUTION_ENGINES,document.algorithm) || !line(document.question,300) ||
       !plain(document.source) || !keys(document.source,['kind','label']) || document.source.kind!=='illustrative' || !line(document.source.label,80) || !(EXECUTION_ENGINES[document.algorithm].validInput||validSortInput)(document.input)) fail('算法版本或输入');

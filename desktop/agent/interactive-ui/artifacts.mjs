@@ -9,7 +9,7 @@ const validId = value => { if (typeof value !== 'string' || !ID.test(value)) thr
 export class InteractiveArtifactStore {
   constructor(dataDir) { this.root = join(dataDir, 'artifacts', 'interactive'); }
   path(sessionId, artifactId) { return join(this.root, validId(sessionId), `${validId(artifactId)}.json`); }
-  async create(sessionId, document, { parentArtifactId = null } = {}) {
+  async create(sessionId, document, { parentArtifactId = null, quality = null } = {}) {
     validId(sessionId);
     if (parentArtifactId) {
       const parent = await this.read(sessionId, parentArtifactId);
@@ -18,6 +18,7 @@ export class InteractiveArtifactStore {
     validateDocument(document);
     const artifactId = randomUUID();
     const artifact = { artifactId, sessionId, parentArtifactId, createdAt: new Date().toISOString(), document, state: initialArtifactState(document) };
+    if(quality)artifact.quality=quality;
     await mkdir(join(this.root, sessionId), { recursive: true });
     await this.write(sessionId, artifactId, artifact);
     return artifact;

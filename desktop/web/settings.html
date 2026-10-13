@@ -13,7 +13,12 @@
 </section>
 <section id="security" class="page" hidden><div class="setting-row"><div><h3>审批方式</h3><p>手动确认每次修改；自动审批批准范围内的文件操作。浏览器点击、填写始终确认。</p></div><select id="approval-mode" aria-label="审批方式"><option value="manual">手动确认</option><option value="auto">自动审批</option></select></div><div class="setting-row"><div><h3>文件权限范围</h3><p>默认可读取其他目录，只修改当前工作区。完全文件权限允许跨目录修改；只在任务结束后切换。</p></div><select id="file-access" aria-label="文件权限范围"><option value="workspace">工作区写入</option><option value="full">完全文件权限</option></select></div><div class="card"><h3>当前工作区</h3><p id="security-workspace" class="path-label"></p><h3>默认只读目录</h3><p id="security-readonly" class="path-label"></p><h3>自定义只读目录</h3><div id="custom-readonly"></div><button id="add-readonly" class="secondary" type="button">添加目录</button><p class="hint">默认范围内禁止修改这些目录，完全文件权限可解除限制。</p><p class="hint">未隔离的 bash / PowerShell 已关闭。本页控制文件工具范围，不是操作系统进程沙盒。</p></div></section>
 <section id="agent" class="page" hidden><div class="card"><h3>实际运行能力</h3><p id="agent-summary"></p><p id="agent-extensions"></p><p id="agent-mcp"></p><button id="refresh-agent" class="secondary">刷新运行状态</button></div><label>查找工具<input id="agent-tool-query" placeholder="名称或描述"></label><div id="agent-tool-list"></div></section>
-<section id="models" class="page" hidden>
+  <section id="models" class="page" hidden>
+  <form id="interactive-review-form" class="card"><h3>自定义交互作品 · 独立审核</h3>
+  <label class="capability-label"><input id="interactive-review-enabled" class="capability-checkbox" type="checkbox">启用独立模型审核（可选）</label>
+  <p class="hint">开启后会向所选提供商发送自定义作品源码、题目信息与试运行结果，增加耗时和费用。审核不切换聊天模型，也不代表教学事实已验证。无需填写最大输出长度。</p>
+  <div class="form-grid"><label>审核模型<select id="interactive-review-model"><option value="">请选择已配置模型</option></select></label><label>思考档位<select id="interactive-review-thinking"><option value="off">off</option></select></label></div>
+  <button type="submit" class="secondary">保存审核设置</button></form>
 <h3 class="section-title">已配置的提供商</h3><div id="providers" class="provider-list"></div>
 <h3 class="section-title">新增提供商</h3><div id="templates" class="template-grid"></div>
 <form id="provider-form" class="card" hidden><div class="form-head"><h3 id="provider-heading">自定义</h3><button type="button" id="cancel-provider" class="icon" aria-label="取消编辑">×</button></div>

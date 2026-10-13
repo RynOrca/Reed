@@ -13,6 +13,7 @@ import { createContextPolicy } from "./context-policy.mjs";
 import { GoalStore } from "./goals.mjs";
 import { InteractiveArtifactStore, boundArtifactIds } from "./interactive-ui/artifacts.mjs";
 import { createInteractiveGeneration, INTERACTIVE_TOOL } from './interactive-ui/generation.mjs';
+import { REVIEW_DEFAULT, validateReviewSettings } from './interactive-ui/reviewer.mjs';
 import { createFixedDocument } from "./interactive-ui/fixtures.mjs";
 import { roleFeatureExtension } from "./role-features.mjs";
 import { VaultOverview } from "./vault-overview.mjs";
@@ -124,7 +125,7 @@ async function prepareSkills(text) {
 const learningTools = createLearningTools({ capabilities, currentWorkspace: () => cwd, roles, send, scope, vaultOverview, roleSkillInstructions: prompt=>preparedSkills.get(roles.activeId+'\n'+prompt)||'' });
 const learnerTools = learnerExtension({ learner, memory, judgeValue, currentSession: () => session, send, enabled:()=>roles.current().learnerProfileEnabled === true });
 const roleFeatures = roleFeatureExtension({roles,goals,project:()=>projectPath,learner,memory,currentSession:()=>session,reviewEnabled});
-const interactiveGeneration = await createInteractiveGeneration({roles,currentSession:()=>session,store:interactiveArtifacts,send});
+const interactiveGeneration = await createInteractiveGeneration({roles,currentSession:()=>session,store:interactiveArtifacts,send,runtime:getRuntime,reviewSettings:async()=>({...REVIEW_DEFAULT,...(await userConfig.read()).interactiveReview})});
 let generationStart = null, firstDelta = null, outputTokens = 0, generationMs = 0, missingUsage = false;
 function emitTelemetry() {
   const model = session?.model;
@@ -277,6 +278,7 @@ async function emitState() {
   const available = await models.getAvailable();
   send({ type: "models", models: available.map((model) => ({ ...providers.modelInfo(model.provider, model.id, models), provider: model.provider, id: model.id, name: model.name })) });
   send({ type: "providers", providers: providers.snapshot(), templates: providers.templates(models) });
+  send({type:'interactive_review',settings:{...REVIEW_DEFAULT,...(await userConfig.read()).interactiveReview}});
   send({ type: "roles", ...roles.list() });
   send({ type: "memory", state: memory.snapshot() });
   send({ type: "learner", state: learner.snapshot() });
@@ -311,6 +313,12 @@ async function handle(command) {
       }
       case "get_state":
         await emitState(); send({ type: "ack", id }); break;
+      case 'save_interactive_review': {
+        if(busy)throw new Error('请等待当前回复结束');
+        const settings=validateReviewSettings(command.settings);
+        if(settings.enabled){const models=await getRuntime(),model=models.getModel(settings.provider,settings.modelId);if(!model)throw new Error('审核模型不存在');if(!providers.modelInfo(settings.provider,settings.modelId,models).thinkingLevels.includes(settings.reasoning))throw new Error('审核模型不支持该思考档位');}
+        await userConfig.set('interactiveReview',settings);await emitState();send({type:'ack',id});break;
+      }
       case "get_interactive_artifact":
       case "save_interactive_artifact_state": {
         if (!session || !boundArtifactIds(session.sessionManager.getBranch()).has(command.artifactId)) throw new Error("当前会话没有这个作品");

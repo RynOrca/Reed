@@ -1,4 +1,5 @@
 import { createMathExplorer } from './math-explorer.js';
+import { createCustomExperience } from './custom-sandbox.js';
 import { createAlgorithmPlayer } from './algorithm-player.js';
 import { createComponentExperience } from './interactive-components.js';
 
@@ -30,10 +31,15 @@ export function createInteractiveCard(summary, { load, save }) {
     });
   };
   const render = () => {
-    experience?.pause?.();
+    experience?.dispose?.();experience?.pause?.();
     detail.replaceChildren();
     if (!artifact) return;
     if (artifact.stateWarning) { const warning = document.createElement('p'); warning.className = 'interactive-card-error'; warning.textContent = artifact.stateWarning; detail.append(warning); }
+    if(artifact.document.mode==='custom'){
+      experience=createCustomExperience(artifact.document,artifact.state,persist);detail.append(experience);
+      if(artifact.quality){const note=document.createElement('p');note.className='interactive-card-version';note.textContent=`生成时试运行通过${artifact.quality.review?.enabled?' · 独立模型审核通过（非事实保证）':' · 未启用独立模型审核'}`;detail.append(note);}
+      if(summary.parentArtifactId){const version=document.createElement('p');version.className='interactive-card-version';version.textContent=`新版本 · 前一作品 ${summary.parentArtifactId.slice(0,8)}`;detail.append(version);}return;
+    }
     if (artifact.document.mode === 'math') {
       experience=createMathExplorer(artifact.document,artifact.state,persist);detail.append(experience);
       if(summary.parentArtifactId){const version=document.createElement('p');version.className='interactive-card-version';version.textContent=`新版本 · 前一作品 ${summary.parentArtifactId.slice(0,8)}`;detail.append(version);}
@@ -71,7 +77,7 @@ export function createInteractiveCard(summary, { load, save }) {
   toggle.onclick = async () => {
     if (!detail.hidden) { experience?.pause?.(); detail.hidden = true; toggle.textContent = '展开'; toggle.setAttribute('aria-expanded', 'false'); return; }
     detail.hidden = false; toggle.textContent = '收起'; toggle.setAttribute('aria-expanded', 'true');
-    if (artifact || loading) return;
+    if (artifact || loading) {experience?.resume?.();return;}
     loading = true; detail.textContent = '正在读取作品…';
     try { artifact = await load(summary.artifactId); render(); }
     catch (error) { detail.replaceChildren(); const note = document.createElement('p'); note.className = 'interactive-card-error'; note.textContent = error.message || '作品文件不可用'; detail.append(note); }
