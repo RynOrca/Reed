@@ -40,8 +40,28 @@ test('弱命中扩词使用有界预算、关闭思考并可实际召回同义�
   const retrieve=createNoteRetriever({capabilities:caps,model:()=>({provider:'test',id:'rag'}),runtime:async()=>({completeSimple:async(_model,_request,options)=>{calls++;optionsSeen=options;return {stopReason:'stop',content:[{type:'text',text:'{"queries":["特征值"]}'}]};}})});
   const hits=await retrieve('eigenvalue geometry');
   assert.equal(calls,1);assert.equal(optionsSeen.maxTokens,NOTE_EXPANSION_MAX_TOKENS);assert.equal(NOTE_EXPANSION_MAX_TOKENS,1024);
-  assert.equal(optionsSeen.reasoning,'off');assert.ok(optionsSeen.signal instanceof AbortSignal);assert.equal(NOTE_EXPANSION_TIMEOUT_MS,12_000);
+  assert.equal(optionsSeen.reasoning,'off');assert.ok(optionsSeen.signal instanceof AbortSignal);assert.equal(NOTE_EXPANSION_TIMEOUT_MS,5_000);
   assert.ok(hits.some(hit=>hit.path===path&&hit.content.includes('不变方向')),'有效扩词应补回原文笔记');
+}));
+
+test('自动上下文无模型前置等待，已有原文允许直接引用',()=>fixture(async(dir,root)=>{
+  await writeFile(join(root,'矩阵.md'),'# 矩阵\n\n线性变换');const caps=new CapabilityStore(dir);caps.state.vaultPath=root;
+  let calls=0;const handlers={};const tools=createLearningTools({capabilities:caps,currentWorkspace:()=>dir,roles:{current:()=>({})},send(){},vaultOverview:{context:async()=>'数学：矩阵'},model:()=>({provider:'test',id:'rag'}),runtime:async()=>({completeSimple:async()=>{calls++;return new Promise(()=>{});}})});
+  tools.extension({registerTool(){},on:(name,fn)=>handlers[name]=fn});
+  const prepare=prompt=>handlers.context_with_system({messages:[{role:'system',content:''},{role:'user',content:prompt}]});
+  const weak=await prepare('矩阵变换如何理解');assert.match(weak.messages.at(-1).sections.summon_notes,/线性变换/);
+  assert.match(weak.messages.at(-1).sections.summon_note_policy,/无需重复检索/);
+  await prepare('explain eigenvectors');assert.equal(calls,0,'弱命中和零命中均不阻塞主模型等待辅助请求');
+}));
+
+test('忽略取消的扩词服务也在截止后回退，晚到结果不会进入检索',()=>fixture(async(dir,root)=>{
+  await writeFile(join(root,'矩阵.md'),'# 矩阵\n\n线性变换');const caps=new CapabilityStore(dir);caps.state.vaultPath=root;
+  let finish,signalSeen;const phases=[];
+  const retrieve=createNoteRetriever({capabilities:caps,model:()=>({provider:'test',id:'rag'}),expansionTimeoutMs:25,runtime:async()=>({completeSimple:async(_m,_c,options)=>{signalSeen=options.signal;return new Promise(resolve=>finish=resolve);}})});
+  const hits=await retrieve('矩阵变换如何理解',{onProgress:p=>phases.push(p.phase)});
+  assert.ok(hits.some(h=>h.content.includes('线性变换')));assert.equal(signalSeen.aborted,true);assert.deepEqual(phases,['local','expanding','fallback']);
+  finish({stopReason:'stop',content:[{type:'text',text:'{"queries":["秘密旧内容"]}'}]});
+  const again=await retrieve('矩阵变换如何理解');assert.deepEqual(again,hits,'迟到结果不能改写已截止计划');
 }));
 
 test('不完整扫描保留未检查文件旧索引并暴露扫描状态',()=>fixture(async(dir,root)=>{

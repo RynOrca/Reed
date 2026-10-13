@@ -460,10 +460,14 @@ function onEvent(event) {
       break;
     case "credential_error": errorRow(response.message || "模型凭据无法读取"); break;
     case "knowledge_status": errorRow(response.message); break;
+    case "knowledge_progress":
+      if (running) status(response.phase === "local" ? "正在查找本地笔记…" : response.phase === "expanding" ? "正在扩展笔记检索词（最多等待 5 秒）…" : response.phase === "fallback" ? "已使用本地检索结果，正在生成回复…" : response.count ? `已找到 ${response.count} 段笔记，正在生成回复…` : "正在生成回复…");
+      break;
     case "memory_status": if (!running) status(response.status === "organizing" ? "Agent 正在整理记忆…" : "就绪"); break;
     case "sessions": renderSessions(response.sessions || []); break;
     case "history": restoreHistory(response.messages || []); status("就绪"); break;
     case "delta": {
+      if (running) status("PI 正在回复…");
       if (response.kind === "thinking") {
         if (!thinkingRow) { thinkingRow = disclosure({ kind: "thinking", title: "思考过程", state: "running" }); thinkingRow.head.click(); }
         thinkingRow.content.textContent += response.text || "";
