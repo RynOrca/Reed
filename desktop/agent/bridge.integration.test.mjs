@@ -43,6 +43,7 @@ test("bridge selects an OpenAI-compatible remote model without contacting it", {
     assert.equal(result.type, "ack", result.message || stderr);
     assert.ok(seen.some((message) => message.type === "session" && message.model === "summon-remote/qwen-local"));
     assert.ok(seen.some((message) => message.type === "models" && message.models?.some((model) => model.id === "qwen-local")));
+    for(const name of ['remember_work','recall_memory','draft_work_skill','report_work_use'])assert.ok(seen.some(message=>message.type==='agent_capabilities'&&message.tools.some(tool=>tool.name===name&&tool.active)),`missing active experience tool ${name}`);
   } finally {
     child.stdin.end();
     child.kill();

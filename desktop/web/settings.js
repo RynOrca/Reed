@@ -200,7 +200,18 @@ function renderMemory() {
       title.textContent = item.title || item.key; text.textContent = item.body || item.content;
       source.textContent = item.updated ? `更新于 ${new Date(item.updated).toLocaleString()}${item.source ? " · 来源会话 " + item.source.slice(0, 8) : ""}` : "已有记忆";
       if(id==="working")source.textContent+=` · ${item.scope?"项目："+item.scope:"全局经验"}`;
-      content.append(title, text, source); row.append(content, deletionButton("删除", () => command(id === "facts" ? "memory_fact_delete" : id === "working" ? "memory_work_delete" : "memory_note_delete", id === "facts" ? { key: item.key } : id === "working" ? {title:item.title,workId:item.id} : { noteId: item.id }))); list.append(row);
+      if(id==="working"){
+        source.textContent+=` · 修订 ${item.revision||1}${item.status==="invalidated"?" · 已失效（不会召回）":""}`;
+        if(item.status!=="invalidated"&&(item.verification||item.evidence)){
+          const draftButton=element("button","生成技能草稿","secondary");draftButton.type="button";
+          draftButton.onclick=()=>action(async()=>{draftButton.disabled=true;try{const {draft}=await command("draft_work_skill",{workId:item.id});
+            const preview=element("details"),summary=element("summary","技能草稿（尚未启用）"),body=element("pre",draft.body,"note-excerpt"),enable=element("button","导入技能库","secondary");preview.open=true;enable.type="button";
+            enable.onclick=()=>action(async()=>{enable.disabled=true;try{await command("import_skill",{path:draft.dir});enable.textContent="已导入，可在角色中绑定";notice("技能已导入，请在角色中绑定后使用。");}catch(error){enable.disabled=false;throw error;}});
+            preview.append(summary,body,enable);content.append(preview);notice("已生成技能草稿，请检查适用条件和验证方法后导入。");
+          }finally{draftButton.disabled=false;}});content.append(draftButton);
+        }
+      }
+      content.prepend(title, text, source); row.append(content, deletionButton("删除", () => command(id === "facts" ? "memory_fact_delete" : id === "working" ? "memory_work_delete" : "memory_note_delete", id === "facts" ? { key: item.key } : id === "working" ? {title:item.title,workId:item.id} : { noteId: item.id }))); list.append(row);
     }
     if (!entries.length) { const p = document.createElement("p"); p.className = "hint"; p.textContent = "尚无内容，Agent 会从对话中整理。"; list.append(p); }
   }
@@ -305,6 +316,7 @@ if (tauri) {
       if (r.type === "vault_overview") renderOverview(r);
       if (r.type === "roles") renderRoles(r.roles || []);
       if (r.type === "memory_status") $("memory-status").textContent = ({ organizing:" 正在整理…", saved:" 已整理", error:" 整理失败，可稍后重试" })[r.status] || "";
+      if(r.type==="work_memory_status")notice(r.message||"工作经验状态已更新。",r.status==="error");
       if (r.type === "disconnected") { for (const p of pending.values()) { clearTimeout(p.timer); p.reject(new Error("Agent 连接断开")); } pending.clear(); notice("Agent 连接断开，请在主对话窗口恢复连接后重试。", true); }
     });
     const prefs = await tauri.core.invoke("desktop_preferences"); savedShortcut = prefs.activeShortcut || prefs.shortcut || ""; $("shortcut").textContent = savedShortcut || "录入快捷键"; $("autostart").checked = prefs.autostart === true;

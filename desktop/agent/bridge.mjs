@@ -13,6 +13,7 @@ import { createContextPolicy } from "./context-policy.mjs";
 import { GoalStore } from "./goals.mjs";
 import { roleFeatureExtension } from "./role-features.mjs";
 import { VaultOverview } from "./vault-overview.mjs";
+import { createWorkRecaller } from './work-recall.mjs';
 import { join, resolve } from "node:path";
 import { createApprovalGate } from "./approval.mjs";
 import { RoleStore } from "./roles.mjs";
@@ -66,6 +67,7 @@ const providers = new ProviderStore(agentDir,{config:userConfig});
 await providers.load();
 const capabilities = new CapabilityStore(dataDir,{config:userConfig});
 await capabilities.load();
+capabilities.canUseSkill=skill=>!skill.experienceId||memory.workItems(cwd).some(item=>item.id===skill.experienceId&&(item.revision||1)===skill.experienceRevision);
 await installLearningSkills(capabilities);
 const learner = new LearnerStore(dataDir);
 await learner.load();
@@ -86,7 +88,8 @@ const securityPath = join(dataDir, "security.json");
 const security = await userConfig.get("security",securityPath,{approval:"manual"});
 const scope = new FileScope({ workspace: () => cwd, readOnly: () => [capabilities.state.vaultPath, join(dataDir,"skills"), join(dataDir, "attachments"), join(dataDir,"artifacts","screenshots"), contextPolicy.artifactsDir, ...(security.readOnly || [])].filter(Boolean), fullAccess: () => security.access === "full", protectedPaths: () => [
   {path:goals.dir,denyRead:!roles.current().learningGoalsEnabled},
-  ...["memory.json","learner.json"].map(name=>({path:join(dataDir,name),denyRead:true})),
+  ...capabilities.state.skills.filter(skill=>skill.experienceId&&!capabilities.canUseSkill(skill)).map(skill=>({path:skill.path,denyRead:true})),
+  ...["memory.json","learner.json","local-search.sqlite","local-search.sqlite-wal","local-search.sqlite-shm"].map(name=>({path:join(dataDir,name),denyRead:true})),
 ] });
 capabilities.canRead = async path => {try {await scope.check(path);return true;}catch{return false;}};
 const vaultOverview = new VaultOverview({capabilities,runtime:getRuntime,model:()=>session?.model,send,canRead:capabilities.canRead});
@@ -99,6 +102,7 @@ const memoryAgent = createMemoryAgent({ memory, learner, send, judgeValue, curre
 memory.agentAllowed=learner.agentAllowed=source=>roles.current().learnerProfileEnabled===true&&!sessionDisallowsMemory(session)&&source===session?.sessionId;
 memory.matchTopic=learner.matchTopic=semanticMatcher({runtime:getRuntime,model:()=>session?.model?.provider!=="unknown"?session?.model:null,allowed:()=>roles.current().learnerProfileEnabled===true&&!sessionDisallowsMemory(session)});
 memory.workAllowed=source=>memory.state.enabled.work&&!sessionDisallowsMemory(session)&&source===session?.sessionId;
+memory.recallWork=createWorkRecaller({memory,runtime:getRuntime,model:()=>session?.model});
 memory.matchWorkTopic=semanticMatcher({runtime:getRuntime,model:()=>session?.model?.provider!=="unknown"?session?.model:null,allowed:()=>memory.state.enabled.work&&!sessionDisallowsMemory(session)});
 const preparedSkills=new Map(),preparedReviews=new Set();
 let reviewReadKey=null;
@@ -118,7 +122,7 @@ async function prepareSkills(text) {
   if(hasRequiredReview(roles.current(),capabilities,text))preparedReviews.add(key);
   if(preparedSkills.size>100){const oldest=preparedSkills.keys().next().value;preparedSkills.delete(oldest);preparedReviews.delete(oldest);}
 }
-const learningTools = createLearningTools({ capabilities, currentWorkspace: () => cwd, roles, send, scope, vaultOverview,runtime:getRuntime,model:()=>session?.model, roleSkillInstructions: prompt=>preparedSkills.get(roles.activeId+'\n'+prompt)||'' });
+const learningTools = createLearningTools({ capabilities, currentWorkspace: () => cwd, roles, send, scope, vaultOverview,runtime:getRuntime,model:()=>session?.model, roleSkillInstructions: prompt=>prepareRoleSkills(roles.current(),capabilities,prompt) });
 const learnerTools = learnerExtension({ learner, memory, judgeValue, currentSession: () => session, send, enabled:()=>roles.current().learnerProfileEnabled === true });
 const roleFeatures = roleFeatureExtension({roles,goals,project:()=>projectPath,workspace:()=>cwd,learner,memory,currentSession:()=>session,reviewEnabled});
 let generationStart = null, firstDelta = null, outputTokens = 0, generationMs = 0, missingUsage = false;
@@ -189,7 +193,7 @@ async function openSession(provider, modelId, sessionManager) {
     agentDir,
     modelRuntime: models,
     model,
-    tools: roles.activeId==="planner" ? ["read","ls","find","grep","current_time","web_search","fetch_url","search_notes"] : [...FILE_TOOLS, "remember_work", "recall_memory", ...(roles.current().learnerProfileEnabled ? ["remember", "record_learning_event"] : []), ...LEARNING_TOOLS,...MCP_TOOLS,...VISUAL_TOOLS],
+    tools: roles.activeId==="planner" ? ["read","ls","find","grep","current_time","web_search","fetch_url","search_notes"] : [...FILE_TOOLS, "remember_work", "recall_memory", "draft_work_skill", "report_work_use", ...(roles.current().learnerProfileEnabled ? ["remember", "record_learning_event"] : []), ...LEARNING_TOOLS,...MCP_TOOLS,...VISUAL_TOOLS],
     customTools: sandboxTools(scope),
     sessionManager,
     settingsManager,
@@ -452,6 +456,8 @@ async function handle(command) {
         break;
       case "memory_work_delete":
         workingTools.cancel();await memory.deleteWork(command.title,command.workId);send({type:"memory",state:memory.snapshot()});send({type:"ack",id});break;
+      case "draft_work_skill":
+        send({type:'ack',id,draft:await memory.createWorkSkillDraft(command.workId,cwd)});break;
       case "memory_fact_delete":
         memoryAgent.cancel(); await memory.deleteFact(command.key);
         send({ type: "memory", state: memory.snapshot() }); send({ type: "ack", id }); break;
@@ -693,6 +699,7 @@ for await (const line of createInterface({ input: process.stdin })) {
 await queue;vaultOverview.cancel();await mcp.closeAll();
 memoryAgent.cancel();
 workingTools.cancel();
+capabilities.close();
 learningTools.close();
 session?.dispose();
 approvalGate.cancel("Agent 进程已退出");

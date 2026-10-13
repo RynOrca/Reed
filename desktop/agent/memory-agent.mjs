@@ -29,16 +29,16 @@ export function createMemoryAgent({ memory, learner, send, currentSession, runti
   function extension(pi) {
     pi.registerTool(defineTool({
       name: "remember", label: "整理记忆", description: "保存用户明确表达的长期学习背景、偏好或可复用知识。只保存明确事实，纠正时使用相同 key/title 更新。不要存凭据、一次性任务或推测。",
-      parameters: Type.Object({ layer: Type.Union([Type.Literal("profile"), Type.Literal("knowledge")]), key: Type.String(), content: Type.String() }),
+      parameters: Type.Object({ layer: Type.Union([Type.Literal("profile"), Type.Literal("knowledge")]), key: Type.String(), content: Type.String(),operation:Type.Optional(Type.Union([Type.Literal('supplement'),Type.Literal('replace')])) }),
       async execute(_id, input, signal) {
         if (!enabled()) return { content: [{ type: "text", text: "当前角色的学习者画像与记忆功能已关闭，未保存" }], details: { skipped: true } };
         if (sessionDisallowsMemory(currentSession())) return { content: [{ type: "text", text: "用户已要求本会话不写入长期记忆，未保存" }], details: { skipped: true, reason: "session_no_memory" } };
         const layer = input.layer === "profile" ? "l1" : "l2";
         if (!memory.state.enabled[layer]) return { content: [{ type: "text", text: "此层记忆已关闭，未保存" }], details: {} };
         const selected = currentSession();
-        const verdict = await judgeValue?.([{ area: input.layer, key: input.key, content: input.content }], { signal });
+        const verdict = await judgeValue?.([{ area: input.layer, key: input.key, content: input.content,operation:input.operation }], { signal });
         if (!verdict?.[0] || signal?.aborted || currentSession() !== selected || !enabled() || sessionDisallowsMemory(selected) || !memory.state.enabled[layer]) return skippedMemory();
-        await memory.applyAgentUpdate(input.layer === "profile" ? { facts: [{ key: input.key, content: input.content }] } : { notes: [{ title: input.key, body: input.content }] }, currentSession()?.sessionId || "agent");
+        await memory.applyAgentUpdate(input.layer === "profile" ? { facts: [{ key: input.key, content: input.content,operation:input.operation }] } : { notes: [{ title: input.key, body: input.content,operation:input.operation }] }, currentSession()?.sessionId || "agent");
         send({ type: "memory", state: memory.snapshot() });
         return { content: [{ type: "text", text: "记忆已整理保存" }], details: { layer } };
       },

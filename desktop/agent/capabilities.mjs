@@ -1,7 +1,8 @@
 import { mkdir, readFile, writeFile, rename, readdir, lstat, realpath, copyFile } from "node:fs/promises";
 import { join, resolve, relative, isAbsolute, basename, extname } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { protectKey, unprotectKey } from "./endpoint.mjs";
+import { LocalSearchIndex } from "./local-search.mjs";
 
 export function inside(root, path) { const rel = relative(root, path); return !rel.startsWith("..") && !isAbsolute(rel); }
 export function terms(text) { const s = String(text).toLowerCase(); return [...new Set([...(s.match(/[a-z0-9_]{2,}/g) || []), ...(s.match(/[\u3400-\u9fff]+/g) || []).flatMap(v => Array.from({length: Math.max(1,v.length-1)}, (_,i)=>v.slice(i,i+2)))])]; }
@@ -15,13 +16,13 @@ export async function walk(root, accept, budget = { files:0, bytes:0 }) {
       if(!item.isFile() || !accept(path)) continue;
       const info=await lstat(path); budget.files++; budget.bytes+=info.size;
       if(budget.files>10000 || budget.bytes>100*1024*1024) throw new Error("文件库超过轻量索引上限（1 万文件 / 100 MB），请选择较小的目录");
-      found.push({path,size:info.size,mtime:info.mtimeMs});
+      found.push({path,size:info.size,mtime:info.mtimeMs,ctime:info.ctimeMs});
     }
   }
   await visit(root); return found;
 }
 export class CapabilityStore {
-  constructor(dir,{encrypt=protectKey,decrypt=unprotectKey,config=null}={}) { this.dir=dir; this.config=config; this.path=join(dir,"capabilities.json"); this.encrypt=encrypt; this.decrypt=decrypt; this.state={skills:[],vaultPath:null,webEnabled:false,browserEnabled:true}; this.cache=new Map(); this.key=""; }
+  constructor(dir,{encrypt=protectKey,decrypt=unprotectKey,config=null}={}) { this.dir=dir; this.config=config; this.path=join(dir,"capabilities.json"); this.encrypt=encrypt; this.decrypt=decrypt; this.state={skills:[],vaultPath:null,webEnabled:false,browserEnabled:true}; this.cache=new Map(); this.localSearch=null; this.key=""; }
   async load() { try { Object.assign(this.state,this.config?await this.config.get("capabilities",this.path,this.state):JSON.parse(await readFile(this.path,"utf8"))); } catch(e) { if(e.code!=="ENOENT") throw e; } try { this.key=await this.decrypt(await this.encryptedKey()); } catch(e) { if(e.code!=="ENOENT") this.keyError="搜索凭据无法读取，请重新保存"; } }
   async encryptedKey(){const data=this.config?await this.config.read():{};if(data.credentials?.tavily)return data.credentials.tavily;const old=await readFile(join(this.dir,"tavily-key.dpapi"),"utf8");if(this.config)await this.config.update(d=>{d.credentials||={};d.credentials.tavily=old;});return old;}
   snapshot() { return {...this.state,hasSearchKey:!!this.key,keyError:this.keyError}; }
@@ -47,10 +48,11 @@ export class CapabilityStore {
     if(files.length>500 || files.reduce((n,f)=>n+f.size,0)>10*1024*1024) throw new Error("单个技能最多 500 文件 / 10 MB");
     const id=randomUUID(), target=join(this.dir,"skills",id);
     for(const file of files) { const dest=join(target,relative(root,file.path)); await mkdir(resolve(dest,".."),{recursive:true}); await copyFile(file.path,dest); }
-    this.state.skills.push({id,name,description:description.slice(0,1000),path:target,enabled:true}); await this.persist(); return id;
+    const experienceId=text.match(/^reed_experience_id:\s*([a-z0-9-]+)\s*$/mi)?.[1],experienceRevision=Number(text.match(/^reed_experience_revision:\s*(\d+)\s*$/m)?.[1]);
+    this.state.skills.push({id,name,description:description.slice(0,1000),path:target,enabled:true,...(experienceId&&Number.isSafeInteger(experienceRevision)?{experienceId,experienceRevision}:{})}); await this.persist(); return id;
   }
   async toggleSkill(id,enabled) { const s=this.state.skills.find(s=>s.id===id); if(!s) throw new Error("技能不存在"); s.enabled=!!enabled; await this.persist(); }
-  enabledSkills() { return this.state.skills.filter(s=>s.enabled).map(s=>s.path); }
+  enabledSkills() { return this.state.skills.filter(s=>s.enabled&&(!this.canUseSkill||this.canUseSkill(s))).map(s=>s.path); }
   async browseNotes(offset=0) {
     if(!this.state.vaultPath)return {results:[],next:null,total:0};
     if(!Number.isSafeInteger(offset)||offset<0)throw Error("浏览位置无效");
@@ -60,30 +62,47 @@ export class CapabilityStore {
     return {results,total:readable.length,next:offset+results.length<readable.length?offset+results.length:null};
   }
   async searchNotes(query,limit=4) {
+    const operation=(this.searchQueue||Promise.resolve()).catch(()=>{}).then(()=>this.searchNotesOnce(query,limit));
+    this.searchQueue=operation;return operation;
+  }
+  async searchNotesOnce(query,limit=4) {
     if(!this.state.vaultPath) return [];
-    const root=this.state.vaultPath, files=await walk(root,p=>extname(p).toLowerCase()===".md"&&basename(p)!=="Reed-笔记库总览.md"), active=new Set(files.map(f=>f.path));
-    for(const p of this.cache.keys()) if(!active.has(p)) this.cache.delete(p);
-    const needles=terms(query); if(!needles.length) return [];
-    const hits=[];
+    const needles=terms(query);if(!needles.length)return [];
+    const root=this.state.vaultPath, files=await walk(root,p=>extname(p).toLowerCase()===".md"&&basename(p)!=="Reed-笔记库总览.md");
+    const activeIds=[];
+    if(!this.localSearch)this.localSearch=new LocalSearchIndex(join(this.dir,"local-search.sqlite"));
+    try{
     for(const file of files) {
       if(this.canRead && !(await this.canRead(file.path))) continue;
       if(file.size>1024*1024) continue;
-      let entry=this.cache.get(file.path);
-      if(!entry || entry.mtime!==file.mtime) {
-        const lines=(await readFile(file.path,"utf8")).split(/\r?\n/), chunks=[]; let heading="",start=0;
-        for(let i=0;i<=lines.length;i++) {
-          if(i===lines.length || /^#{1,6}\s/.test(lines[i]) || (i>start && !lines[i].trim()) || i-start>=30) {
-            let first=start,last=i; while(first<last && !lines[first].trim())first++; while(last>first && !lines[last-1].trim())last--;
-            const content=lines.slice(first,last).join("\n").trim(); if(content) chunks.push({heading,startLine:first+1,endLine:last,content:content.slice(0,4000)});
-            if(i<lines.length && /^#{1,6}\s/.test(lines[i])) heading=lines[i].replace(/^#+\s*/,""); start=i;
+      const name=relative(root,file.path),prefix=`${createHash("sha256").update(name).digest("hex")}:`;
+      const revision=`${file.size}:${file.mtime}:${file.ctime}`;
+      const previous=this.localSearch.list("notes",root,prefix);
+      if(previous.length&&previous.every(item=>item.revision===revision)){activeIds.push(...previous.map(item=>item.id));continue;}
+      const body=await readFile(file.path,"utf8"), lines=body.split(/\r?\n/);
+      let heading="",start=0;
+      for(let i=0;i<=lines.length;i++) {
+        if(i===lines.length || /^#{1,6}\s/.test(lines[i]) || (i>start && !lines[i].trim()) || i-start>=30) {
+          let first=start,last=i; while(first<last && !lines[first].trim())first++; while(last>first && !lines[last-1].trim())last--;
+          const content=lines.slice(first,last).join("\n").trim();
+          if(content) {
+            const id=`${prefix}${first+1}`;
+            const payload={heading,startLine:first+1,endLine:last,content:content.slice(0,4000),path:file.path,title:name,url:`summon-file:${encodeURIComponent(file.path)}#L${first+1}`};
+            this.localSearch.put({id,area:"notes",scope:root,text:`${name}\n${heading}\n${content.slice(0,4000)}`,payload,revision});
+            activeIds.push(id);
           }
+          if(i<lines.length && /^#{1,6}\s/.test(lines[i])) heading=lines[i].replace(/^#+\s*/,""); start=i;
         }
-        entry={mtime:file.mtime,chunks}; this.cache.set(file.path,entry);
       }
-      const name=relative(root,file.path);
-      for(const chunk of entry.chunks) { const hay=chunk.content.toLowerCase(),title=(name+" "+chunk.heading).toLowerCase(); const score=needles.reduce((n,t)=>n+(hay.includes(t)?1:0)+(title.includes(t)?3:0),0); if(score) hits.push({...chunk,path:file.path,title:name,score,url:`summon-file:${encodeURIComponent(file.path)}#L${chunk.startLine}`}); }
     }
-    return hits.sort((a,b)=>b.score-a.score).slice(0,Math.min(8,Math.max(1,limit)));
+    this.localSearch.retain("notes",root,activeIds);
+    if(!terms(query).length)return [];
+    return this.localSearch.search("notes",root,query,Math.min(8,Math.max(1,limit))).map(hit=>({...hit.payload,score:hit.score}));
+    }finally{this.close();}
+  }
+  close() {
+    this.localSearch?.close();
+    this.localSearch=null;
   }
   async resolveFile(input,workspace) {
     let raw=String(input); if(raw.startsWith("summon-file:")) raw=decodeURIComponent(raw.slice(12).split("#")[0]); else if(raw.startsWith("file:")) raw=decodeURIComponent(new URL(raw).pathname).replace(/^\/(?=[A-Za-z]:)/,""); else raw=decodeURIComponent(raw.split("#")[0]);

@@ -6,16 +6,17 @@ import { createHash } from "node:crypto";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 
-export const learningEventSchema=Type.Object({kind:Type.Union(["goal","preference","concept","misconception","review"].map(v=>Type.Literal(v))),subject:Type.String({minLength:1,maxLength:100}),detail:Type.String({maxLength:1000}),evidence:Type.String({minLength:2,maxLength:1000}),status:Type.Optional(Type.Union(["active","completed","needs_review","resolved"].map(v=>Type.Literal(v))))});
+export const learningEventSchema=Type.Object({kind:Type.Union(["goal","preference","concept","misconception","review"].map(v=>Type.Literal(v))),subject:Type.String({minLength:1,maxLength:100}),detail:Type.String({maxLength:1000}),evidence:Type.String({minLength:2,maxLength:1000}),operation:Type.Optional(Type.Union([Type.Literal('supplement'),Type.Literal('replace')])),targetSubject:Type.Optional(Type.String({maxLength:100})),status:Type.Optional(Type.Union(["active","completed","needs_review","resolved"].map(v=>Type.Literal(v))))});
 const empty=()=>({version:1,updated:null,goals:[],knowledge:[],misconceptions:[],preferences:[],events:[]});
 export class LearnerStore {
   constructor(dir) {this.path=join(dir,"learner.json");this.state=empty();this.persistence=Promise.resolve();}
-  async load(){try{const saved=JSON.parse(await readFile(this.path,"utf8"));if(!Array.isArray(saved.events))throw new Error("画像事件记录无效");this.state=empty();this.state.events=saved.events.slice(-2000);this.rebuild();}catch(e){if(e.code!=="ENOENT")throw e;}}
+  async load(){try{const saved=JSON.parse(await readFile(this.path,"utf8"));if(!Array.isArray(saved.events))throw new Error("画像事件记录无效");this.state=empty();this.state.events=saved.events;this.rebuild();}catch(e){if(e.code!=="ENOENT")throw e;}}
   rebuild(){const events=this.state.events;this.state={...empty(),events};for(const event of events)this.apply(event);}
   apply(event) {
     const list=({goal:"goals",preference:"preferences",concept:"knowledge",misconception:"misconceptions",review:"knowledge"})[event.kind];if(!list)return;
-    let item=this.state[list].find(i=>similarTopic(i.subject,event.subject));if(!item){item={subject:event.subject};this.state[list].push(item);}
-    Object.assign(item,{detail:supplement(item.detail,event.detail,1000),evidence:event.evidence,sources:[...new Set([...(item.sources||[]),event.source])].slice(-8),source:event.source,updated:event.time});
+    let item=this.state[list].find(i=>similarTopic(i.subject,event.operation==='replace'&&event.targetSubject?event.targetSubject:event.subject));if(!item){item={subject:event.subject};this.state[list].push(item);}
+    if(event.operation==='replace'){const duplicate=this.state[list].find(i=>i!==item&&similarTopic(i.subject,event.subject));if(duplicate){this.state[list].splice(this.state[list].indexOf(item),1);item=duplicate;}}
+    Object.assign(item,{subject:event.subject,detail:event.operation==='replace'?event.detail:supplement(item.detail,event.detail,1000),evidence:event.evidence,sources:[...new Set([...(item.sources||[]),event.source])],source:event.source,updated:event.time});
     if(event.kind==="goal")item.status=event.status==="completed"?"completed":"active";
     if(event.kind==="misconception")item.status=event.status==="resolved"?"resolved":"active";
     if(event.kind==="concept" || event.kind==="review") {item.mastery=null;item.status="needs_review";item.lastStudied=event.time;item.nextReview=new Date(new Date(event.time).getTime()+86400000).toISOString();}
@@ -24,18 +25,20 @@ export class LearnerStore {
   async record(event,source,userEvidence) {
     if(!["goal","preference","concept","misconception","review"].includes(event.kind) || typeof event.subject!=="string" || typeof event.detail!=="string" || typeof event.evidence!=="string") throw new Error("学习事件格式无效");
     const evidence=event.evidence.trim();if(evidence.length<2 || !userEvidence.some(text=>text.includes(evidence)))throw new Error("学习事件必须引用本次对话中用户的原话；不能凭提问推测掌握程度");
+    if(event.operation&&!['supplement','replace'].includes(event.operation))throw Error('学习画像更新方式无效');
     let subject=event.subject.trim().slice(0,100);
     const list=({goal:"goals",preference:"preferences",concept:"knowledge",misconception:"misconceptions",review:"knowledge"})[event.kind];
     const same=this.state[list].find(i=>similarTopic(i.subject,subject))||await this.matchTopic?.(subject,this.state[list],"subject",event.detail);if(same)subject=same.subject;if(!subject)throw new Error("缺少事件主题");
     if(this.agentAllowed&&!this.agentAllowed(source))throw Error("学习画像写入已关闭");
-    const id=createHash("sha256").update(JSON.stringify([source,event.kind,subject,evidence,event.detail,event.status])).digest("hex");
+    if(event.operation==='replace'&&event.targetSubject&&!this.state[list].some(i=>similarTopic(i.subject,event.targetSubject)))throw Error('待纠正的画像主题不存在');
+    const id=createHash("sha256").update(JSON.stringify([source,event.kind,subject,evidence,event.detail,event.status,event.operation,event.targetSubject])).digest("hex");
     if(this.state.events.some(e=>e.id===id))return false;
-    const entry={id,kind:event.kind,subject,detail:event.detail.slice(0,1000),evidence:evidence.slice(0,1000),status:event.status,source,time:new Date().toISOString()};
-    this.state.events.push(entry);this.state.events=this.state.events.slice(-2000);this.rebuild();
+    const entry={id,kind:event.kind,subject,detail:event.detail.slice(0,1000),evidence:evidence.slice(0,1000),status:event.status,operation:event.operation||'supplement',targetSubject:event.targetSubject,source,time:new Date().toISOString()};
+    this.state.events.push(entry);this.rebuild();
     const content=JSON.stringify(this.state,null,2);const operation=this.persistence.catch(()=>{}).then(async()=>{await writeFile(this.path+".tmp",content);await rename(this.path+".tmp",this.path);});this.persistence=operation;await operation;return true;
   }
   snapshot(){const {events,...profile}=this.state;return structuredClone({...profile,eventCount:events.length,recentEvents:events.slice(-8).reverse()});}
-  context({review=false}={}){const {goals,knowledge,misconceptions,preferences}=this.state;const brief=items=>items.map(i=>({subject:i.subject,status:i.status,detail:i.detail.slice(0,100)}));return JSON.stringify({progress:{studiedTopics:knowledge.length,lastStudied:this.state.updated},goals:brief(goals.filter(g=>g.status==="active").slice(-3)),knowledge:brief(knowledge.filter(k=>review||k.status!=="needs_review").slice(-3)),misconceptions:brief(misconceptions.filter(m=>m.status!=="resolved").slice(-2)),preferences:brief(preferences.slice(-3))}).slice(0,1600);}
+  context({review=false,query=''}={}){const {goals,knowledge,misconceptions,preferences}=this.state;const brief=(items,limit)=>{const words=query.toLowerCase().match(/[a-z0-9]+|[\u3400-\u9fff]{2}/g)||[];return items.map((i,index)=>({i,index,score:words.reduce((n,w)=>n+(`${i.subject} ${i.detail}`.toLowerCase().includes(w)?1:0),0)})).sort((a,b)=>b.score-a.score||b.index-a.index).slice(0,limit).map(({i})=>({subject:i.subject,status:i.status,detail:i.detail.slice(0,100),updated:i.updated,source:i.source}));};return JSON.stringify({progress:{studiedTopics:knowledge.length,lastStudied:this.state.updated},goals:brief(goals.filter(g=>g.status==="active"),3),knowledge:brief(knowledge.filter(k=>review||k.status!=="needs_review"),3),misconceptions:brief(misconceptions.filter(m=>m.status!=="resolved"),2),preferences:brief(preferences,3)});}
   recall({review=false,query=""}={}){return [ ...this.state.goals,...this.state.knowledge,...this.state.misconceptions,...this.state.preferences].filter(i=>(review||i.status!=="needs_review")&&(!query||similarTopic(i.subject,query)||i.detail.includes(query))).slice(-6);}
 }
 export function userTexts(session){return (session?.state.messages||[]).filter(m=>m.role==="user").slice(-8).map(m=>typeof m.content==="string"?m.content:(m.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n"));}
