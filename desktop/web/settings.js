@@ -2,7 +2,8 @@ const $ = id => document.getElementById(id);
 import { icon, windowHandles } from "./icons.js";
 import { createSkillBindings } from "./role-skills.js";
 const roleSkills = createSkillBindings($("role-skills"));
-import { initBrand, saveAppearance } from "./brand.js";
+import { initBrand, saveAppearance, appVersion } from "./brand.js";
+import { checkForUpdate, installUpdate, openReleasePage } from "./update.js";
 const tauri = window.__TAURI__;
 await initBrand(tauri);
 let sequence = 0, templates = [], providers = [], editing = null, providerId = null, recording = false, savedShortcut = "", memory = {}, roleId = null;
@@ -202,6 +203,52 @@ function renderRoles(roles) {
 $("role-new").onclick = () => { roleId = null; $("role-form").reset(); roleSkills.set(); $("role-name").focus(); };
 $("role-form").onsubmit = event => { event.preventDefault(); void action(async () => { await command("save_role", { roleId, name: $("role-name").value, system: $("role-system").value, skills: roleSkills.get(), learningGoalsEnabled:$("role-goals-enabled").checked, learnerProfileEnabled:$("role-profile-enabled").checked }); roleId = null; $("role-form").reset(); roleSkills.set(); notice("角色已保存，可在对话窗口选择。"); }); };
 for(const id of ['appearance-theme','appearance-icon']) $(id).onchange=()=>action(()=>saveAppearance($("appearance-icon").value,$("appearance-theme").value));
+
+// 「关于」页：显示版本号，支持检查更新与一键安装。
+let pendingUpdate = null;
+function updateStatus(text, error = false) { const el = $("update-status"); el.textContent = text; el.classList.toggle("error", error); }
+function setProgress(ratio) { const box = $("update-progress"); box.hidden = ratio === null; if (ratio !== null) box.firstElementChild.style.width = `${Math.max(0, Math.min(100, ratio * 100)).toFixed(1)}%`; }
+void appVersion(tauri).then(version => { $("about-version").textContent = version || "未知"; });
+$("check-update").onclick = () => action(async () => {
+  const button = $("check-update"); button.disabled = true;
+  $("install-update").hidden = true; $("open-release").hidden = true; setProgress(null);
+  updateStatus("正在检查更新…");
+  try {
+    const result = await checkForUpdate(tauri);
+    if (result.status === "available") {
+      pendingUpdate = result.update;
+      updateStatus(`发现新版本 ${result.latest}（当前 ${result.current}）。安装前会校验签名，完成后应用会自动重启。`);
+      $("install-update").hidden = false;
+    } else if (result.status === "available-manual") {
+      pendingUpdate = null;
+      updateStatus(`发现新版本 ${result.latest}（当前 ${result.current}）。当前版本未内置签名校验，请前往下载页手动更新。`);
+      $("open-release").hidden = false;
+    } else if (result.status === "current") {
+      updateStatus(`已是最新版本（${result.current}）。`);
+    } else {
+      updateStatus(result.reason || "无法检查更新。", true);
+    }
+  } finally { button.disabled = false; }
+});
+$("install-update").onclick = () => action(async () => {
+  if (!pendingUpdate) return;
+  const button = $("install-update"); button.disabled = true; setProgress(0);
+  updateStatus("正在下载更新…");
+  let received = 0, total = 0;
+  try {
+    await installUpdate(pendingUpdate, { onProgress: ({ phase, total: size, chunk }) => {
+      if (phase === "started") { total = size || 0; }
+      else if (phase === "progress") { received += chunk || 0; setProgress(total ? received / total : 0); }
+      else if (phase === "installing") { setProgress(1); updateStatus("正在安装并重启…"); }
+    } });
+    updateStatus("更新已安装，应用即将重启…");
+  } catch (error) {
+    setProgress(null); button.disabled = false;
+    updateStatus(`更新失败：${String(error?.message || error).slice(0, 200)}`, true);
+  }
+});
+$("open-release").onclick = () => action(() => openReleasePage());
+
 $("autostart").onchange = () => action(async () => { try { await tauri.core.invoke("set_autostart", { enabled: $("autostart").checked }); } catch(error) { $("autostart").checked = !$("autostart").checked; throw error; } });
 async function finishRecording() { recording = false; $("shortcut").textContent = savedShortcut || "录入快捷键"; await tauri.core.invoke("capture_shortcut", { active: false }); }
 $("shortcut").onclick = () => action(async () => { if (recording) return; await tauri.core.invoke("capture_shortcut", { active: true }); recording = true; $("shortcut").textContent = "请按下组合键…"; $("shortcut").focus(); });

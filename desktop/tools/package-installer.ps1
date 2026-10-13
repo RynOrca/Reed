@@ -20,12 +20,18 @@ $config = @{
     bundle = @{
         active = $true; useLocalToolsDir = $true; targets = @('nsis'); icon = @('icons/icon.ico')
         shortDescription = 'Reed 一苇 — 一苇以航，轻渡学海。'
+        # 有签名私钥时才生成更新产物：否则 tauri 会以缺少私钥直接失败，
+        # 而签名是「关于 → 检查更新」内置安装的硬前提（应用会用公钥校验安装包）。
+        createUpdaterArtifacts = [bool]$env:TAURI_SIGNING_PRIVATE_KEY
         resources = $resources
         windows = @{
             nsis = @{ installMode = 'currentUser'; languages = @('SimpChinese','English'); displayLanguageSelector = $false; installerIcon = 'icons/icon.ico'; compression = 'lzma' }
             webviewInstallMode = @{ type = 'downloadBootstrapper' }
         }
     }
+}
+if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+    Write-Warning '未设置 TAURI_SIGNING_PRIVATE_KEY：本次不生成更新产物，安装包无法用于应用内一键更新。正式发版请先设置私钥。'
 }
 $configPath = Join-Path $Output 'installer-config.json'
 [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))

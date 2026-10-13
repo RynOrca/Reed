@@ -22,5 +22,19 @@
       }
     ]
   },
-  "mainBinaryName": "Reed"
+  "mainBinaryName": "Reed",
+  "bundle": {
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/RynOrca/Reed/releases/latest/download/latest.json"
+      ],
+      "pubkey": "",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
 }

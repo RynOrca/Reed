@@ -114,6 +114,19 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     await settings.locator('#appearance-icon').selectOption('glass');await settings.locator('#appearance-theme').selectOption('dark');
     await main.waitForFunction(()=>document.querySelector('.header-brand').src.includes('glass-dark'));
     checks.push('Reed 品牌首屏、原生托盘图标、两套图标浅深切换与扩大设置拖动区');
+    // 启动动画显示版本号，且必须与「关于」页一致（同一来源，不允许两处漂移）
+    const splashVersion=await main.locator('#startup-version').textContent();
+    assert.match(splashVersion,/版本 \d+\.\d+\.\d+/,`启动动画应显示版本号，实际：${splashVersion}`);
+    await settings.locator('button[data-section="about"]').click();
+    const aboutVersion=await settings.locator('#about-version').textContent();
+    assert.match(aboutVersion,/^\d+\.\d+\.\d+$/,`关于页应显示版本号，实际：${aboutVersion}`);
+    assert.equal(splashVersion.replace('版本 ',''),aboutVersion,'启动动画与关于页的版本号必须一致');
+    assert.equal(await settings.locator('#check-update').isVisible(),true);
+    await settings.locator('#check-update').click();
+    // 无外网时只要求「不崩、不谎报」：状态必须给出明确结果，不能停在「正在检查」
+    await settings.waitForFunction(()=>{const t=document.getElementById('update-status').textContent;return t&&!t.includes('正在检查');},{timeout:30000});
+    checks.push('启动动画与关于页版本号一致，检查更新给出明确结果');
+    await settings.screenshot({path:path.join(artifacts,'settings-about.png')});
     await settings.locator('button[data-section="models"]').click();
     await settings.locator('.template-card').filter({hasText:'自定义'}).click();
     const providerGap=await settings.locator('#provider-form').evaluate(e=>e.getBoundingClientRect().top-document.getElementById('templates').getBoundingClientRect().bottom);assert.ok(providerGap>=20);

@@ -22,6 +22,16 @@
 
 Markdown 渲染使用 Marked，MIT License；完整文本位于 `desktop/web/vendor/MARKED-LICENSE`。前端库与该文本随源码保留。
 
+## Tauri updater / process 与 @tauri-apps/api（前端 vendor）
+
+前端不做打包，「关于 → 检查更新」需要的模块以 ESM 形式复制到 `desktop/web/vendor/`，并由页面中的 import map 解析裸模块说明符：
+
+- `desktop/web/vendor/plugin-updater/index.js` ← `@tauri-apps/plugin-updater`（MIT OR Apache-2.0）
+- `desktop/web/vendor/plugin-process/index.js` ← `@tauri-apps/plugin-process`（MIT OR Apache-2.0）
+- `desktop/web/vendor/tauri-api/` ← `@tauri-apps/api` 的 `core.js` 与其 tslib 依赖（MIT OR Apache-2.0）
+
+许可证文本随文件保留：`TAURI-API-LICENSE-MIT`、`TAURI-API-LICENSE-APACHE-2.0`、`TAURI-PLUGIN-UPDATER-LICENSE.spdx`、`TAURI-PLUGIN-PROCESS-LICENSE.spdx`。这些副本仅做路径调整，未修改源码；升级依赖时需同步重新复制。
+
 ## Tauri 与其他依赖
 
 Tauri 及 Rust / npm 依赖各自遵循包内许可证。依赖列表由 Cargo.lock 和 package-lock.json 记录。本仓库不是 PI-Desktop 插件发行包。
