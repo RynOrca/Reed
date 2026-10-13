@@ -22,10 +22,10 @@ export async function walk(root, accept, budget = { files:0, bytes:0 }) {
   await visit(root); return found;
 }
 export class CapabilityStore {
-  constructor(dir,{encrypt=protectKey,decrypt=unprotectKey,config=null}={}) { this.dir=dir; this.config=config; this.path=join(dir,"capabilities.json"); this.encrypt=encrypt; this.decrypt=decrypt; this.state={skills:[],vaultPath:null,webEnabled:false,browserEnabled:true}; this.cache=new Map(); this.localSearch=null; this.key=""; }
+  constructor(dir,{encrypt=protectKey,decrypt=unprotectKey,config=null}={}) { this.dir=dir; this.config=config; this.path=join(dir,"capabilities.json"); this.encrypt=encrypt; this.decrypt=decrypt; this.state={skills:[],vaultPath:null,webEnabled:false,browserEnabled:true}; this.cache=new Map(); this.localSearch=null; this.key=""; this.noteScanStatus={state:"idle",checkedFiles:0,errorCount:0,errors:[]}; }
   async load() { try { Object.assign(this.state,this.config?await this.config.get("capabilities",this.path,this.state):JSON.parse(await readFile(this.path,"utf8"))); } catch(e) { if(e.code!=="ENOENT") throw e; } try { this.key=await this.decrypt(await this.encryptedKey()); } catch(e) { if(e.code!=="ENOENT") this.keyError="搜索凭据无法读取，请重新保存"; } }
   async encryptedKey(){const data=this.config?await this.config.read():{};if(data.credentials?.tavily)return data.credentials.tavily;const old=await readFile(join(this.dir,"tavily-key.dpapi"),"utf8");if(this.config)await this.config.update(d=>{d.credentials||={};d.credentials.tavily=old;});return old;}
-  snapshot() { return {...this.state,hasSearchKey:!!this.key,keyError:this.keyError}; }
+  snapshot() { return {...this.state,hasSearchKey:!!this.key,keyError:this.keyError,noteScanStatus:this.noteScanStatus}; }
   async persist() { if(this.config){await this.config.set("capabilities",this.state);return;} await writeFile(this.path+".tmp",JSON.stringify(this.state,null,2)); await rename(this.path+".tmp",this.path); }
   async configure({vaultPath,webEnabled,browserEnabled,key}) {
     let selectedVault=this.state.vaultPath;
@@ -33,7 +33,7 @@ export class CapabilityStore {
     if(key!==undefined && key.trim()) { if(key.length>4096) throw new Error("Key 过长"); const encrypted=await this.encrypt(key.trim()); if(this.config)await this.config.update(d=>{d.credentials||={};d.credentials.tavily=encrypted;});else await writeFile(join(this.dir,"tavily-key.dpapi"),encrypted); this.key=key.trim(); this.keyError=null; }
     if(webEnabled!==undefined) this.state.webEnabled=!!webEnabled;
     if(browserEnabled!==undefined) this.state.browserEnabled=!!browserEnabled;
-    if(vaultPath!==undefined) { this.state.vaultPath=selectedVault; this.cache.clear(); }
+    if(vaultPath!==undefined) { this.state.vaultPath=selectedVault; this.cache.clear();this.noteScanStatus={state:"idle",checkedFiles:0,errorCount:0,errors:[]}; }
     await this.persist(); return this.snapshot();
   }
   async importSkill(source) {
@@ -66,20 +66,38 @@ export class CapabilityStore {
     this.searchQueue=operation;return operation;
   }
   async searchNotesOnce(query,limit=4) {
-    if(!this.state.vaultPath) return [];
+    if(!this.state.vaultPath) { this.noteScanStatus={state:"idle",checkedFiles:0,errorCount:0,errors:[]};return []; }
     const needles=terms(query);if(!needles.length)return [];
-    const root=this.state.vaultPath, files=await walk(root,p=>extname(p).toLowerCase()===".md"&&basename(p)!=="Reed-笔记库总览.md");
+    const root=this.state.vaultPath, files=[];
+    const status={state:"complete",checkedFiles:0,errorCount:0,errors:[]};
+    const confirmedIds=new Set();
+    const fail=(path,error)=>{status.state="incomplete";status.errorCount++;if(status.errors.length<20)status.errors.push({path,message:error?.message||String(error)});};
+    const visit=async dir=>{
+      let entries;try{entries=await readdir(dir,{withFileTypes:true});}catch(error){fail(dir,error);return;}
+      for(const item of entries){
+        if(status.budgetStopped)return;
+        if(item.isSymbolicLink()||[".git",".obsidian","node_modules"].includes(item.name))continue;
+        const path=join(dir,item.name);
+        if(item.isDirectory()){await visit(path);if(status.budgetStopped)return;continue;}
+        if(!item.isFile()||extname(path).toLowerCase()!==".md"||basename(path)==="Reed-笔记库总览.md")continue;
+        try{const info=await lstat(path);status.filesSeen=(status.filesSeen||0)+1;status.bytes=(status.bytes||0)+info.size;if(status.filesSeen>10000||status.bytes>100*1024*1024){status.budgetStopped=true;fail(path,new Error("扫描预算中止（1 万文件 / 100 MB）"));return;}files.push({path,size:info.size,mtime:info.mtimeMs,ctime:info.ctimeMs});}
+        catch(error){fail(path,error);}
+      }
+    };
+    await visit(root);delete status.bytes;delete status.filesSeen;delete status.budgetStopped;
     const activeIds=[];
-    if(!this.localSearch)this.localSearch=new LocalSearchIndex(join(this.dir,"local-search.sqlite"));
     try{
+    if(!this.localSearch)this.localSearch=new LocalSearchIndex(join(this.dir,"local-search.sqlite"));
     for(const file of files) {
-      if(this.canRead && !(await this.canRead(file.path))) continue;
+      status.checkedFiles++;
+      if(this.canRead){try{if(!(await this.canRead(file.path))){fail(file.path,new Error("读取权限被拒绝"));continue;}}catch(error){fail(file.path,error);continue;}}
       if(file.size>1024*1024) continue;
       const name=relative(root,file.path),prefix=`${createHash("sha256").update(name).digest("hex")}:`;
       const revision=`${file.size}:${file.mtime}:${file.ctime}`;
       const previous=this.localSearch.list("notes",root,prefix);
-      if(previous.length&&previous.every(item=>item.revision===revision)){activeIds.push(...previous.map(item=>item.id));continue;}
-      const body=await readFile(file.path,"utf8"), lines=body.split(/\r?\n/);
+      if(previous.length&&previous.every(item=>item.revision===revision)){activeIds.push(...previous.map(item=>item.id));previous.forEach(item=>confirmedIds.add(item.id));continue;}
+      let body;try{body=await readFile(file.path,"utf8");}catch(error){fail(file.path,error);continue;}
+      const lines=body.split(/\r?\n/);
       let heading="",start=0;
       for(let i=0;i<=lines.length;i++) {
         if(i===lines.length || /^#{1,6}\s/.test(lines[i]) || (i>start && !lines[i].trim()) || i-start>=30) {
@@ -89,15 +107,17 @@ export class CapabilityStore {
             const id=`${prefix}${first+1}`;
             const payload={heading,startLine:first+1,endLine:last,content:content.slice(0,4000),path:file.path,title:name,url:`summon-file:${encodeURIComponent(file.path)}#L${first+1}`};
             this.localSearch.put({id,area:"notes",scope:root,text:`${name}\n${heading}\n${content.slice(0,4000)}`,payload,revision});
-            activeIds.push(id);
+            activeIds.push(id);confirmedIds.add(id);
           }
           if(i<lines.length && /^#{1,6}\s/.test(lines[i])) heading=lines[i].replace(/^#+\s*/,""); start=i;
         }
       }
     }
-    this.localSearch.retain("notes",root,activeIds);
+    if(status.state==="complete")this.localSearch.retain("notes",root,activeIds);
+    this.noteScanStatus=status;
     if(!terms(query).length)return [];
-    return this.localSearch.search("notes",root,query,Math.min(8,Math.max(1,limit))).map(hit=>({...hit.payload,score:hit.score}));
+    return this.localSearch.search("notes",root,query,Math.min(100,Math.max(1,limit*4))).filter(hit=>confirmedIds.has(hit.id)).slice(0,Math.min(8,Math.max(1,limit))).map(hit=>({...hit.payload,score:hit.score}));
+    }catch(error){fail(root,error);this.noteScanStatus=status;return [];
     }finally{this.close();}
   }
   close() {

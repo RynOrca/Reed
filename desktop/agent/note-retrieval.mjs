@@ -1,6 +1,11 @@
 // Retrieval planning uses the selected provider; evidence always comes from local files.
 export function createNoteRetriever({capabilities,runtime,model}){
   const plans=new Map();
+  const normalize=value=>String(value??'').normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
+  const hasPreciseLocalEvidence=(query,hits)=>{
+    const needle=normalize(query);if(!needle)return false;
+    return hits.some(hit=>normalize(hit.heading)===needle||normalize(hit.title.replace(/\.md$/i,''))===needle||(needle.length>=5&&normalize(hit.content).includes(needle)));
+  };
   async function plan(query,overview,context,signal){
     const selected=model?.();if(!runtime||!selected||selected.provider==='unknown')return [];
     const key=JSON.stringify([capabilities.state.vaultPath,selected.provider,selected.id,query,overview,context]);
@@ -19,7 +24,8 @@ export function createNoteRetriever({capabilities,runtime,model}){
   return async function retrieve(query,{overview='',context='',signal}={}){
     if(!capabilities.state.vaultPath)return [];
     const original=await capabilities.searchNotes(query,8);
-    const queries=await plan(query,overview||'',context,signal);
+    // Skip expansion only for a direct title/heading or complete-phrase match.
+    const queries=hasPreciseLocalEvidence(query,original)?[]:await plan(query,overview||'',context,signal);
     const lists=[original];for(const term of queries){if(signal?.aborted)break;if(term!==query)lists.push(await capabilities.searchNotes(term,8));}
     const hits=new Map();lists.forEach(list=>list.forEach((hit,index)=>{const key=hit.path+':'+hit.startLine;const old=hits.get(key);hits.set(key,{...hit,relevance:(old?.relevance||0)+1/(20+index)});}));
     return [...hits.values()].sort((a,b)=>b.relevance-a.relevance).slice(0,6);

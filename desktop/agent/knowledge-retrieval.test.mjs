@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {CapabilityStore} from './capabilities.mjs';
 import {createNoteRetriever} from './note-retrieval.mjs';
 import {createLearningTools} from './learning-tools.mjs';
+import {LocalSearchIndex} from './local-search.mjs';
 const fixture=async fn=>{const root=await mkdtemp(join(tmpdir(),'reed-rag-test-'));try{await mkdir(join(root,'vault'));await fn(root,join(root,'vault'));}finally{await rm(root,{recursive:true,force:true});}};
 
 test('同义知识点展开召回原文与行号，计划缓存但笔记内容实时刷新',()=>fixture(async(dir,root)=>{
@@ -15,7 +16,66 @@ test('同义知识点展开召回原文与行号，计划缓存但笔记内容�
   const hits=await retrieve('eigenvalue',{overview:'数学目录'});assert.equal(hits[0].path,path);assert.match(hits[0].url,/#L/);assert.match(hits[0].content,/特征值|不变方向/);
   await new Promise(r=>setTimeout(r,20));await writeFile(path,'# 特征值\n\n新内容：特征值求解。');
   assert.ok((await retrieve('eigenvalue',{overview:'数学目录'})).some(h=>h.content.includes('新内容')));assert.equal(calls,1);
-  output='invalid';assert.ok((await retrieve('特征值')).length);assert.equal(calls,2);
+  output='invalid';assert.ok((await retrieve('特征值')).length);assert.equal(calls,1,'精确标题匹配不调用规划器');
+  assert.ok((await retrieve('特征值怎么求')).length);assert.equal(calls,2,'弱匹配时规划失败仍回退原查询结果');
+}));
+
+test('精确标题命中时跳过模型扩词',()=>fixture(async(dir,root)=>{
+  await writeFile(join(root,'矩阵.md'),'# 矩阵\n分解方法');
+  const caps=new CapabilityStore(dir);caps.state.vaultPath=root;let calls=0;
+  const retrieve=createNoteRetriever({capabilities:caps,model:()=>({provider:'test',id:'rag'}),runtime:async()=>({completeSimple:async()=>{calls++;return {stopReason:'stop',content:[{type:'text',text:'{"queries":[]}'}]};}})});
+  assert.equal((await retrieve('矩阵')).length,1);assert.equal(calls,0);
+}));
+
+test('三条弱关键词命中仍请求模型扩词',()=>fixture(async(dir,root)=>{
+  for(let i=0;i<3;i++)await writeFile(join(root,`弱命中${i}.md`),`# 主题${i}\n量子关系的背景${i}`);
+  const caps=new CapabilityStore(dir);caps.state.vaultPath=root;let calls=0;
+  const retrieve=createNoteRetriever({capabilities:caps,model:()=>({provider:'test',id:'rag'}),runtime:async()=>({completeSimple:async()=>{calls++;return {stopReason:'stop',content:[{type:'text',text:'{"queries":[]}'}]};}})});
+  assert.equal((await retrieve('量子纠缠')).length,3);assert.equal(calls,1);
+}));
+
+test('不完整扫描保留未检查文件旧索引并暴露扫描状态',()=>fixture(async(dir,root)=>{
+  const stale=join(root,'旧笔记.md'),current=join(root,'当前笔记.md');
+  await writeFile(stale,'# 稀有主题\n旧索引内容');await writeFile(current,'# 其他\n正常内容');
+  const caps=new CapabilityStore(dir);caps.state.vaultPath=root;
+  assert.ok((await caps.searchNotes('稀有主题')).length);
+  caps.canRead=async path=>path!==stale;
+  await caps.searchNotes('当前笔记');
+  assert.equal(caps.snapshot().noteScanStatus.state,'incomplete');
+  assert.ok(caps.snapshot().noteScanStatus.errorCount>0);
+  assert.deepEqual(await caps.searchNotes('稀有主题'),[]);
+  const retained=new LocalSearchIndex(join(dir,'local-search.sqlite'));
+  try{assert.ok(retained.search('notes',root,'稀有主题',8).length,'拒读后旧索引保留但不披露');}finally{retained.close();}
+  caps.canRead=async()=>true;
+  assert.ok((await caps.searchNotes('稀有主题')).length);
+}));
+
+test('笔记库不可达时不泄露旧结果，恢复后的完整扫描清理已删除条目',()=>fixture(async(dir,root)=>{
+  const note=join(root,'留存.md');await writeFile(note,'# 暂存主题\n旧内容');
+  const caps=new CapabilityStore(dir);caps.state.vaultPath=root;
+  assert.ok((await caps.searchNotes('暂存主题')).length);
+  caps.state.vaultPath=join(dir,'暂不可达');
+  assert.deepEqual(await caps.searchNotes('暂存主题'),[]);
+  assert.equal(caps.snapshot().noteScanStatus.state,'incomplete');
+  caps.state.vaultPath=root;await rm(note,{force:true});
+  assert.deepEqual(await caps.searchNotes('暂存主题'),[]);
+  assert.equal(caps.snapshot().noteScanStatus.state,'complete');
+}));
+
+test('部分扫描中已更新文件缩短时不披露旧尾段且旧段仍留在索引',()=>fixture(async(dir,root)=>{
+  const edited=join(root,'可读笔记.md'),denied=join(root,'拒绝笔记.md');
+  await writeFile(edited,'# 当前内容\n保留段落\n\n# 旧尾标题\n仅旧尾段的稀有词');
+  await writeFile(denied,'# 权限拒绝\n其他内容');
+  const caps=new CapabilityStore(dir);caps.state.vaultPath=root;
+  assert.ok((await caps.searchNotes('稀有词')).length);
+  await new Promise(r=>setTimeout(r,20));
+  await writeFile(edited,'# 当前内容\n缩短后的新段落');
+  caps.canRead=async path=>path!==denied;
+  assert.deepEqual(await caps.searchNotes('稀有词'),[]);
+  assert.equal(caps.snapshot().noteScanStatus.state,'incomplete');
+  const index=new LocalSearchIndex(join(dir,'local-search.sqlite'));
+  try{assert.ok(index.search('notes',root,'稀有词',8).some(hit=>hit.payload.content.includes('仅旧尾段')));}
+  finally{index.close();}
 }));
 
 test('队列消息每次刷新笔记上下文，断开后清除旧资料',()=>fixture(async(dir,root)=>{
