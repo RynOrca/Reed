@@ -3,5 +3,5 @@
   "identifier": "main",
   "description": "Summon main window",
   "windows": ["main", "settings"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "updater:default", "process:default"]
 }

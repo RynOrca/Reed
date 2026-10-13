@@ -173,6 +173,50 @@ fn ui_ready(window: tauri::WebviewWindow) -> Result<(), String> {
     window.show().map_err(|e|e.to_string())
 }
 
+/// 版本号以构建时的 tauri.conf.json 为准，启动动画与「关于」页共用同一来源。
+#[tauri::command]
+fn app_version(app: tauri::AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+/// 构建时是否配置了更新公钥。
+/// 公钥只在 tauri.conf.json 里存一份，前端靠这个命令判断能否走应用内一键更新，
+/// 从而避免同一个公钥在前端再抄一份、两处漂移。
+#[tauri::command]
+fn update_key_configured(app: tauri::AppHandle) -> bool {
+    app.config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|updater| updater.get("pubkey"))
+        .and_then(|pubkey| pubkey.as_str())
+        .map(|pubkey| !pubkey.trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// 只在系统浏览器里打开 https 链接（「关于 → 检查更新」的手动下载入口）。
+/// 只接受 https://，避免被当成任意命令或本地路径执行。
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    let trimmed = url.trim();
+    if !trimmed.starts_with("https://") || trimmed.len() > 2048 {
+        return Err("只允许打开 https 链接".into());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "shell32")]
+        extern "system" { fn ShellExecuteW(hwnd: isize, operation: *const u16, file: *const u16, parameters: *const u16, directory: *const u16, show: i32) -> isize; }
+        let wide: Vec<u16> = std::ffi::OsStr::new(trimmed).encode_wide().chain(Some(0)).collect();
+        let open: Vec<u16> = "open".encode_utf16().chain(Some(0)).collect();
+        let result = unsafe { ShellExecuteW(0, open.as_ptr(), wide.as_ptr(), std::ptr::null(), std::ptr::null(), 1) };
+        if result <= 32 { return Err(format!("无法打开链接（{result}）")); }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    { Err("目前仅支持 Windows 默认浏览器".into()) }
+}
+
 #[tauri::command]
 fn set_shortcut(app: tauri::AppHandle, state: tauri::State<'_, ShortcutStateStore>, shortcut: String) -> Result<String, String> {
     let requested = shortcut.trim();
@@ -566,7 +610,9 @@ fn run_desktop() -> tauri::Result<()> {
         .manage(RoundedBounds::default())
         .plugin(window_state.build())
         .plugin(shortcuts)
-        .invoke_handler(tauri::generate_handler![dismiss, window_pinned, set_window_pinned, agent_command, choose_workspace, open_local_file, desktop_preferences, set_shortcut, set_autostart, open_settings, capture_shortcut, drag_window, resize_window, update_brand_icon, set_appearance, ui_ready])
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .invoke_handler(tauri::generate_handler![dismiss, window_pinned, set_window_pinned, agent_command, choose_workspace, open_local_file, desktop_preferences, set_shortcut, set_autostart, open_settings, capture_shortcut, drag_window, resize_window, update_brand_icon, set_appearance, ui_ready, app_version, update_key_configured, open_external_url])
         .setup(|app| {
             startup_log("Creating Tauri window");
             let webview_dir = profile::directory()?.join("webview");

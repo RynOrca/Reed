@@ -12,6 +12,21 @@ export class VaultOverview {
     const root=this.capabilities.state.vaultPath;if(!root)return null;
     try {const path=join(root,OVERVIEW_FILE),stat=await lstat(path);if(stat.isSymbolicLink()||stat.size>256*1024)return null;return (await readFile(path,"utf8")).slice(0,18000);} catch {return null;}
   }
+  /**
+   * 用户主动请求或环境变化时的入口。
+   * 与 start() 的区别：模型尚未就绪时**不报错**，而是留下等待提示并返回 false，
+   * 这样「先连接笔记库、后选择模型」的顺序也能自动补上总览，
+   * 而不是把一个要求选模型的报错留在界面上（用户会误以为总览没有保存）。
+   */
+  async ensure() {
+    const root=this.capabilities.state.vaultPath;if(!root)return false;
+    const path=join(root,OVERVIEW_FILE);
+    if(await this.#exists(path)){await this.start();return this.status.state==="ready";}
+    const selected=this.model();
+    if(!selected||selected.provider==="unknown"){this.emit("idle",{path,pending:true,message:"选择模型后会自动生成总览，也可以点「生成 / 重试总览」。"});return false;}
+    await this.start();return this.status.state==="ready";
+  }
+  async #exists(path){try{const stat=await lstat(path);return stat.isFile()&&!stat.isSymbolicLink();}catch{return false;}}
   async start() {
     this.cancel();const root=this.capabilities.state.vaultPath;if(!root)return;
     const path=join(root,OVERVIEW_FILE),controller=new AbortController();this.controller=controller;

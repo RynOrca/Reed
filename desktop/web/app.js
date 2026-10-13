@@ -436,7 +436,7 @@ function onEvent(event) {
     case "models": modelCatalog = response.models || []; renderModels(); break;
     case "session":
       reconnectAttempts = 0;
-      void goalsPanel.session(response.workspace || null);
+      void goalsPanel.session(response.workspace || null, response.learningGoalsEnabled === true);
       $("model-label").textContent = response.modelName || response.model || "选择模型";
       $("model-button").title = response.model || "选择模型";
       activeSessionId = response.sessionId || "";

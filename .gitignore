@@ -19,6 +19,11 @@ desktop/dist-stream-fix*/
 /ref/
 /鲸唤 Summon 原型源码包 v1.4/
 
+# Third-party evidence copies used for read-only research (MIT upstream; not redistributed)
+/_oiui/
+# Interactive UI evaluation runs (model output, not source)
+desktop/tools/eval-interactive/results/
+
 # User configuration, credentials and signing material
 .env
 .env.*

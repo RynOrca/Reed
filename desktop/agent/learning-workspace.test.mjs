@@ -69,3 +69,34 @@ test("总览生成失败和取消不会创建半份文件，也不会写入后�
   const task=new VaultOverview({capabilities:caps,model:()=>({provider:"test"}),send:()=>{},runtime:async()=>({completeSimple:async()=>new Promise(resolve=>{release=resolve})})});
   const running=task.start();while(!release)await new Promise(r=>setTimeout(r,5));task.cancel();release({content:[{type:"text",text:"结果"}]});await running;await assert.rejects(readFile(join(root,OVERVIEW_FILE)),{code:"ENOENT"});
 }));
+
+test("先连接笔记库后选模型也能补上总览，且不会把选模型的报错留在界面上",()=>fixture(async root=>{
+  const events=[],caps={state:{vaultPath:root}};await writeFile(join(root,"note.md"),'# 数学\n线性代数');
+  let selected=null,calls=0;
+  const task=new VaultOverview({capabilities:caps,send:e=>events.push(e),model:()=>selected,runtime:async()=>({completeSimple:async()=>{calls++;return {content:[{type:"text",text:"## 目录\n- 数学"}],stopReason:"stop"};}})});
+
+  // 1) 刚连接、还没选模型：应留下等待提示而不是报错
+  assert.equal(await task.ensure(),false);
+  assert.equal(task.snapshot().state,"idle");
+  assert.match(task.snapshot().message,/选择模型/);
+  assert.equal(calls,0);
+  assert.equal(events.some(e=>e.state==="error"),false,"不应出现 error 状态");
+
+  // 2) 模型就绪后再 ensure：应真正生成
+  selected={provider:"test",id:"test"};
+  assert.equal(await task.ensure(),true);
+  assert.equal(task.snapshot().state,"ready");
+  // 每批一次摘要 + 一次最终总览合成，单批笔记就是 2 次模型调用
+  assert.equal(calls,2);
+  assert.match(await readFile(join(root,OVERVIEW_FILE),"utf8"),/数学/);
+
+  // 3) 总览已存在时 ensure 不应再调用模型
+  assert.equal(await task.ensure(),true);
+  assert.equal(calls,2,"已存在总览时不能再次调用模型");
+
+  // 4) 没有连接笔记库时 ensure 直接返回 false，不产生事件
+  events.length=0;
+  const none=new VaultOverview({capabilities:{state:{vaultPath:null}},send:e=>events.push(e),model:()=>selected,runtime:async()=>{throw Error("不应调用");}});
+  assert.equal(await none.ensure(),false);
+  assert.equal(events.length,0);
+}));

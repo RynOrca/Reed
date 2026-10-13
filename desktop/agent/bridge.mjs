@@ -285,7 +285,7 @@ async function handle(command) {
         if (!session) await openSession(command.provider || appState.provider || (remoteConfig ? REMOTE_PROVIDER : undefined), command.model || appState.modelId || remoteConfig?.modelId);
         await emitState();
         send({ type: "ack", id });
-        if(capabilities.state.vaultPath)void vaultOverview.start();
+        if(capabilities.state.vaultPath)void vaultOverview.ensure();
         break;
       }
       case "save_mcp":
@@ -337,9 +337,11 @@ async function handle(command) {
         send({type:"queue",steering:session.getSteeringMessages(),followUp:session.getFollowUpMessages()});send({type:"ack",id});break;
       }
       case "get_goals": {
-        send({type:"goals",id,goal:projectPath?await goals.read(projectPath):null,enabled:roles.current().learningGoalsEnabled});break;
+        const enabled=roles.current().learningGoalsEnabled===true;
+        send({type:"goals",id,goal:enabled&&projectPath?await goals.read(projectPath):null,enabled});break;
       }
       case "save_goals": {
+        if(!roles.current().learningGoalsEnabled)throw new Error("当前角色未启用学习目标");
         if(command.projectPath!==projectPath)throw new Error("项目已切换，草稿未写入，请重新打开目标");
         const goal=await goals.save(projectPath,command.body,command.revision);
         send({type:"goals",id,goal,enabled:roles.current().learningGoalsEnabled});break;
@@ -364,7 +366,7 @@ async function handle(command) {
         const model = session?.model;
         if (session) await openSession(model?.provider === "unknown" ? undefined : model?.provider, model?.provider === "unknown" ? undefined : model?.id);
         await emitState(); send({ type: "ack", id });
-        if(command.type==="configure_capabilities" && command.vaultPath)void vaultOverview.start();
+        if(command.type==="configure_capabilities" && command.vaultPath)void vaultOverview.ensure();
         break;
       }
       case "search_notes":
@@ -507,6 +509,9 @@ async function handle(command) {
         await openSession(command.provider, command.model);
         if(command.thinkingLevel!==undefined){session.setThinkingLevel(command.thinkingLevel,{persist:true});emitSession();}
         send({ type: "ack", id });
+        // 笔记库已连接但总览还没生成时，模型一旦就绪就补上。
+        // 总览文件已存在时 ensure() 会直接返回，不会重复调用模型。
+        if(capabilities.state.vaultPath)void vaultOverview.ensure();
         break;
       }
       case "set_thinking_level": {

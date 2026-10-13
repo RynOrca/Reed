@@ -114,6 +114,19 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     await settings.locator('#appearance-icon').selectOption('glass');await settings.locator('#appearance-theme').selectOption('dark');
     await main.waitForFunction(()=>document.querySelector('.header-brand').src.includes('glass-dark'));
     checks.push('Reed 品牌首屏、原生托盘图标、两套图标浅深切换与扩大设置拖动区');
+    // 启动动画显示版本号，且必须与「关于」页一致（同一来源，不允许两处漂移）
+    const splashVersion=await main.locator('#startup-version').textContent();
+    assert.match(splashVersion,/版本 \d+\.\d+\.\d+/,`启动动画应显示版本号，实际：${splashVersion}`);
+    await settings.locator('button[data-section="about"]').click();
+    const aboutVersion=await settings.locator('#about-version').textContent();
+    assert.match(aboutVersion,/^\d+\.\d+\.\d+$/,`关于页应显示版本号，实际：${aboutVersion}`);
+    assert.equal(splashVersion.replace('版本 ',''),aboutVersion,'启动动画与关于页的版本号必须一致');
+    assert.equal(await settings.locator('#check-update').isVisible(),true);
+    await settings.locator('#check-update').click();
+    // 无外网时只要求「不崩、不谎报」：状态必须给出明确结果，不能停在「正在检查」
+    await settings.waitForFunction(()=>{const t=document.getElementById('update-status').textContent;return t&&!t.includes('正在检查');},{timeout:30000});
+    checks.push('启动动画与关于页版本号一致，检查更新给出明确结果');
+    await settings.screenshot({path:path.join(artifacts,'settings-about.png')});
     await settings.locator('button[data-section="models"]').click();
     await settings.locator('.template-card').filter({hasText:'自定义'}).click();
     const providerGap=await settings.locator('#provider-form').evaluate(e=>e.getBoundingClientRect().top-document.getElementById('templates').getBoundingClientRect().bottom);assert.ok(providerGap>=20);
@@ -139,6 +152,36 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     const fade=await main.locator('.status-line').evaluate(e=>({background:getComputedStyle(e,'::before').backgroundColor,mask:getComputedStyle(e,'::before').maskImage,height:e.getBoundingClientRect().height}));assert.equal(fade.background,'rgb(24, 24, 24)');assert.ok(fade.mask.includes('80%'));assert.ok(fade.height>=36);
     const dragWidth=await main.locator('.drag-space').evaluate(e=>e.getBoundingClientRect().width);assert.ok(dragWidth>=100);
     await settings.locator('button[data-section="roles"]').click();
+    // 角色列表按钮对齐：内置角色行只有「编辑」，自定义角色行还有「删除」。
+    // 元素个数不同时，.memory-item 的 space-between 会把「编辑」推到不同水平位置。
+    const editBoxes=[];for(const name of ['Agent','Planner','快捷对话','学习助手']){const row=settings.locator('#role-list .memory-item').filter({hasText:name});if(await row.count())editBoxes.push(await row.getByRole('button',{name:'编辑',exact:true}).boundingBox());}
+    assert.ok(editBoxes.length>=2,'应有至少两行角色用于对齐比较');assert.ok(editBoxes.every(b=>b),'每个角色行都应有「编辑」按钮');
+    const editXs=editBoxes.map(b=>b.x);
+    assert.ok(Math.max(...editXs)-Math.min(...editXs)<1,`所有「编辑」按钮应左对齐到同一 x，实际 ${editXs.map(v=>v.toFixed(1)).join(', ')}`);
+    checks.push('角色列表「编辑」按钮跨行对齐');
+
+    // 学习目标入口随角色开关显隐：Agent 默认关闭；这里显式建一个开启目标的角色做对照。
+    assert.equal(await main.locator('.goals-handle').isVisible(),false,'未启用学习目标的角色不应显示学习目标入口');
+    const goalRole='目标开启角色';
+    const existingGoalRole=settings.locator('#role-list .memory-item').filter({hasText:goalRole});
+    if(!(await existingGoalRole.count())){
+      await settings.locator('#role-new').click();
+      await settings.locator('#role-name').fill(goalRole);
+      await settings.locator('#role-system').fill('桌面验收用：启用学习目标的角色。');
+      await settings.locator('#role-goals-enabled').check();
+      await settings.locator('#role-form').getByRole('button',{name:'保存角色',exact:true}).click();
+      await settings.locator('#role-list .memory-item').filter({hasText:goalRole}).waitFor({timeout:15000});
+    }
+    await main.locator('#role-button').click();await main.locator('#roles-dialog').waitFor({state:'visible'});
+    await main.locator('.role-item').filter({hasText:goalRole}).locator('.role-item-name').click();
+    await main.locator('#roles-dialog').waitFor({state:'hidden'});
+    await main.locator('.goals-handle').waitFor({state:'visible',timeout:15000});
+    await main.locator('#role-button').click();await main.locator('#roles-dialog').waitFor({state:'visible'});
+    await main.locator('.role-item').filter({hasText:'Agent'}).locator('.role-item-name').click();
+    await main.locator('#roles-dialog').waitFor({state:'hidden'});
+    await main.locator('.goals-handle').waitFor({state:'hidden',timeout:15000});
+    checks.push('学习目标入口随角色开关显隐（切换与关闭都生效）');
+
     await settings.locator('#role-list .memory-item').filter({hasText:'Agent'}).getByRole('button',{name:'编辑',exact:true}).click();
     await settings.locator('#role-profile-enabled').check();await settings.locator('#role-form').getByRole('button',{name:'保存角色',exact:true}).click();
     await main.locator('#status').filter({hasText:'就绪'}).waitFor();checks.push('角色显式开启学习者画像与记忆');

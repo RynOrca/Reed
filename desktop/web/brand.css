@@ -5,7 +5,8 @@
 #startup .brand-icon { width:104px; height:104px; animation:reed-arrive .6s ease both; }
 #startup h1 { margin:23px 0 8px; font:600 24px/1.3 'Segoe UI',sans-serif; letter-spacing:.02em; }
 #startup p { color:#aeb5b5; margin:0; font-size:13px; }
-.startup-progress { margin-top:27px; width:68px; height:2px; overflow:hidden; border-radius:2px; background:#ffffff15; }
+#startup .startup-version { margin-top:7px; font-size:11.5px; letter-spacing:.04em; color:#7f8a86; font-variant-numeric:tabular-nums; }
+.startup-progress { margin-top:22px; width:68px; height:2px; overflow:hidden; border-radius:2px; background:#ffffff15; }
 .startup-progress:before { content:''; display:block; width:25px; height:2px; background:#b7cdbb; animation:reed-progress 1.4s ease-in-out infinite; }
 #startup.startup-complete { opacity:0; pointer-events:none; }
 @keyframes reed-progress { from {transform:translateX(-25px)} to {transform:translateX(68px)} }

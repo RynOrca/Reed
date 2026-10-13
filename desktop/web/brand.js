@@ -1,3 +1,5 @@
+import { showStartupVersion, appVersion } from './update.js';
+export { appVersion };
 let preferences={iconStyle:'glass',theme:'system'};
 const media=matchMedia('(prefers-color-scheme: dark)');
 let host;
@@ -18,6 +20,8 @@ export async function initBrand(tauri) {
     await host.event.listen('desktop-appearance',event=>applyBrand(event.payload));
   }
   applyBrand();media.addEventListener('change',()=>applyBrand());
+  // 启动动画上显示版本号；早于首帧等待，避免看到动画时还没有版本。
+  await showStartupVersion(host).catch(()=>{});
   // Reveal only after the branded first frame is laid out and painted.
   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
   if(host)await host.core.invoke('ui_ready');
