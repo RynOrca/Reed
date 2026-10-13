@@ -19,6 +19,9 @@ desktop/dist-stream-fix*/
 /ref/
 /鲸唤 Summon 原型源码包 v1.4/
 
+# Third-party evidence copies used for read-only research (MIT upstream; not redistributed)
+/_oiui/
+
 # User configuration, credentials and signing material
 .env
 .env.*
@@ -62,3 +65,6 @@ __pycache__/
 
 # Learning workspace portable verification packages
 desktop/dist-learning-workspace*/
+
+# Interactive UI evaluation runs (may contain model output; not source)
+desktop/tools/eval-interactive/results/
