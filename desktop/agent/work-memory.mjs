@@ -70,7 +70,7 @@ export function workMemoryExtension({memory,learner,roles,currentSession,reviewE
       if(/学习目标|知识状态|掌握程度|教学偏好|待复习/.test(input.title+' '+input.body))throw Error('学习信息须使用画像功能');
       const selected=currentSession(),turn=sessionId;
       const verdict=await judgeValue?.([{area:'work',...input}],{work:true,evidence:traces,signal});
-      if(!verdict?.[0]){rejected(input);return skippedMemory();}
+      if(!verdict?.[0]){rejected(input);return skippedMemory(verdict?.diagnostics?.[0]);}
       if(signal?.aborted||currentSession()!==selected||turnKey()!==turn||!memory.state.enabled.work||sessionDisallowsMemory(selected))return skippedMemory();
       const receipt=await memory.rememberWork({...input,scope:input.kind==='shell'?'':currentWorkspace()},selected?.sessionId,{allowed:()=>!signal?.aborted&&currentSession()===selected&&turnKey()===turn});send({type:'memory',state:memory.snapshot()});return {content:[{type:'text',text:`工作经验已保存：${JSON.stringify(receipt)}`}],details:{receipt}};
       }catch(error){rejected(input);throw Error(`工作经验未保存：${error.message}。可用原文片段/证据收据：${JSON.stringify(ledger.hint())}。请纠正一次；仍无证据就停止保存并如实报告，不要重跑已成功命令或重复相同请求。`);}

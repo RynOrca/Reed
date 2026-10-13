@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 const project=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 const artifacts=join(project,'dist','real-memory-acceptance');await mkdir(artifacts,{recursive:true});
 function option(name){const index=process.argv.indexOf(name);return index>=0?process.argv[index+1]:null;}
-const suite=option('--suite')||'full';assert.ok(['full','notes-profile','profile-only'].includes(suite),`未知验收套件：${suite}`);
+const suite=option('--suite')||'full';assert.ok(['full','notes-profile','profile-only','profile-correction'].includes(suite),`未知验收套件：${suite}`);
 const bridgePath=resolve(option('--bridge-path')||join(artifacts,'snapshot-agent','bridge.mjs'));
 const reportPath=option('--report-path')?resolve(project,option('--report-path')):join(artifacts,suite==='notes-profile'?'continuation-notes-profile.json':suite==='profile-only'?'continuation-profile-only.json':'report.json');
 assert.ok(reportPath.startsWith(artifacts+sep),`报告路径必须位于 ${artifacts} 下`);
@@ -26,7 +26,7 @@ assert.ok(provider,'当前模型提供商未配置');
 assert.equal(provider.protocol,'openai-completions','这个验收脚本目前仅支持 OpenAI 兼容服务');
 const selected=provider.models.find(m=>m.id===appState.modelId);assert.ok(selected);
 const requests=[],shellCalls=[],cases=[];let caseName='setup',bridge;
-const boundedSuite=['notes-profile','profile-only'].includes(suite),suiteStarted=Date.now(),maxSuiteMs=boundedSuite?360000:Infinity,maxCaseMs=boundedSuite?115000:150000,maxUpstreamMs=boundedSuite?60000:120000,maxRequestsPerCase=boundedSuite?5:12,maxSuiteRequests=boundedSuite?18:Infinity;
+const boundedSuite=['notes-profile','profile-only','profile-correction'].includes(suite),suiteStarted=Date.now(),maxSuiteMs=boundedSuite?360000:Infinity,maxCaseMs=boundedSuite?115000:150000,maxUpstreamMs=boundedSuite?60000:120000,maxRequestsPerCase=boundedSuite?5:12,maxSuiteRequests=boundedSuite?18:Infinity;
 const report={suite,bridgePath,model:selected.id,thinking:'low',thinkingCeiling:'medium',outputLimit:2400,syntheticOnly:true,root,cases,requests,shellCalls,requestBudget:{maxSuiteMs:Number.isFinite(maxSuiteMs)?maxSuiteMs:null,maxCaseMs,maxUpstreamMs,maxRequestsPerCase:Number.isFinite(maxRequestsPerCase)?maxRequestsPerCase:null,maxSuiteRequests:Number.isFinite(maxSuiteRequests)?maxSuiteRequests:null}};
 let reportWrites=Promise.resolve();const writeReport=()=>{const snapshot=JSON.stringify(report,null,2);reportWrites=reportWrites.catch(()=>{}).then(()=>writeFile(reportPath,snapshot));return reportWrites;};
 function classify(system){return /工作经验整理器/.test(system)?'experience_extract':/记忆价值审查器/.test(system)?'value_gate':/判断新增记忆/.test(system)?'deduplicate':/为工作经验检索/.test(system)?'work_expand':/个人笔记检索规划器/.test(system)?'note_expand':/笔记库导航整理器|根据分批笔记浏览结果/.test(system)?'overview':'agent';}
@@ -42,7 +42,15 @@ const proxy=createServer(async(req,res)=>{
     if(caseCount>maxRequestsPerCase||requests.length>maxSuiteRequests||Date.now()-suiteStarted>maxSuiteMs){record.status=429;record.budgetExceeded=true;res.writeHead(429,{'content-type':'application/json'});res.end(JSON.stringify({error:{message:'Isolated acceptance request/time budget exceeded'}}));await writeReport();return;}
     const response=await fetch(provider.baseUrl.replace(/\/$/,'')+'/chat/completions',{method:'POST',headers:{'content-type':'application/json',...(req.headers.authorization?{authorization:req.headers.authorization}:{})},body:JSON.stringify(input),signal:AbortSignal.timeout(maxUpstreamMs)});
     record.status=response.status;res.writeHead(response.status,{'content-type':response.headers.get('content-type')||'application/json'});
-    for await(const chunk of response.body)res.write(chunk);res.end();record.ms=Date.now()-record.started;await writeReport();
+    const reviewChunks=[];let reviewBytes=0;
+    for await(const chunk of response.body){if(record.kind==='value_gate'&&reviewBytes<65536){reviewChunks.push(Buffer.from(chunk));reviewBytes+=chunk.length;}res.write(chunk);}
+    if(record.kind==='value_gate'){
+      const raw=Buffer.concat(reviewChunks).toString('utf8'),parts=[];
+      if(raw.trim().startsWith('{'))try{parts.push(JSON.parse(raw));}catch{}
+      else for(const line of raw.split('\n'))if(line.startsWith('data: ')&&line.slice(6).trim()!=='[DONE]')try{parts.push(JSON.parse(line.slice(6)));}catch{}
+      record.reviewOutput={text:parts.flatMap(p=>(p.choices||[]).map(c=>c.delta?.content||c.message?.content||'')).join(''),finishReasons:parts.flatMap(p=>(p.choices||[]).map(c=>c.finish_reason).filter(Boolean)),usage:parts.findLast(p=>p.usage)?.usage,captureTruncated:reviewBytes>65536};
+    }
+    res.end();record.ms=Date.now()-record.started;await writeReport();
   }catch(error){if(record){record.status=502;record.error=error.name==='TimeoutError'?'Real model timeout':'Real model request failed';record.ms=Date.now()-record.started;await writeReport().catch(()=>{});}if(res.headersSent)res.end();else{res.writeHead(502,{'content-type':'application/json'});res.end(JSON.stringify({error:{message:error.name==='TimeoutError'?'Real model timeout':'Real model request failed'}}));}}
 });
 await new Promise(r=>proxy.listen(0,'127.0.0.1',r));
@@ -86,7 +94,7 @@ async function stop(){if(!bridge)return;const {child}=bridge;bridge=null;const c
 async function prompt(name,text,{continueOnError=false,timeoutMs=maxCaseMs}={}){
   caseName=name;const begin=Date.now(),index=bridge.seen.length,startRequest=requests.length,startCalls=shellCalls.length;
   console.log('START '+name);let outcome,error;try{outcome=await bridge.command('prompt',{text},timeoutMs);}catch(e){error=e;}
-  const events=bridge.seen.slice(index);const item={name,ms:Date.now()-begin,prompt:text,outcome:outcome?.outcome,error:error?.message,text:events.filter(e=>e.type==='delta').map(e=>e.text).join(''),toolStarts:events.filter(e=>e.type==='tool_start').map(e=>({name:e.name,args:e.args})),toolResults:events.filter(e=>e.type==='tool_end'),requestStart:startRequest,shellStart:startCalls};cases.push(item);console.log('DONE '+name+' '+item.ms+'ms');await writeReport();if(error&&!continueOnError)throw error;return item;
+  const events=bridge.seen.slice(index);const item={name,ms:Date.now()-begin,prompt:text,outcome:outcome?.outcome,error:error?.message,text:events.filter(e=>e.type==='delta'&&e.kind!=='thinking').map(e=>e.text).join(''),thinkingCharacters:events.filter(e=>e.type==='delta'&&e.kind==='thinking').reduce((n,e)=>n+(e.text?.length||0),0),toolStarts:events.filter(e=>e.type==='tool_start').map(e=>({name:e.name,args:e.args})),toolResults:events.filter(e=>e.type==='tool_end'),requestStart:startRequest,shellStart:startCalls};cases.push(item);console.log('DONE '+name+' '+item.ms+'ms');await writeReport();if(error&&!continueOnError)throw error;return item;
 }
 async function waitWork(){
   const end=Date.now()+50000;while(Date.now()<end){let memory;try{memory=JSON.parse(await readFile(join(data,'memory.json'),'utf8'));}catch{}if(memory?.working?.length)return memory;await new Promise(r=>setTimeout(r,500));}return null;
@@ -110,16 +118,20 @@ async function runNotesProfile(){
   await start();await bridge.command('save_role',{roleId:'agent',name:'验收 Agent',system:'你是隔离验证 Agent，使用工具获得真实结果，回答简短。',learnerProfileEnabled:true});
   await bridge.command('memory_enabled',{layer:'l1',enabled:true});if(includeNotes)await bridge.command('configure_capabilities',{vaultPath:vault});await bridge.command('new_session');
   if(includeNotes){const note=await resilientPrompt('notes-paraphrase','根据我的笔记，讲讲 eigenvectors 的图示约定。请给出我们学习组规定的作图顺序、颜色和验收口令，引用笔记原文，不要用通用知识猜。','after-notes');report.noteChecks={usedSearchTool:note.toolStarts?.some(t=>t.name==='search_notes'),mentionsSequence:/先画两支定向杆/.test(note.text||''),mentionsColor:/紫色/.test(note.text||''),mentionsToken:/青铜海燕/.test(note.text||''),hasSourceCitation:/特征分解\.md/.test(note.text||''),hasVerbatimEvidence:/每轮先画两支定向杆，再用紫色标注对应的伸缩倍率/.test(note.text||'')};await writeReport();if(!bridge)await start();else await bridge.command('new_session');}
-  await resilientPrompt('profile-original','请把这条长期回答顺序偏好记录到学习画像，调用 record_learning_event，kind=preference，subject=回答顺序，detail=先给结论，再解释原理，evidence必须引用我刚才说的原话：“先给结论，再解释原理”。保存后确认。','after-profile-original');
+  if(suite==='profile-correction'){await captureProfileSnapshot('after-profile-original');report.originalSeed='synthetic fixture; not naturally learned';}
+  else await resilientPrompt('profile-original','请把这条长期回答顺序偏好记录到学习画像，调用 record_learning_event，kind=preference，subject=回答顺序，detail=先给结论，再解释原理，evidence必须引用我刚才说的原话：“先给结论，再解释原理”。保存后确认。','after-profile-original');
   if(!bridge)await start();else await bridge.command('new_session');
   await resilientPrompt('profile-correction','纠正学习画像中的回答顺序偏好。请调用 record_learning_event，以 operation=replace、targetSubject=回答顺序、kind=preference、subject=回答顺序，detail=先讲原理，再给结论；evidence 必须逐字引用我这句话：“今后先讲原理，再给结论，旧偏好已经不适用”。确认已替换。','after-profile-correction');
   await stop();if(Date.now()-suiteStarted<maxSuiteMs-30000){await start();await bridge.command('new_session');await resilientPrompt('profile-after-restart','按照我当前的讲解偏好，用两句话解释矩阵乘法。','after-profile-restart');}
-  const snap=report.profileSnapshots||{},original=JSON.stringify(snap['after-profile-original']?.learner?.preferences||[]),corrected=JSON.stringify(snap['after-profile-correction']?.learner?.preferences||[]),afterRestart=JSON.stringify(snap['after-profile-restart']?.learner?.preferences||[]),answer=cases.find(c=>c.name==='profile-after-restart')?.text||'';
+  const snap=report.profileSnapshots||{},preferences=state=>state?.preferences||state?.events?.filter(e=>e.kind==='preference')||[],original=JSON.stringify(preferences(snap['after-profile-original']?.learner)),corrected=JSON.stringify(preferences(snap['after-profile-correction']?.learner)),afterRestart=JSON.stringify(preferences(snap['after-profile-restart']?.learner)),answer=cases.find(c=>c.name==='profile-after-restart')?.text||'';
   report.profileChecks={originalSaved:/先给结论，再解释原理/.test(original),correctionSaved:/先讲原理，再给结论/.test(corrected),correctedPreferenceAfterRestart:/先讲原理，再给结论/.test(afterRestart),oldPreferenceStillCurrent:/先给结论，再解释原理/.test(afterRestart),answerBeginsWithPrinciple:/先讲原理|原理/.test(answer.trim().slice(0,100)),answerMentionsConclusion:/结论/.test(answer)};await writeReport();
 }
 async function run(){
   const seedIndex=process.argv.indexOf('--continue-from');
-  if(['notes-profile','profile-only'].includes(suite)){await runNotesProfile();return;}
+  if(['notes-profile','profile-only','profile-correction'].includes(suite)){
+    if(suite==='profile-correction')await writeFile(join(data,'learner.json'),JSON.stringify({version:1,events:[{id:'synthetic-original',kind:'preference',subject:'回答顺序',detail:'先给结论，再解释原理',evidence:'先给结论，再解释原理',operation:'supplement',source:'synthetic-fixture',time:new Date().toISOString()}]}));
+    await runNotesProfile();return;
+  }
   if(seedIndex>=0){const seed=JSON.parse(await readFile(resolve(process.argv[seedIndex+1]),'utf8'));assert.ok(seed.learned?.length,'缺少已验证训练产物');report.learned=seed.learned.map(i=>({...i,...(i.scope?{scope:workspace}:{})}));report.seededFrom=resolve(process.argv[seedIndex+1]);await writeFile(join(data,'memory.json'),JSON.stringify({enabled:{l1:false,l2:false,l3:false,work:true},profile:'',facts:[],notes:[],working:report.learned}));}
   await start();
   if(!report.seededFrom){

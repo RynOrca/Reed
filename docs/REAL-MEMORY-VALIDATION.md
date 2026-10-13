@@ -1,5 +1,7 @@
 # 工作经验真实模型定向验证
 
+后续进展：画像纠正已在独立诊断中定位为输出预算耗尽并定向修复，真实替换/重启成功，详见 [画像纠正诊断](PROFILE-CORRECTION-DIAGNOSIS.md)。本文原始失败记录仍保留。
+
 日期：2026-10-13
 基线 Git 提交：`4343d319fa5c5099bae97c494402e21ae2d3c430`
 模型：`qwen3.8-27b-long`。后续 continuation 与补验代理显式强制出站 `effectiveEffort=low`；更早的训练产物没有记录实际出站 thinking，不能将它们归为已验证 low。

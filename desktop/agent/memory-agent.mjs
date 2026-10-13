@@ -37,7 +37,7 @@ export function createMemoryAgent({ memory, learner, send, currentSession, runti
         if (!memory.state.enabled[layer]) return { content: [{ type: "text", text: "此层记忆已关闭，未保存" }], details: {} };
         const selected = currentSession();
         const verdict = await judgeValue?.([{ area: input.layer, key: input.key, content: input.content,operation:input.operation }], { signal });
-        if (!verdict?.[0] || signal?.aborted || currentSession() !== selected || !enabled() || sessionDisallowsMemory(selected) || !memory.state.enabled[layer]) return skippedMemory();
+        if (!verdict?.[0] || signal?.aborted || currentSession() !== selected || !enabled() || sessionDisallowsMemory(selected) || !memory.state.enabled[layer]) return skippedMemory(verdict?.diagnostics?.[0]);
         await memory.applyAgentUpdate(input.layer === "profile" ? { facts: [{ key: input.key, content: input.content,operation:input.operation }] } : { notes: [{ title: input.key, body: input.content,operation:input.operation }] }, currentSession()?.sessionId || "agent");
         send({ type: "memory", state: memory.snapshot() });
         return { content: [{ type: "text", text: "记忆已整理保存" }], details: { layer } };
