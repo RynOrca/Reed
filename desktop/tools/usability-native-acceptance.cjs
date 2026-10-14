@@ -23,12 +23,13 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
   for(let i=1;i<=12;i++)await fs.writeFile(path.join(vault,`笔记${String(i).padStart(2,'0')}.md`),`# 笔记${i}\n\n隔离数学笔记${i}。`);
   await fs.writeFile(path.join(root,'browser-test.html'),'<title>原生 browser 验收</title><h1>隔离 browser 工具</h1><button>测试按钮</button>');
   await fs.writeFile(path.join(vault,'Reed-笔记库总览.md'),'# 总览\n数学：12篇隔离笔记。');
-  let calls=0,child,browser;const errors=[],checks=[];
+  let calls=0,child,browser,releaseProgress;const errors=[],checks=[];
   const report={basis:'fresh targeted portable build, embedded UI + packaged Agent; synthetic provider/profile, no installation',packagePath:source,nativeHostSha256:createHash('sha256').update(await fs.readFile(path.join(pkg,'Reed.exe'))).digest('hex'),checks,errors};
   const server=createServer(async(req,res)=>{
     if(req.url==='/v1/models'){res.setHeader('content-type','application/json');res.end(JSON.stringify({data:[{id:'isolated-ui',supports_reasoning:false}]}));return;}
     const chunks=[];for await(const c of req)chunks.push(c);const input=JSON.parse(Buffer.concat(chunks).toString());calls++;
     const text=JSON.stringify(input.messages.filter(m=>m.role==='user').at(-1));const slow=text.includes('CANCEL_UI_TEST');
+    if(text.includes('PROGRESS_UI_TEST'))await new Promise(resolve=>{releaseProgress=resolve;});
     res.writeHead(200,{'content-type':'text/event-stream'});res.flushHeaders();
     if(text.includes('BROWSER_UI_TEST')){
       const count=input.messages.filter(m=>m.role==='tool').length;
@@ -52,13 +53,14 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
     const main=context.pages().find(p=>!p.url().includes('settings.html'));assert.ok(main);await main.locator('#status').filter({hasText:'就绪'}).waitFor({timeout:30000});const nativeUrl=new URL(main.url());report.nativeUrl=main.url();report.appVersion=await main.evaluate(()=>window.__TAURI__.core.invoke('app_version'));assert.equal(report.appVersion,'0.2.2');
     context.on('page',p=>p.on('pageerror',e=>errors.push(String(e))));main.on('pageerror',e=>errors.push(String(e)));
     await main.goto(nativeUrl.href+(nativeUrl.search?'&':'?')+'usability-source='+Date.now(),{waitUntil:'networkidle'});await main.locator('#status').filter({hasText:'就绪'}).waitFor({timeout:30000});checks.push('新构建原生程序加载内嵌UI及包内Agent，临时profile隔离');
-    await main.locator('#prompt').fill('只回复收到，不使用工具');await main.locator('#send-button').click();await main.locator('#stop-button').waitFor({state:'visible'});
+    await main.locator('#prompt').fill('PROGRESS_UI_TEST 只回复收到，不使用工具');await main.locator('#send-button').click();await main.locator('#stop-button').waitFor({state:'visible'});
+    for(let i=0;i<100&&!releaseProgress;i++)await delay(100);assert.ok(releaseProgress,'progress test must reach provider first');
     const emit=payload=>main.evaluate(p=>window.__TAURI__.event.emit('agent-event',p),payload);
     for(const [phase,expected] of [['local','正在查找本地笔记'],['expanding','最多等待 5 秒'],['fallback','本地检索结果'],['ready','已找到 2 段笔记']]){
       await emit({type:'knowledge_progress',phase,count:2});await main.locator('#status').filter({hasText:expected}).waitFor({timeout:3000});
       if(phase==='expanding')await main.screenshot({path:path.join(artifacts,'native-expanding.png')});
     }
-    await main.locator('#stop-button').waitFor({state:'hidden',timeout:20000});await main.locator('.message-row.assistant').filter({hasText:'隔离桌面验证完成'}).waitFor();checks.push('实际mock回复完成，阶段状态事件回放可见，结束恢复就绪');
+    releaseProgress();await main.locator('#stop-button').waitFor({state:'hidden',timeout:20000});await main.locator('.message-row.assistant').filter({hasText:'隔离桌面验证完成'}).waitFor();checks.push('实际mock回复完成，阶段状态事件回放可见，结束恢复就绪');
     const beforeCancel=calls;await main.locator('#prompt').fill('CANCEL_UI_TEST');await main.locator('#send-button').click();await main.locator('#stop-button').waitFor({state:'visible'});for(let i=0;i<100&&calls===beforeCancel;i++)await delay(100);assert.ok(calls>beforeCancel,'cancel test must reach provider first');await main.goto(nativeUrl.href+(nativeUrl.search?'&':'?')+'usability-busy='+Date.now(),{waitUntil:'networkidle'});await main.locator('#stop-button').waitFor({state:'visible',timeout:5000});await main.locator('.message-row.user').filter({hasText:'CANCEL_UI_TEST'}).waitFor();checks.push('忙碌时前端重载恢复历史及停止按钮，不误报就绪');await main.locator('#stop-button').click();await main.locator('#stop-button').waitFor({state:'hidden',timeout:10000});checks.push('请求实际到达provider后可取消，停止后控件恢复');
     const previousReplies=await main.locator('.message-row.assistant').count();await main.locator('#prompt').fill('再次只回复收到，不使用工具');await main.locator('#send-button').click();await main.waitForFunction(n=>document.querySelectorAll('.message-row.assistant').length>n,previousReplies,{timeout:20000});await main.locator('#stop-button').waitFor({state:'hidden',timeout:20000});checks.push('取消后能继续发送并完成下一条回复');
     await main.evaluate(async()=>{window.browserToolEvents=[];await window.__TAURI__.event.listen('agent-event',event=>{if(event.payload.type==='tool_end')window.browserToolEvents.push(event.payload);});});
@@ -73,6 +75,7 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
     assert.deepEqual(errors,[]);report.status='passed';
   }catch(error){report.status='failed';report.failure=String(error.stack);if(browser)for(const [i,p] of browser.contexts().flatMap(c=>c.pages()).entries())await p.screenshot({path:path.join(artifacts,`failure-${i}.png`)}).catch(()=>{});process.exitCode=1;}
   finally{
+    releaseProgress?.();
     report.mockRequests=calls;await fs.writeFile(path.join(artifacts,'native-report.json'),JSON.stringify(report,null,2));
     await browser?.close().catch(()=>{});if(child?.pid&&child.exitCode===null)await promisify(execFile)('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true}).catch(()=>{});
     server.closeAllConnections();await new Promise(r=>server.close(r));
