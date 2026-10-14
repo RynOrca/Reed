@@ -20,6 +20,56 @@ function prefixBounds(prefix) {
 
 const RETAIN_PAGE = 2000;
 
+// A chunk whose whole text is its own heading line (or a separator) inherits the
+// heading in the indexed text and used to outrank real content under plain bm25.
+function headingOnly(payload) {
+  const content = String(payload?.content ?? "").replace(/^#+\s*/, "").trim();
+  const heading = String(payload?.heading ?? "").trim();
+  return Boolean(content) && content === heading;
+}
+
+/**
+ * Deterministic rerank of bm25 candidates.
+ *
+ * bm25 rewards short documents, so a one-line separator or a heading-only chunk
+ * scores far above the paragraph that actually answers the query. Hits are grouped
+ * by what they really matched — own content, then labels only, then a chunk that is
+ * nothing but its heading — and scored by coverage inside the group.
+ */
+export function rankHits(rows, words) {
+  const total = Math.max(1, words.length);
+  const scored = rows.map((row, index) => {
+    let payload;
+    try { payload = JSON.parse(row.payload); } catch { payload = {}; }
+    const content = String(payload?.content ?? "").toLowerCase();
+    const labels = `${payload?.heading ?? ""} ${payload?.title ?? ""}`.toLowerCase();
+    const compact = content.replace(/\s+/g, "");
+    const contentHits = words.filter(word => content.includes(word)).length;
+    const labelHits = words.filter(word => labels.includes(word)).length;
+    const phrase = compact.includes(words.join("")) ? 1 : 0;
+    const onlyHeading = headingOnly(payload);
+    // Long chunks are slightly discounted, but the penalty never outweighs coverage.
+    const lengthPenalty = Math.min(0.12, content.length / 60000);
+    const score = (contentHits / total) * 0.62 + (labelHits / total) * 0.22 + phrase * 0.16 - lengthPenalty;
+    const tier = onlyHeading ? 2 : contentHits > 0 ? 0 : 1;
+    return { row, payload, index, contentHits, labelHits, onlyHeading, tier, score: Math.max(0, Math.min(1, score)) };
+  });
+  return scored
+    .sort((a, b) => a.tier - b.tier || b.score - a.score || a.index - b.index)
+    .map(item => ({
+      id: item.row.id,
+      area: item.row.area,
+      scope: item.row.scope,
+      revision: item.row.revision,
+      text: item.row.text,
+      payload: item.payload,
+      score: Number(item.score.toFixed(4)),
+      bm25: -item.row.rank,
+      contentHits: item.contentHits,
+      headingOnly: item.onlyHeading,
+    }));
+}
+
 export class LocalSearchIndex {
   constructor(path) {
     this.db = new DatabaseSync(path);
@@ -169,14 +219,15 @@ export class LocalSearchIndex {
       FROM search_documents
       WHERE search_documents MATCH ? AND area = ? AND scope = ?
       ORDER BY rank ASC LIMIT ?`).all(expression, area, scope, Math.min(limit, 100));
-    return rows.map(row => ({
+    return rankHits(rows, words).map(row => ({
       id: row.id,
       area: row.area,
       scope: row.scope,
       revision: row.revision,
       text: row.text,
-      payload: JSON.parse(row.payload),
-      score: -row.rank,
+      payload: row.payload,
+      score: row.score,
+      bm25: row.bm25,
     }));
   }
 

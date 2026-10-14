@@ -8,6 +8,20 @@ import { setImmediate as yieldLoop } from 'node:timers/promises';
 // Strip only a complete leading YAML block; preserve malformed or ordinary Markdown.
 export function noteBody(text) { return String(text).replace(/^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/,'').trimStart(); }
 
+/**
+ * Separators, fences and stray punctuation are not evidence. They used to be
+ * indexed as chunks and, being tiny, inherited their heading and outranked the
+ * paragraph that actually contains the answer.
+ */
+export function indexableChunk(content) {
+  const text = String(content ?? "");
+  const significant = text.replace(/[\s\p{P}\p{S}]/gu, "");
+  // One CJK character carries about as much as two Latin ones for retrieval.
+  const cjk = (significant.match(/[\u3400-\u9fff\uf900-\ufaff]/gu) || []).length;
+  const weight = cjk * 2 + (significant.length - cjk);
+  return weight >= 6 && /[\p{L}\p{N}]/u.test(significant);
+}
+
 export function inside(root, path) { const rel = relative(root, path); return !rel.startsWith("..") && !isAbsolute(rel); }
 export function terms(text) { const s = String(text).toLowerCase(); return [...new Set([...(s.match(/[a-z0-9_]{2,}/g) || []), ...(s.match(/[\u3400-\u9fff]+/g) || []).flatMap(v => Array.from({length: Math.max(1,v.length-1)}, (_,i)=>v.slice(i,i+2)))])]; }
 export async function walk(root, accept, budget = { files:0, bytes:0 }) {
@@ -128,7 +142,7 @@ export class CapabilityStore {
         if(i===lines.length || /^#{1,6}\s/.test(lines[i]) || (i>start && !lines[i].trim()) || i-start>=30) {
           let first=start,last=i; while(first<last && !lines[first].trim())first++; while(last>first && !lines[last-1].trim())last--;
           const content=lines.slice(first,last).join("\n").trim();
-          if(content) {
+          if(content&&indexableChunk(content)) {
             const id=`${prefix}${first+1}`;
             // Frontmatter is metadata: strip it from the card preview, but only for
             // chunks that really start the file, never for a mid-note "---" rule.
