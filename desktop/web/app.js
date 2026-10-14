@@ -475,7 +475,7 @@ function onEvent(event) {
     case "sessions": renderSessions(response.sessions || []); break;
     case "history": restoreHistory(response.messages || []); status("就绪"); break;
     case "stopping": stopping=true;$("stop-button").disabled=true;status("正在停止，等待请求结束…");break;
-    case "request_phase": if(running&&!stopping)status(response.phase==='connecting'?'正在连接模型服务…':response.phase==='headers'?'模型服务已连接，等待首段内容…':response.phase==='first_body'?'已收到模型数据，正在生成回复…':'正在生成回复…');break;
+    case "request_phase": if(running&&!stopping)status(recoveryStatus||(response.phase==='connecting'?'正在连接模型服务…':response.phase==='headers'?'模型服务已连接，等待首段内容…':response.phase==='first_body'?'已收到模型数据，正在生成回复…':'正在生成回复…'));break;
     case "model_queue": if (running&&!stopping) status(response.state === "waiting" ? (recoveryStatus ? recoveryStatus + "（等待模型服务空闲）" : "正在等待模型服务空闲…") : recoveryStatus || "正在准备模型请求…"); break;
     case "delta": {
       recoveryStatus = "";

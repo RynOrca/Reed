@@ -133,6 +133,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     await settings.locator('#provider-name').fill('桌面隔离测试');
     await settings.locator('#base-url').fill(`http://127.0.0.1:${server.address().port}/v1`);
     await settings.locator('#discover').click(); await settings.locator('.model-info').filter({hasText:'isolated-learning-model'}).waitFor({timeout:25000});
+    const discoveredToggle=settings.locator('.model-info input.model-toggle');assert.equal(await discoveredToggle.isChecked(),false);await discoveredToggle.check();
     assert.ok((await settings.locator('.model-info').textContent()).includes('65,536')); checks.push('提供商卡片配置、模型发现及能力展示');
     const actionAlignment=await settings.locator('.model-info button').first().evaluate(e=>({align:getComputedStyle(e).alignItems,justify:getComputedStyle(e).justifyContent,padding:getComputedStyle(e).paddingTop}));assert.equal(actionAlignment.align,'center');assert.equal(actionAlignment.justify,'center');assert.equal(actionAlignment.padding,'7px');checks.push('供应商表单间距及模型配置按钮居中');
     await settings.screenshot({path:path.join(artifacts,'settings-models.png')});

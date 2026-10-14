@@ -30,3 +30,5 @@
 源码准备提交。随后构建隔离安装包/便携包，原生验证上述交互与启动时序，最后只推送0.2.2及替换v0.2.2 Draft附件。尚不宣称原生新包已通过，不公开Release。
 
 证据：dist/bugfix-0.2.2-models。focused-first/second/third.log保留失败与旧恢复夹具死锁记录；focused-fourth.log 44项通过；full-agent-first.log、full-agent-final.log保留175项全套结果；provider-final.log最终相关16项通过。
+
+原生阶段：首包57a5e60关键17项通过（native-usability-third.log）；完整桌面在恢复提示检查发现request_phase覆盖recoveryStatus，实际SDK恢复逻辑未丢失，但提示不可持续。已修UI保护，独立提交后重新构建；首包不作为最终交付。两次原生脚本初始化/焦点时序失败日志也保留。
