@@ -14,7 +14,7 @@ const project=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 const artifacts=join(project,'dist','real-memory-acceptance');await mkdir(artifacts,{recursive:true});
 function option(name){const index=process.argv.indexOf(name);return index>=0?process.argv[index+1]:null;}
 const helperEffort=option('--helper-effort')||'low';assert.ok(['low','none','configured'].includes(helperEffort),'辅助思考只允许low、none或保留配置');
-const suite=option('--suite')||'full';assert.ok(['full','notes-profile','profile-only','profile-correction','work-shell','work-pwsh','work-scope','work-update','work-replace','work-learn','notes-only','learning-study','learning-review','latency'].includes(suite),`未知验收套件：${suite}`);
+const suite=option('--suite')||'full';assert.ok(['full','notes-profile','profile-only','profile-correction','work-shell','work-pwsh','work-scope','work-update','work-replace','work-learn','notes-only','learning-study','learning-review','latency','latency-wire'].includes(suite),`未知验收套件：${suite}`);
 const bridgePath=resolve(option('--bridge-path')||join(artifacts,'snapshot-agent','bridge.mjs'));
 const reportPath=option('--report-path')?resolve(project,option('--report-path')):join(artifacts,suite==='notes-profile'?'continuation-notes-profile.json':suite==='profile-only'?'continuation-profile-only.json':'report.json');
 assert.ok(reportPath.startsWith(artifacts+sep),`报告路径必须位于 ${artifacts} 下`);
@@ -47,8 +47,14 @@ const proxy=createServer(async(req,res)=>{
     const caseCount=requests.filter(r=>r.case===requestCase).length;
     if(caseCount>maxRequestsPerCase||requests.length>maxSuiteRequests||Date.now()-suiteStarted>maxSuiteMs){record.status=429;record.budgetExceeded=true;res.writeHead(429,{'content-type':'application/json'});res.end(JSON.stringify({error:{message:'Isolated acceptance request/time budget exceeded'}}));return;}
     const response=await fetch(provider.baseUrl.replace(/\/$/,'')+'/chat/completions',{method:'POST',headers:{'content-type':'application/json',...(req.headers.authorization?{authorization:req.headers.authorization}:{})},body:JSON.stringify(input),signal:AbortSignal.any([AbortSignal.timeout(maxUpstreamMs),upstream.signal])});
-    record.status=response.status;res.writeHead(response.status,{'content-type':response.headers.get('content-type')||'application/json'});
-    for await(const chunk of response.body){if(helperKinds.has(record.kind)&&reviewBytes<65536){reviewChunks.push(Buffer.from(chunk));reviewBytes+=chunk.length;}res.write(chunk);}
+    record.headersMs=Date.now()-record.started;record.status=response.status;res.writeHead(response.status,{'content-type':response.headers.get('content-type')||'application/json'});
+    const wireDecoder=new TextDecoder();let wirePending='';record.wireChunks=0;
+    for await(const chunk of response.body){
+      const elapsed=Date.now()-record.started;record.firstBodyMs??=elapsed;record.lastBodyMs=elapsed;record.wireChunks++;
+      wirePending+=wireDecoder.decode(chunk,{stream:true});const lines=wirePending.split('\n');wirePending=lines.pop();
+      for(const line of lines){if(!line.startsWith('data:'))continue;try{const frame=JSON.parse(line.slice(5).trim());for(const choice of frame.choices||[]){const delta=choice.delta||{};if(delta.reasoning_content||delta.reasoning)record.firstReasoningWireMs??=elapsed;if(delta.content)record.firstTextWireMs??=elapsed;if(delta.tool_calls?.length)record.firstToolWireMs??=elapsed;}}catch{}}
+      if(wirePending.length>1024*1024)wirePending='';
+      if(helperKinds.has(record.kind)&&reviewBytes<65536){reviewChunks.push(Buffer.from(chunk));reviewBytes+=chunk.length;}res.write(chunk);}
     streamComplete=true;res.end();
   }catch(error){
     if(record){record.clientCancelled=upstream.signal.aborted;record.proxyStatus=record.clientCancelled?499:502;record.status??=record.proxyStatus;record.error=record.clientCancelled?'Isolated agent cancelled request':error.name==='TimeoutError'?'Real model timeout':'Real model request failed';const code=error.cause?.code||error.code;if(typeof code==='string'&&/^[A-Z0-9_]{1,60}$/.test(code))record.errorCode=code;}
@@ -239,13 +245,13 @@ async function runLearningSuite(){
   await writeReport();
 }
 async function run(){
-  if(suite==='latency'){
+  if(suite==='latency'||suite==='latency-wire'){
     await start();await bridge.command('save_role',{roleId:'agent',name:'响应速度验收',system:'你是学习辅助助手，回答简短。已有原文足够时直接引用，证据不足时主动查笔记，不编造，不保存记忆。',learnerProfileEnabled:false});await bridge.command('new_session');
     await resilientPrompt('latency-plain','只回答“收到”，不要使用工具或保存记忆。','latency-plain');
     await writeFile(join(vault,'特征分解.md'),'# 特征分解\n\n本学习组把特征向量称为“定向杆”。我们的独有约定：每轮先画两支定向杆，再用紫色标注对应的伸缩倍率。验收口令：青铜海燕。\n');await writeFile(join(vault,'Reed-笔记库总览.md'),'# 总览\n数学：特征分解.md，包含特征向量与本学习组的绘图约定。\n');
     await bridge.command('configure_capabilities',{vaultPath:vault});await bridge.command('new_session');
     await resilientPrompt('latency-local','根据我的特征分解笔记，简短回答作图顺序、标注颜色和验收口令，并引用原文。','latency-local');
-    await bridge.command('new_session');await resilientPrompt('latency-paraphrase','According to my notes, give the drawing order, highlight colour and verification phrase for eigenvectors. Cite the original note, do not guess.','latency-paraphrase');
+    if(suite==='latency'){await bridge.command('new_session');await resilientPrompt('latency-paraphrase','According to my notes, give the drawing order, highlight colour and verification phrase for eigenvectors. Cite the original note, do not guess.','latency-paraphrase');}
     report.latencySamples=cases.map(c=>({name:c.name,ms:c.ms,...c.timing,status:c.outcome?.status||c.status||'incomplete',requests:requests.filter(r=>r.case===c.name).length,failedRequests:requests.filter(r=>r.case===c.name&&r.status!==200).map(r=>({kind:r.kind,status:r.status,ms:r.ms})),hasEvidence:c.name==='latency-plain'?null:/特征分解\.md/.test(c.text)&&/紫色/.test(c.text)&&/青铜海燕/.test(c.text)}));await writeReport();return;
   }
   const seedIndex=process.argv.indexOf('--continue-from');
