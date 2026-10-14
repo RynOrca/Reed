@@ -14,7 +14,7 @@ const project=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 const artifacts=join(project,'dist','real-memory-acceptance');await mkdir(artifacts,{recursive:true});
 function option(name){const index=process.argv.indexOf(name);return index>=0?process.argv[index+1]:null;}
 const helperEffort=option('--helper-effort')||'low';assert.ok(['low','none','configured'].includes(helperEffort),'辅助思考只允许low、none或保留配置');
-const suite=option('--suite')||'full';assert.ok(['full','notes-profile','profile-only','profile-correction','work-shell','work-pwsh','work-scope','work-update','work-replace','work-learn','notes-only','learning-study','learning-review','latency','latency-wire'].includes(suite),`未知验收套件：${suite}`);
+const suite=option('--suite')||'full';assert.ok(['full','notes-profile','profile-only','profile-correction','work-shell','work-pwsh','work-scope','work-update','work-replace','work-learn','notes-only','learning-study','learning-review','latency','latency-wire','latency-compare'].includes(suite),`未知验收套件：${suite}`);
 const bridgePath=resolve(option('--bridge-path')||join(artifacts,'snapshot-agent','bridge.mjs'));
 const reportPath=option('--report-path')?resolve(project,option('--report-path')):join(artifacts,suite==='notes-profile'?'continuation-notes-profile.json':suite==='profile-only'?'continuation-profile-only.json':'report.json');
 assert.ok(reportPath.startsWith(artifacts+sep),`报告路径必须位于 ${artifacts} 下`);
@@ -27,7 +27,7 @@ const provider=settings.providers.providers.find(p=>p.id===appState.provider);
 assert.ok(provider,'当前模型提供商未配置');
 assert.equal(provider.protocol,'openai-completions','这个验收脚本目前仅支持 OpenAI 兼容服务');
 const selected=provider.models.find(m=>m.id===appState.modelId);assert.ok(selected);
-const requests=[],shellCalls=[],cases=[];let caseName='setup',bridge;
+const requests=[],shellCalls=[],cases=[];let caseName='setup',bridge,lastAgentPayload,lastAuthorization;
 const boundedSuite=suite!=='full',suiteStarted=Date.now(),maxSuiteMs=boundedSuite?360000:Infinity,maxCaseMs=boundedSuite?115000:150000,maxUpstreamMs=boundedSuite?60000:120000,maxRequestsPerCase=suite==='work-learn'?10:suite.startsWith('work-')?8:boundedSuite?5:12,maxSuiteRequests=boundedSuite?18:Infinity;
 const report={suite,bridgePath,model:selected.id,thinking:'low',helperThinking:helperEffort,thinkingCeiling:'medium',outputLimit:2400,syntheticOnly:true,root,cases,requests,shellCalls,requestBudget:{maxSuiteMs:Number.isFinite(maxSuiteMs)?maxSuiteMs:null,maxCaseMs,maxUpstreamMs,maxRequestsPerCase:Number.isFinite(maxRequestsPerCase)?maxRequestsPerCase:null,maxSuiteRequests:Number.isFinite(maxSuiteRequests)?maxSuiteRequests:null}};
 report.sourceSha256={};for(const name of ['bridge.mjs','work-applicability.mjs','work-memory.mjs','work-recall.mjs','memory-value.mjs','auxiliary-runtime.mjs','learner.mjs','memory-agent.mjs','role-features.mjs','role-skills.mjs','capabilities.mjs','note-retrieval.mjs']){try{report.sourceSha256[name]=createHash('sha256').update(await readFile(join(dirname(bridgePath),name))).digest('hex');}catch{}}
@@ -43,7 +43,8 @@ const proxy=createServer(async(req,res)=>{
     const chunks=[];for await(const c of req)chunks.push(c);const input=JSON.parse(Buffer.concat(chunks));
     const system=input.messages.filter(m=>['system','developer'].includes(m.role)).map(m=>typeof m.content==='string'?m.content:JSON.stringify(m.content)).join('\n');
     const requestedEffort=input.reasoning_effort??null;input.reasoning_effort=helperKinds.has(classify(system))?(helperEffort==='configured'?(['none','minimal','low','medium'].includes(requestedEffort)?requestedEffort:'low'):helperEffort):'low';const requestCase=caseName;
-    record={case:requestCase,kind:classify(system),system,model:input.model,requestedEffort,effectiveEffort:input.reasoning_effort,started:Date.now(),tools:(input.tools||[]).map(t=>t.function?.name),recentToolResults:input.messages.filter(m=>m.role==='tool').slice(-2).map(m=>({name:m.name,content:typeof m.content==='string'?m.content.slice(0,2500):JSON.stringify(m.content).slice(0,2500)}))};requests.push(record);await writeReport();
+    if(suite==='latency-compare'&&requestCase.startsWith('compare-agent')){lastAgentPayload=structuredClone(input);lastAuthorization=req.headers.authorization;}
+    record={case:requestCase,kind:classify(system),system,model:input.model,requestedEffort,effectiveEffort:input.reasoning_effort,started:Date.now(),tools:(input.tools||[]).map(t=>t.function?.name),recentToolResults:input.messages.filter(m=>m.role==='tool').slice(-2).map(m=>({name:m.name,content:typeof m.content==='string'?m.content.slice(0,2500):JSON.stringify(m.content).slice(0,2500)}))};record.payload={bytes:Buffer.byteLength(JSON.stringify(input)),messages:input.messages.length,toolCount:input.tools?.length||0,stream:input.stream,maxTokens:input.max_tokens,maxCompletionTokens:input.max_completion_tokens,temperature:input.temperature,reasoningEffort:input.reasoning_effort,chatTemplate:input.chat_template_kwargs,enableThinking:input.enable_thinking};requests.push(record);await writeReport();
     const caseCount=requests.filter(r=>r.case===requestCase).length;
     if(caseCount>maxRequestsPerCase||requests.length>maxSuiteRequests||Date.now()-suiteStarted>maxSuiteMs){record.status=429;record.budgetExceeded=true;res.writeHead(429,{'content-type':'application/json'});res.end(JSON.stringify({error:{message:'Isolated acceptance request/time budget exceeded'}}));return;}
     const response=await fetch(provider.baseUrl.replace(/\/$/,'')+'/chat/completions',{method:'POST',headers:{'content-type':'application/json',...(req.headers.authorization?{authorization:req.headers.authorization}:{})},body:JSON.stringify(input),signal:AbortSignal.any([AbortSignal.timeout(maxUpstreamMs),upstream.signal])});
@@ -52,7 +53,7 @@ const proxy=createServer(async(req,res)=>{
     for await(const chunk of response.body){
       const elapsed=Date.now()-record.started;record.firstBodyMs??=elapsed;record.lastBodyMs=elapsed;record.wireChunks++;
       wirePending+=wireDecoder.decode(chunk,{stream:true});const lines=wirePending.split('\n');wirePending=lines.pop();
-      for(const line of lines){if(!line.startsWith('data:'))continue;try{const frame=JSON.parse(line.slice(5).trim());for(const choice of frame.choices||[]){const delta=choice.delta||{};if(delta.reasoning_content||delta.reasoning)record.firstReasoningWireMs??=elapsed;if(delta.content)record.firstTextWireMs??=elapsed;if(delta.tool_calls?.length)record.firstToolWireMs??=elapsed;}}catch{}}
+      for(const line of lines){if(!line.startsWith('data:'))continue;try{const frame=JSON.parse(line.slice(5).trim());for(const choice of frame.choices||[]){if(frame.usage)record.usage=frame.usage;const delta=choice.delta||{};if(delta.reasoning_content||delta.reasoning)record.firstReasoningWireMs??=elapsed;if(delta.content)record.firstTextWireMs??=elapsed;if(delta.tool_calls?.length)record.firstToolWireMs??=elapsed;}}catch{}}
       if(wirePending.length>1024*1024)wirePending='';
       if(helperKinds.has(record.kind)&&reviewBytes<65536){reviewChunks.push(Buffer.from(chunk));reviewBytes+=chunk.length;}res.write(chunk);}
     streamComplete=true;res.end();
@@ -245,6 +246,20 @@ async function runLearningSuite(){
   await writeReport();
 }
 async function run(){
+  if(suite==='latency-compare'){
+    await start();await bridge.command('save_role',{roleId:'agent',name:'串行延迟对照',system:'回答简短，不调用工具、不保存记忆。',learnerProfileEnabled:false});
+    const direct=async(label,payload)=>{
+      caseName=label;const begin=Date.now();
+      const response=await fetch(`http://127.0.0.1:${proxy.address().port}/v1/chat/completions`,{method:'POST',headers:{'content-type':'application/json',...(lastAuthorization?{authorization:lastAuthorization}:{})},body:JSON.stringify(payload),signal:AbortSignal.timeout(65000)});
+      for await(const chunk of response.body){}report.directSamples??=[];report.directSamples.push({name:label,ms:Date.now()-begin,status:response.status});await writeReport();
+    };
+    for(let i=1;i<=2;i++){
+      await bridge.command('new_session');await prompt('compare-agent-'+i,'只回答“收到”，不要使用工具或保存记忆。');assert.ok(lastAgentPayload);
+      await direct('compare-direct-identical-'+i,structuredClone(lastAgentPayload));
+    }
+    const minimal=structuredClone(lastAgentPayload);delete minimal.tools;delete minimal.tool_choice;minimal.messages=[{role:'user',content:'只回答“收到”，不要使用工具或保存记忆。'}];
+    await direct('compare-direct-minimal',minimal);return;
+  }
   if(suite==='latency'||suite==='latency-wire'){
     await start();await bridge.command('save_role',{roleId:'agent',name:'响应速度验收',system:'你是学习辅助助手，回答简短。已有原文足够时直接引用，证据不足时主动查笔记，不编造，不保存记忆。',learnerProfileEnabled:false});await bridge.command('new_session');
     await resilientPrompt('latency-plain','只回答“收到”，不要使用工具或保存记忆。','latency-plain');
