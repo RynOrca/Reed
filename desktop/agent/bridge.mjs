@@ -166,7 +166,7 @@ async function getRuntime() {
     const completeAuxiliary = createAuxiliaryCompleter(created.completeSimple.bind(created));
     created.completeSimple = (model, context, options={}) => {
       const {requestPriority='foreground',requestTimeoutMs,queueTimeoutMs,onRequestState,...requestOptions}=options;
-      requestOptions.fetch = createRequestFetch(options.fetch || globalThis.fetch, {signal:options.signal, diagnostic:entry=>diagnostic({...entry,provider:model.provider,model:model.id,requestGroup:'auxiliary'})});
+      requestOptions.fetch = createRequestFetch(options.fetch || globalThis.fetch, {signal:options.signal, totalMs:requestTimeoutMs||300000, idleMs:requestTimeoutMs||90000,diagnostic:entry=>{onRequestState?.({state:'running',phase:entry.phase,elapsedMs:entry.elapsedMs});return diagnostic({...entry,provider:model.provider,model:model.id,requestGroup:'auxiliary'});}});
       if(requestTimeoutMs!==undefined)return modelRequests.complete(model,{signal:options.signal,priority:requestPriority,requestTimeoutMs,queueTimeoutMs,onState:onRequestState},signal=>completeAuxiliary(model,context,{...requestOptions,signal}));
       return modelRequests.run(model,{signal:options.signal,priority:requestPriority},()=>completeAuxiliary(model,context,requestOptions));
     };
@@ -259,6 +259,8 @@ async function openSession(provider, modelId, sessionManager) {
   Object.assign(appState, { activeSessionId: session.sessionId, projectPath, provider: session.model?.provider, modelId: session.model?.id });
   await saveJson(metadataPath, metadata); await saveJson(appStatePath, appState);
   session.subscribe((event) => {
+    // A cancelled turn must not paint late provider output while its SDK unwinds.
+    if(turnController?.signal.aborted&&['message_update','tool_execution_start'].includes(event.type))return;
     if(event.type==="compaction_start" || event.type==="compaction_end") send({type:"compaction",status:event.type.endsWith("start")?"running":event.errorMessage?"error":event.aborted?"skipped":"done",message:event.errorMessage||(event.aborted?"压缩未完成，原上下文已保留":""),enabled:session.autoCompactionEnabled});
     if (event.type === "queue_update") send({ type: "queue", steering: event.steering, followUp: event.followUp });
     if (event.type === "message_start" && event.message.role === "user" && busy) send({ type: "user_delivered", text: typeof event.message.content === "string" ? event.message.content : event.message.content?.filter(b => b.type === "text").map(b => b.text).join("\n") });
@@ -713,6 +715,7 @@ async function handle(command) {
         if (!command.text.trim() && !images.length) throw new Error("请输入消息或添加图片");
         busy = true;
         const controller = new AbortController();turnController=controller;
+        controller.promptId=id;
         turnRecovery.begin();
         visualReview.begin(command.text);
         outputTokens = 0; generationMs = 0; missingUsage = false;
@@ -746,12 +749,14 @@ async function handle(command) {
         if(completedOutcome?.status==='complete'){memoryAgent.schedule();void workingTools.consolidate();}
         break;
       case "abort":
+        if(command.promptId&&turnController?.promptId!==command.promptId){send({type:'ack',id,stale:true});break;}
+        // Acknowledge before invoking synchronous abort listeners.
+        send({ type: "ack", id });
+        send({type:'stopping'});
         turnController?.abort(new DOMException('用户已停止回复','AbortError'));
         turnRecovery.end();
         approvalGate.cancel("用户停止了当前操作");
         if (session) void session.abort().catch(error=>send({type:'error',message:error.message}));
-        send({type:'stopping'});
-        send({ type: "ack", id });
         break;
       case "tool_decision": {
         approvalGate.decide(command.requestId, command.decision, command.reason);

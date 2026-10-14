@@ -646,7 +646,7 @@ prompt.addEventListener("input", () => {
 $("stop-button").addEventListener("click", async () => {
   if(stopping)return;
   stopping=true;$("stop-button").disabled=true;status("正在停止…");
-  try{await command("abort",{},true);}catch(error){stopping=false;$("stop-button").disabled=false;status("停止未确认，请重试");errorRow(String(error.message||error));}
+  try{await command("abort",{promptId:activePromptId},true);}catch(error){stopping=false;$("stop-button").disabled=false;status("停止未确认，请重试");errorRow(String(error.message||error));}
 });
 $("header-new-chat").addEventListener("click", () => void newSession());
 $("history-new-chat").addEventListener("click", () => void newSession());

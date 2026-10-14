@@ -3,6 +3,10 @@ import { join, resolve, relative, isAbsolute, basename, extname } from "node:pat
 import { createHash, randomUUID } from "node:crypto";
 import { protectKey, unprotectKey } from "./endpoint.mjs";
 import { LocalSearchIndex } from "./local-search.mjs";
+import { setImmediate as yieldLoop } from 'node:timers/promises';
+
+// Strip only a complete leading YAML block; preserve malformed or ordinary Markdown.
+export function noteBody(text) { return String(text).replace(/^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/,'').trimStart(); }
 
 export function inside(root, path) { const rel = relative(root, path); return !rel.startsWith("..") && !isAbsolute(rel); }
 export function terms(text) { const s = String(text).toLowerCase(); return [...new Set([...(s.match(/[a-z0-9_]{2,}/g) || []), ...(s.match(/[\u3400-\u9fff]+/g) || []).flatMap(v => Array.from({length: Math.max(1,v.length-1)}, (_,i)=>v.slice(i,i+2)))])]; }
@@ -58,19 +62,20 @@ export class CapabilityStore {
     if(!Number.isSafeInteger(offset)||offset<0)throw Error("浏览位置无效");
     const root=this.state.vaultPath,files=(await walk(root,p=>extname(p).toLowerCase()===".md"&&basename(p)!=="Reed-笔记库总览.md")).sort((a,b)=>relative(root,a.path).localeCompare(relative(root,b.path),"zh-CN"));
     const readable=[];for(const file of files)if(file.size<=1024*1024&&(!this.canRead||await this.canRead(file.path)))readable.push(file);
-    const results=[];for(const file of readable.slice(offset,offset+5)){const body=await readFile(file.path,"utf8");results.push({path:file.path,title:relative(root,file.path),content:body.slice(0,400),url:`summon-file:${encodeURIComponent(file.path)}`});}
+    const results=[];for(const file of readable.slice(offset,offset+5)){const body=await readFile(file.path,"utf8");results.push({path:file.path,title:relative(root,file.path),content:noteBody(body).slice(0,1200),url:`summon-file:${encodeURIComponent(file.path)}`});}
     return {results,total:readable.length,next:offset+results.length<readable.length?offset+results.length:null};
   }
   async searchNotes(query,limit=4,{signal}={}) {
     signal?.throwIfAborted();
+    const queued=performance.now();
     const operation=(this.searchQueue||Promise.resolve()).catch(()=>{}).then(()=>this.searchNotesOnce(query,limit,{signal}));
-    this.searchQueue=operation;return operation;
+    this.searchQueue=operation;const results=await operation;this.noteScanStatus.totalMs=Math.round(performance.now()-queued);return results;
   }
   async searchNotesOnce(query,limit=4,{signal}={}) {
     signal?.throwIfAborted();
     if(!this.state.vaultPath) { this.noteScanStatus={state:"idle",checkedFiles:0,errorCount:0,errors:[]};return []; }
     const needles=terms(query);if(!needles.length)return [];
-    const root=this.state.vaultPath, files=[];
+    const started=performance.now(),root=this.state.vaultPath, files=[];
     const status={state:"complete",checkedFiles:0,errorCount:0,errors:[]};
     const confirmedIds=new Set();
     const fail=(path,error)=>{status.state="incomplete";status.errorCount++;if(status.errors.length<20)status.errors.push({path,message:error?.message||String(error)});};
@@ -89,21 +94,25 @@ export class CapabilityStore {
       }
     };
     await visit(root);delete status.bytes;delete status.filesSeen;delete status.budgetStopped;
+    const scanned=performance.now();status.timings={scanMs:Math.round(scanned-started)};
     const activeIds=[];
     try{
     if(!this.localSearch)this.localSearch=new LocalSearchIndex(join(this.dir,"local-search.sqlite"));
+    const revisions=new Map();
+    for(const item of this.localSearch.list('notes',root)){const prefix=item.id.slice(0,item.id.indexOf(':')+1);if(!revisions.has(prefix))revisions.set(prefix,[]);revisions.get(prefix).push(item);}
     for(const file of files) {
+      await yieldLoop();
       signal?.throwIfAborted();
       status.checkedFiles++;
       if(this.canRead){try{if(!(await this.canRead(file.path))){fail(file.path,new Error("读取权限被拒绝"));continue;}}catch(error){fail(file.path,error);continue;}}
       if(file.size>1024*1024) continue;
       const name=relative(root,file.path),prefix=`${createHash("sha256").update(name).digest("hex")}:`;
       const revision=`${file.size}:${file.mtime}:${file.ctime}`;
-      const previous=this.localSearch.list("notes",root,prefix);
+      const previous=revisions.get(prefix)||[];
       if(previous.length&&previous.every(item=>item.revision===revision)){activeIds.push(...previous.map(item=>item.id));previous.forEach(item=>confirmedIds.add(item.id));continue;}
       let body;try{body=await readFile(file.path,"utf8");}catch(error){fail(file.path,error);continue;}
       const lines=body.split(/\r?\n/);
-      let heading="",start=0;
+      let heading="",start=0;const pending=[];
       for(let i=0;i<=lines.length;i++) {
         if(i===lines.length || /^#{1,6}\s/.test(lines[i]) || (i>start && !lines[i].trim()) || i-start>=30) {
           let first=start,last=i; while(first<last && !lines[first].trim())first++; while(last>first && !lines[last-1].trim())last--;
@@ -111,18 +120,21 @@ export class CapabilityStore {
           if(content) {
             const id=`${prefix}${first+1}`;
             const payload={heading,startLine:first+1,endLine:last,content:content.slice(0,4000),path:file.path,title:name,url:`summon-file:${encodeURIComponent(file.path)}#L${first+1}`};
-            this.localSearch.put({id,area:"notes",scope:root,text:`${name}\n${heading}\n${content.slice(0,4000)}`,payload,revision});
+            pending.push({id,area:"notes",scope:root,text:`${name}\n${heading}\n${content.slice(0,4000)}`,payload,revision});
             activeIds.push(id);confirmedIds.add(id);
           }
           if(i<lines.length && /^#{1,6}\s/.test(lines[i])) heading=lines[i].replace(/^#+\s*/,""); start=i;
         }
       }
+      for(let offset=0;offset<pending.length;offset+=32){await yieldLoop();signal?.throwIfAborted();this.localSearch.transaction(()=>{for(const record of pending.slice(offset,offset+32))this.localSearch.put(record);});}
     }
     signal?.throwIfAborted();
     if(status.state==="complete")this.localSearch.retain("notes",root,activeIds);
+    const indexed=performance.now();status.timings.indexMs=Math.round(indexed-scanned);
     this.noteScanStatus=status;
     if(!terms(query).length)return [];
-    return this.localSearch.search("notes",root,query,Math.min(100,Math.max(1,limit*4))).filter(hit=>confirmedIds.has(hit.id)).slice(0,Math.min(8,Math.max(1,limit))).map(hit=>({...hit.payload,score:hit.score}));
+    const hits=this.localSearch.search("notes",root,query,Math.min(100,Math.max(1,limit*4))).filter(hit=>confirmedIds.has(hit.id)).slice(0,Math.min(8,Math.max(1,limit))).map(hit=>({...hit.payload,score:hit.score}));
+    status.timings.ftsMs=Math.round(performance.now()-indexed);return hits;
     }catch(error){if(signal?.aborted)throw signal.reason;fail(root,error);this.noteScanStatus=status;return [];
     }finally{this.close();}
   }
