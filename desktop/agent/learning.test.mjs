@@ -21,6 +21,7 @@ test("Vault paragraph recall, edits, file boundaries and skill import stay isola
     const id=await store.importSkill(skill);assert.equal(store.enabledSkills().length,1);assert.equal(await readFile(join(store.enabledSkills()[0],"helper.txt"),"utf8"),"support");await store.toggleSkill(id,false);assert.deepEqual(store.enabledSkills(),[]);
     await writeFile(note,"# 特征值\n\n特征值描述变换。\n");assert.equal((await store.searchNotes("矩阵")).length,0);assert.ok((await store.searchNotes("特征值")).length);
     assert.ok(!(await readFile(store.path,"utf8")).includes("isolated-key"));assert.ok(!(JSON.stringify(store.snapshot())).includes("isolated-key"));
+    store.close();
   } finally {await rm(root,{recursive:true,force:true});}
 });
 test("Learning events require user evidence, deduplicate and rebuild with unknown mastery",async()=>{

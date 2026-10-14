@@ -66,16 +66,25 @@ export class CapabilityStore {
     return {results,total:readable.length,next:offset+results.length<readable.length?offset+results.length:null};
   }
   async searchNotes(query,limit=4,{signal}={}) {
+    const [results]=await this.searchMany([query],limit,{signal});
+    return results;
+  }
+  // Several queries from one retrieval plan (原问题 + 模型扩词) must not each
+  // rescan the vault: one walk and one index pass, then one FTS query per term.
+  async searchMany(queries,limit=4,{signal}={}) {
+    const list=[...new Set((Array.isArray(queries)?queries:[queries]).map(query=>String(query??"")))];
     signal?.throwIfAborted();
     const queued=performance.now();
-    const operation=(this.searchQueue||Promise.resolve()).catch(()=>{}).then(()=>this.searchNotesOnce(query,limit,{signal}));
+    const operation=(this.searchQueue||Promise.resolve()).catch(()=>{}).then(()=>this.searchNotesOnce(list,limit,{signal}));
     this.searchQueue=operation;const results=await operation;this.noteScanStatus.totalMs=Math.round(performance.now()-queued);return results;
   }
-  async searchNotesOnce(query,limit=4,{signal}={}) {
+  // Every retrieval revalidates the vault, so an edit is never hidden by a cache.
+  async searchNotesOnce(queries,limit=4,{signal}={}) {
     signal?.throwIfAborted();
-    if(!this.state.vaultPath) { this.noteScanStatus={state:"idle",checkedFiles:0,errorCount:0,errors:[]};return []; }
-    const needles=terms(query);if(!needles.length)return [];
-    const started=performance.now(),root=this.state.vaultPath, files=[];
+    if(!this.state.vaultPath) { this.noteScanStatus={state:"idle",checkedFiles:0,errorCount:0,errors:[]};return queries.map(()=>[]); }
+    if(!queries.some(query=>terms(query).length))return queries.map(()=>[]);
+    const started=performance.now(),root=this.state.vaultPath;
+    const files=[];
     const status={state:"complete",checkedFiles:0,errorCount:0,errors:[]};
     const confirmedIds=new Set();
     const fail=(path,error)=>{status.state="incomplete";status.errorCount++;if(status.errors.length<20)status.errors.push({path,message:error?.message||String(error)});};
@@ -98,18 +107,20 @@ export class CapabilityStore {
     const activeIds=[];
     try{
     if(!this.localSearch)this.localSearch=new LocalSearchIndex(join(this.dir,"local-search.sqlite"));
-    const revisions=new Map();
-    for(const item of this.localSearch.list('notes',root)){const prefix=item.id.slice(0,item.id.indexOf(':')+1);if(!revisions.has(prefix))revisions.set(prefix,[]);revisions.get(prefix).push(item);}
     for(const file of files) {
-      await yieldLoop();
+      // Give the event loop back regularly so a stop command is read promptly,
+      // without paying a scheduler hop for every single file.
+      if(status.checkedFiles%16===0)await yieldLoop();
       signal?.throwIfAborted();
       status.checkedFiles++;
       if(this.canRead){try{if(!(await this.canRead(file.path))){fail(file.path,new Error("读取权限被拒绝"));continue;}}catch(error){fail(file.path,error);continue;}}
       if(file.size>1024*1024) continue;
       const name=relative(root,file.path),prefix=`${createHash("sha256").update(name).digest("hex")}:`;
       const revision=`${file.size}:${file.mtime}:${file.ctime}`;
-      const previous=revisions.get(prefix)||[];
-      if(previous.length&&previous.every(item=>item.revision===revision)){activeIds.push(...previous.map(item=>item.id));previous.forEach(item=>confirmedIds.add(item.id));continue;}
+      // One indexed range lookup per file instead of materialising every chunk of
+      // the whole vault: on a large library that table read blocked the loop.
+      const previous=this.localSearch.list("notes",root,prefix);
+      if(previous.length&&previous.every(item=>item.revision===revision)){for(const item of previous){activeIds.push(item.id);confirmedIds.add(item.id);}continue;}
       let body;try{body=await readFile(file.path,"utf8");}catch(error){fail(file.path,error);continue;}
       const lines=body.split(/\r?\n/);
       let heading="",start=0;const pending=[];
@@ -129,15 +140,23 @@ export class CapabilityStore {
       for(let offset=0;offset<pending.length;offset+=32){await yieldLoop();signal?.throwIfAborted();this.localSearch.transaction(()=>{for(const record of pending.slice(offset,offset+32))this.localSearch.put(record);});}
     }
     signal?.throwIfAborted();
-    if(status.state==="complete")this.localSearch.retain("notes",root,activeIds);
+    if(status.state==="complete")await this.localSearch.retainPaged("notes",root,activeIds);
     const indexed=performance.now();status.timings.indexMs=Math.round(indexed-scanned);
     this.noteScanStatus=status;
-    if(!terms(query).length)return [];
-    const hits=this.localSearch.search("notes",root,query,Math.min(100,Math.max(1,limit*4))).filter(hit=>confirmedIds.has(hit.id)).slice(0,Math.min(8,Math.max(1,limit))).map(hit=>({...hit.payload,score:hit.score}));
-    status.timings.ftsMs=Math.round(performance.now()-indexed);return hits;
-    }catch(error){if(signal?.aborted)throw signal.reason;fail(root,error);this.noteScanStatus=status;return [];
-    }finally{this.close();}
+    return this.#queryIndex(queries,limit,root,indexed,confirmedIds);
+    }catch(error){if(signal?.aborted)throw signal.reason;fail(root,error);this.noteScanStatus=status;return queries.map(()=>[]);}
   }
+  #queryIndex(queries,limit,root,indexed,confirmedIds){
+    if(!this.localSearch)this.localSearch=new LocalSearchIndex(join(this.dir,"local-search.sqlite"));
+    const hits=queries.map(query=>{
+      if(!terms(query).length)return [];
+      return this.localSearch.search("notes",root,query,Math.min(100,Math.max(1,limit*4))).filter(hit=>confirmedIds.has(hit.id)).slice(0,Math.min(8,Math.max(1,limit))).map(hit=>({...hit.payload,score:hit.score}));
+    });
+    this.noteScanStatus.timings={...this.noteScanStatus.timings,ftsMs:Math.round(performance.now()-indexed)};
+    return hits;
+  }
+  // The index stays open between searches: reopening it re-ran the migration and
+  // consistency check on every query, which dominated warm searches on large vaults.
   close() {
     this.localSearch?.close();
     this.localSearch=null;

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { LocalSearchIndex } from "./local-search.mjs";
 import { CapabilityStore } from "./capabilities.mjs";
 
@@ -86,4 +87,63 @@ test("未连接笔记库时搜索不创建索引文件", () => fixture(async dir
   const capabilities = new CapabilityStore(dir);
   assert.deepEqual(await capabilities.searchNotes("matrix"), []);
   assert.equal(capabilities.localSearch, null);
+}));
+
+test("一次检索的多个查询只扫描索引一次", () => fixture(async dir => {
+  const vault = join(dir, "vault");
+  await mkdir(vault);
+  await writeFile(join(vault, "线代.md"), "# 特征值\n\n矩阵的 eigenvalue 描述不变方向。\n");
+  const capabilities = new CapabilityStore(dir);
+  capabilities.state.vaultPath = vault;
+  const original = capabilities.searchNotesOnce.bind(capabilities);
+  let scans = 0;
+  capabilities.searchNotesOnce = (...args) => { scans++; return original(...args); };
+  const [first, second, third] = await capabilities.searchMany(["特征值", "eigenvalue", "无关主题"], 4);
+  assert.equal(scans, 1, "扩词查询必须共用同一次扫描");
+  assert.equal(first[0].path, join(vault, "线代.md"));
+  assert.equal(second[0].path, join(vault, "线代.md"));
+  assert.deepEqual(third, []);
+  assert.equal(await capabilities.searchNotes("eigenvalue").then(hits => hits.length), 1);
+  assert.equal(scans, 2, "单独一次检索仍然扫描");
+  capabilities.close();
+}));
+
+test("中断或重复的元数据在重开时自动修复，且不产生重复文档", () => fixture(async root => {
+  const path = join(root, "index.sqlite");
+  let index, db;
+  try {
+  index = new LocalSearchIndex(path);
+  index.put({ id: "a:1", area: "notes", scope: "vault", text: "矩阵特征值", payload: { content: "矩阵特征值" }, revision: "1" });
+  index.close(); index = null;
+
+  // 建表后中断：元数据为空且版本未写入，文档仍在 FTS 表中。
+  db = new DatabaseSync(path);
+  db.exec("DELETE FROM search_metadata; PRAGMA user_version = 0;");
+  db.close(); db = null;
+  index = new LocalSearchIndex(path);
+  assert.equal(index.list("notes", "vault").length, 1, "元数据必须重建");
+  assert.equal(index.search("notes", "vault", "特征值").length, 1);
+  assert.equal(index.put({ id: "a:1", area: "notes", scope: "vault", text: "矩阵特征值", payload: {}, revision: "1" }), false, "重新索引前必须先认得同一条文档");
+  assert.equal(index.search("notes", "vault", "特征值").length, 1);
+  index.close(); index = null;
+
+  // 版本已写入但出现重复文档行：数量不一致触发重建并去重。
+  db = new DatabaseSync(path);
+  db.exec("INSERT INTO search_documents (id,area,scope,revision,tokens,text,payload) SELECT id,area,scope,revision,tokens,text,payload FROM search_documents");
+  db.close(); db = null;
+  index = new LocalSearchIndex(path);
+  assert.equal(index.list("notes", "vault").length, 1);
+  assert.equal(index.search("notes", "vault", "特征值").length, 1, "重复文档必须被清理");
+  assert.equal(index.retain("notes", "vault", []), 1);
+  assert.deepEqual(index.search("notes", "vault", "特征值"), []);
+  index.close(); index = null;
+
+  // 修复后重开保持稳定。
+  index = new LocalSearchIndex(path);
+  assert.deepEqual(index.list("notes", "vault"), []);
+  index.put({ id: "b:1", area: "work", scope: "", text: "PowerShell 经验", payload: {}, revision: "1" });
+  index.close(); index = null;
+  index = new LocalSearchIndex(path);
+  assert.equal(index.search("work", "", "PowerShell").length, 1);
+  } finally { db?.close(); index?.close(); }
 }));

@@ -87,7 +87,7 @@ test('五篇分页完整无重叠，排除总览和不可读笔记',()=>fixture(
   await writeFile(join(root,OVERVIEW_FILE),'矩阵总览');const caps=new CapabilityStore(dir);caps.state.vaultPath=root;caps.canRead=async p=>!p.endsWith('note-11.md');
   const a=await caps.browseNotes(),b=await caps.browseNotes(a.next),c=await caps.browseNotes(b.next);
   assert.deepEqual([a.results.length,b.results.length,c.results.length],[5,5,1]);assert.equal(c.next,null);assert.equal(new Set([...a.results,...b.results,...c.results].map(i=>i.path)).size,11);
-  assert.ok((await caps.searchNotes('矩阵')).every(i=>!i.title.includes('总览')));
+  assert.ok((await caps.searchNotes('矩阵')).every(i=>!i.title.includes('总览')));caps.close();
 }));
 
 test('切换笔记库后，旧目录延迟恢复不能覆盖新目录状态',()=>fixture(async(dir,root)=>{

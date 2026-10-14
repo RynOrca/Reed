@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate as yieldLoop } from "node:timers/promises";
 
-function tokens(value) {
+export function searchTokens(value) {
   const normalized = String(value ?? "").normalize("NFKC").toLowerCase();
   const english = normalized.match(/[a-z0-9]+/g) || [];
   const chinese = (normalized.match(/[\p{Script=Han}]+/gu) || []).flatMap(part =>
@@ -8,10 +9,21 @@ function tokens(value) {
   return [...new Set([...english, ...chinese])];
 }
 
+function tokens(value) { return searchTokens(value); }
+// "abc:" prefixes every id of one file, so the exclusive upper bound stays inside
+// the same index range without scanning the whole metadata table.
+function prefixBounds(prefix) {
+  if (!prefix) return ["", "\uffff"];
+  const last = prefix.charCodeAt(prefix.length - 1);
+  return [prefix, `${prefix.slice(0, -1)}${String.fromCharCode(last + 1)}`];
+}
+
+const RETAIN_PAGE = 2000;
+
 export class LocalSearchIndex {
   constructor(path) {
     this.db = new DatabaseSync(path);
-    this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+    this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;");
     this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS search_documents USING fts5(
       id UNINDEXED,
       area UNINDEXED,
@@ -24,12 +36,7 @@ export class LocalSearchIndex {
     )`);
     // FTS UNINDEXED columns cannot have B-tree indexes. Looking up each file/id
     // in that virtual table made indexing quadratic and blocked cancellation.
-    const migrated=!!this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='search_metadata'").get();
-    this.db.exec(`CREATE TABLE IF NOT EXISTS search_metadata (
-      document_rowid INTEGER PRIMARY KEY, area TEXT, scope TEXT, id TEXT, revision TEXT
-    );
-    CREATE INDEX IF NOT EXISTS search_metadata_lookup ON search_metadata(area, scope, id);`);
-    if(!migrated)this.db.exec('INSERT INTO search_metadata SELECT rowid,area,scope,id,revision FROM search_documents');
+    this.#migrateMetadata();
     this.closed = false;
     this.find = this.db.prepare("SELECT document_rowid AS rowid, revision FROM search_metadata WHERE area = ? AND scope = ? AND id = ? LIMIT 1");
     this.insert = this.db.prepare("INSERT INTO search_documents (id, area, scope, revision, tokens, text, payload) VALUES (?, ?, ?, ?, ?, ?, ?)");
@@ -37,7 +44,48 @@ export class LocalSearchIndex {
     this.removeRow = this.db.prepare("DELETE FROM search_documents WHERE rowid = ?");
     this.writeMetadata=this.db.prepare('INSERT OR REPLACE INTO search_metadata VALUES(?,?,?,?,?)');
     this.removeMetadata=this.db.prepare('DELETE FROM search_metadata WHERE document_rowid=?');
-    this.listPrefix = this.db.prepare("SELECT id, revision FROM search_metadata WHERE area = ? AND scope = ? AND substr(id, 1, length(?)) = ?");
+    this.listPrefix = this.db.prepare("SELECT id, revision FROM search_metadata WHERE area = ? AND scope = ? AND id >= ? AND id < ?");
+    // Paging walks the primary key; filtering area/scope in SQL made every page
+    // scan and sort the whole table through the lookup index.
+    this.listPage = this.db.prepare("SELECT document_rowid AS rowid, area, scope, id FROM search_metadata WHERE document_rowid > ? ORDER BY document_rowid LIMIT ?");
+  }
+
+  /**
+   * Create or repair the ordinary metadata table inside one transaction.
+   *
+   * Metadata rowids are what `find`, `list` and `retain` trust, so a partial
+   * backfill after a crash must never look "already migrated". The row counts are
+   * verified on every open (the index stays open for the whole session, so this
+   * costs one check per start) and any mismatch rebuilds the table from the FTS
+   * documents, dropping duplicates and orphans left by an interrupted migration.
+   */
+  #migrateMetadata() {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.exec(`CREATE TABLE IF NOT EXISTS search_metadata (
+        document_rowid INTEGER PRIMARY KEY, area TEXT, scope TEXT, id TEXT, revision TEXT
+      );
+      CREATE INDEX IF NOT EXISTS search_metadata_lookup ON search_metadata(area, scope, id);`);
+      const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0);
+      const documents = Number(this.db.prepare('SELECT count(*) AS n FROM search_documents').get()?.n || 0);
+      const metadata = Number(this.db.prepare('SELECT count(*) AS n FROM search_metadata').get()?.n || 0);
+      if (version < 1 || documents !== metadata) {
+        // Rebuild from the FTS table, keeping the newest row per (area, scope, id).
+        const rows = this.db.prepare('SELECT rowid, area, scope, id, revision FROM search_documents ORDER BY rowid ASC').all();
+        const keep = new Map();
+        for (const row of rows) keep.set(`${row.area}\u0000${row.scope}\u0000${row.id}`, row);
+        const write = this.db.prepare('INSERT OR REPLACE INTO search_metadata VALUES(?,?,?,?,?)');
+        const drop = this.db.prepare('DELETE FROM search_documents WHERE rowid = ?');
+        this.db.exec('DELETE FROM search_metadata');
+        for (const row of rows) {
+          const newest = keep.get(`${row.area}\u0000${row.scope}\u0000${row.id}`);
+          if (newest.rowid === row.rowid) write.run(row.rowid, row.area, row.scope, row.id, row.revision);
+          else drop.run(row.rowid);
+        }
+        this.db.exec('PRAGMA user_version = 1');
+      }
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
 
   #assertOpen() { if (this.closed) throw new Error("本地搜索索引已关闭"); }
@@ -81,9 +129,29 @@ export class LocalSearchIndex {
     return removed;
   }
 
+  /**
+   * Delete stale documents a page at a time and give the event loop back between
+   * pages: one huge synchronous transaction stalled cancellation on large vaults.
+   */
+  async retainPaged(area, scope, ids, { page = RETAIN_PAGE } = {}) {
+    this.#assertOpen();
+    const keep = new Set(ids);
+    let cursor = -1, removed = 0;
+    for (;;) {
+      const rows = this.listPage.all(cursor, page);
+      if (!rows.length) break;
+      cursor = rows[rows.length - 1].rowid;
+      const stale = rows.filter(row => row.area === area && row.scope === scope && !keep.has(row.id));
+      if (stale.length) this.transaction(()=>{for (const row of stale) { this.removeRow.run(row.rowid); this.removeMetadata.run(row.rowid); removed++; }});
+      await yieldLoop();
+    }
+    return removed;
+  }
+
   list(area, scope, idPrefix = "") {
     this.#assertOpen();
-    return this.listPrefix.all(area, scope, idPrefix, idPrefix).map(({ id, revision }) => ({ id, revision }));
+    const [lower, upper] = prefixBounds(idPrefix);
+    return this.listPrefix.all(area, scope, lower, upper).map(({ id, revision }) => ({ id, revision }));
   }
 
   transaction(operation) {
