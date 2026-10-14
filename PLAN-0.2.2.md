@@ -109,3 +109,14 @@ WIP保全提交：c8e35a7553991c90b6546caba5269581c14147b2。四项问题仍待�
 - [x] 统一验证：全量 Agent 193/193 通过；Rust 4/4 通过（需 RUSTUP_TOOLCHAIN=stable、CARGO_PROFILE_DEV_DEBUG=0、TEMP 指向工作区，见验收报告的环境限制）；真实浏览器卡片验收通过；原生完整桌面验收见报告。
 - [x] 构建：dist/Reed-0.2.2-vault-stop-final，产品构建源 07c967a；portable 含 37 个 Agent 模块（新增 turn-watchdog.mjs）且不含测试文件。
 - [ ] 推送与 Release Draft：本轮未推送、未改 Draft，等待用户指示。
+
+## 2026-10-15 追加：总览批次并行（用户要求，已用 DeepSeek 实测）
+
+用户在设置里给 DeepSeek 开启了并行（parallelRequests=true、maxConcurrentRequests=5）后询问总览能否并行。审查结论：模型额度本来就支持并行槽位，但总览批次循环是严格串行的，**不会**并行。本轮改为动态工作池：并发数取所选总览模型所在提供商的并行设置（1~8），未开启并行的提供商保持串行；并发下检查点改为唯一临时文件 + 串行写入，单批失败仍只补该批；进度与总览文件标注并发数。
+
+- [x] 提交 `2bb4979`：vault-overview 工作池 + 检查点串行写入 + concurrency 事件，bridge 传 ModelRequests.limit，设置页说明与「并发 N」状态。
+- [x] 模拟端到端（真实 bridge + 本地端点）：未开启并行 请求 4 次/峰值 1；开启并行(2) 请求 4 次/峰值 2。
+- [x] 真实 DeepSeek 实测（用户已确认范围：隔离 profile + 合成笔记库，不发送真实笔记）：deepseek-flash、思考 off、并发 2、6 篇合成笔记 → 2 批同一时刻发出并同时连接（0→4056ms / 11→3159ms），汇总 4072→9181ms，整轮 9.5 秒、0 失败、峰值并发 2，总览文件记录「批次理解并发：2」。真实请求 3 次，测后删除配置副本。
+- [x] 全量 Agent 198/198；`vault-cards`、`vault-ui` 通过；新包（产品源 `2bb4979`）原生完整桌面 41/41、页面错误 0。
+- [x] 构建 `dist/Reed-0.2.2-vault-stop-parallel`：setup.exe 50,597,429 字节 SHA256 `59d9647b…`，portable.zip 81,199,847 字节 SHA256 `7452fca6…`。
+- [ ] 推送与 Release Draft 仍未执行，等待用户指示。

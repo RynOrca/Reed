@@ -12,7 +12,7 @@
 | 总览恢复 | `bcd3309` |
 | 检索性能 | `7c5296c` |
 | 笔记卡片 | `07c967a` |
-| 产品构建源 | `07c967a`（其后仅验收脚本与文档变更，不影响交付包） |
+| 总览批次并行 | `2bb4979`（产品构建源） |
 
 ## 1. 停止失效（最高优先）
 
@@ -111,27 +111,64 @@
 - 新增 `desktop/tools/vault-cards-acceptance.cjs`（真实 Chromium 打开真实设置页，模拟 Agent）：1400px 三列 / 1000px 两列 / 640px 一列、卡片实际间距 14px、预览 `line-clamp=5` 且 `scrollHeight > clientHeight`、无 `tags:`/`---`、检索结果区同一规则、页面错误 0。截图：`dist/vault-cards/*.png`。
 - 原生打包应用设置窗（真实 WebView2）内断言列数与可用宽度一致、14px 间距、16px 内边距、五行截断、预览无 frontmatter。
 
-## 5. 统一验证与构建
+## 5. 追加：总览批次并行（用户要求，`2bb4979`）
+
+### 结论
+
+之前**不能**并行：共用模型额度确实支持并行槽位，但总览的批次循环是严格串行的，永远只发一个请求。现在批次改为动态工作池，并发数取“所选总览模型所在提供商”的并行设置（`parallelRequests` + `maxConcurrentRequests`，1~8）；未开启并行的提供商保持严格串行，行为与之前一致。
+
+- 并发下检查点改为唯一临时文件 + 串行写入（避免多个 worker 争用同一路径），单批失败仍只补该批。
+- 进度事件带 `concurrency`；总览文件在并发 >1 时记录“批次理解并发：N”；设置页状态行显示“并发 N”，说明文案也已更新。
+
+### 模拟端到端证据（真实 bridge 子进程 + 本地模拟端点）
+
+| 场景 | 请求数 | 并发峰值 | 结果 |
+|---|---|---|---|
+| 提供商未开启并行 | 4（三批 + 汇总） | **1** | 串行完成，总览不写并发标注 |
+| 提供商开启并行（2） | 4 | **2** | 两个批次同时进行，全部完成 |
+
+### 真实 DeepSeek 实测（用户授权：隔离 profile + 合成笔记库）
+
+配置：`https://api.deepseek.com`，模型 `deepseek-flash`，思考 `off`，并发 2，6 篇合成笔记 → 2 批。**未发送任何真实笔记**，配置副本测试后删除。
+
+| 观察点 | 实测 |
+|---|---|
+| 两个批次发出时刻 | 同一次事件循环（+208ms 同时出现“第 1/2 批”“第 2/2 批”） |
+| 连接与首包 | 两批均在同一时刻进入 headers/first_body（+823ms） |
+| 批次耗时 | 批次 2：11→3159ms；批次 1：0→4056ms（重叠） |
+| 最终汇总 | 4072→9181ms |
+| 整轮 | 9.5 秒完成，0 失败，`concurrency: 2` |
+| 请求诊断峰值 | 2 |
+| 总览文件 | 含“批次理解并发：2（来自提供商的并行请求设置）” |
+
+真实请求共 3 次（2 批摘要 + 1 次汇总），每次 `max_tokens=1800`。用户实际配置为 `maxConcurrentRequests: 5`，本轮按已确认范围用 2 验证；并发数完全由该设置决定（单测覆盖 1/3 两档，端到端覆盖 1/2 两档）。
+
+## 6. 统一验证与构建
 
 | 验证 | 结果 |
 |---|---|
-| 全量 Agent 用例 `npm test` | **193/193 通过**，0 失败（日志 `dist/full-agent-test.log`） |
+| 全量 Agent 用例 `npm test` | **198/198 通过**，0 失败（日志 `dist/full-agent-test-parallel.log`） |
 | Rust 用例 `cargo test` | **4/4 通过**（需环境参数，见下） |
 | 真实浏览器卡片验收 `vault-cards-acceptance.cjs` | 通过（三/二/一列、14px、五行、去 frontmatter、每批五篇） |
 | 真实浏览器笔记库界面 `vault-ui-acceptance.cjs` | 通过（含五篇追加与末页结束） |
 | 原生完整桌面验收（打包应用） | **41/41 检查通过，页面错误 0**，`dist/acceptance/report.json` |
-| 构建 | `dist/Reed-0.2.2-vault-stop-final`（产品源 `07c967a`） |
+| 构建 | `dist/Reed-0.2.2-vault-stop-final`（四项修复，产品源 `07c967a`）与 `dist/Reed-0.2.2-vault-stop-parallel`（含并行总览，产品源 `2bb4979`） |
 
 `vault-ui-acceptance.cjs` 首次运行为**脚本断言过期**（期望“总览已保存”，界面实际为“总览已生成并保存”），已按当前界面文案修正断言后通过；这属于验收脚本陈旧，不是产品回归。
 
 构建产物（SHA256）：
 
 ```
+# dist/Reed-0.2.2-vault-stop-final（四项修复，产品源 07c967a）
 3017dc9914a8f6664c436ac8c1689b95b9d959eeccf97cd43863e3f92c306847  Reed-0.2.2-portable.zip   81,199,187 字节
 3bf3a231cd011e46ea337fa78cf36d2c7118aa83f09c59122ff957927db0db00  Reed-0.2.2-setup.exe      50,591,800 字节
+
+# dist/Reed-0.2.2-vault-stop-parallel（含并行总览，产品源 2bb4979）
+7452fca666c6ab67b282ec4867d99330e81b3676b5cbe1b7dad2984ba0ca9f4a  Reed-0.2.2-portable.zip   81,199,847 字节
+59d9647bb270a1e83f9a38c224abc00ab1f4ce7fd81869dfbd89abd73be80759  Reed-0.2.2-setup.exe      50,597,429 字节
 ```
 
-打包检查：portable 的 `agent/` 含 37 个运行时模块（含新增 `turn-watchdog.mjs`）、0 个 `*.test.mjs`；`VERSION.json.sourceCommit=07c967a`。打包脚本原来硬编码模块清单、漏掉新增模块，本轮改成按 `*.mjs`（排除测试）复制，避免同类漏打包再次发生。
+打包检查：两套 portable 的 `agent/` 均含 37 个运行时模块（含新增 `turn-watchdog.mjs`）、0 个 `*.test.mjs`；`VERSION.json.sourceCommit` 分别为 `07c967a` 与 `2bb4979`。打包脚本原来硬编码模块清单、漏掉新增模块，本轮改成按 `*.mjs`（排除测试）复制，避免同类漏打包再次发生。
 
 ### 环境限制（不是产品通过，也不是产品失败）
 
@@ -140,18 +177,20 @@
 3. **Rust 测试进程无法写系统临时目录**：`profile::tests` 在 `%TEMP%` 建目录报 `Os { code: 5, PermissionDenied }`（同一路径用 pwsh/Node 可以写）。把 `TEMP`/`TMP` 指向工作区内目录后 4/4 通过。产品代码本身用 `%TEMP%` 的行为未受影响。
 4. Playwright npm 模块不在本仓库，验收脚本通过 `SUMMON_PLAYWRIGHT_PATH` 指向本机 `playwright-core`，浏览器用 `SUMMON_EDGE_PATH` 指向本机 Chromium。
 
-## 6. 明确未验证 / 未做
+## 7. 明确未验证 / 未做
 
-- 真实 DeepSeek 官方接口：本轮 **0 次付费调用**；停止、总览 medium、真实笔记检索均未在官方服务上复验。
-- 真实用户笔记库：未读取、未覆盖、未做 DELETE/PUT 演练。
+- 真实用户笔记库：未读取、未覆盖、未做 DELETE/PUT 演练；真实 DeepSeek 只用于第 5 节的合成笔记库并行验证（隔离 profile、3 次请求、测后删除配置副本），**未发送任何真实笔记**。
+- 官方接口上的停止、medium 档位总览、真实笔记检索延迟：本轮未复验（medium 与真实库需要另行授权）。
 - 用户已安装的 `D:/Tools/Reed`：未安装、未替换、未启动。
 - 向量/embedding 检索：只做适用性分析，未引入。
 - 推送 origin/0.2.2、更新 Release Draft（ID 412479090，保持 Draft）：本轮未做，等待用户指示。
 - 应用内更新签名产物：无私钥，未生成。
 
-## 7. 剩余计划
+## 8. 剩余计划
 
-1. 用户在真实笔记库与官方 DeepSeek 上复验：停止（正文停滞/思考中/排队）、medium 总览、检索首字延迟。需要用户明确授权付费调用与真实笔记访问。
-2. 若真实总览仍在某批次超时，按本轮新增的 `done/batches/failed` 计数与 `request-diagnostics.jsonl` 阶段日志定位到具体批次与阶段，再决定是否调整批次大小或思考预算。
-3. 大库（>2000 篇）FTS 排序仍是单次约 150ms 同步块；如需更低延迟，下一步是把索引与检索移入 worker 线程（本轮未做，避免在 Windows 上引入 SQLite 多进程写入风险）。
-4. 推送源码、按用户指示更新同一个 Release Draft 附件（保持 Draft）。
+1. 用户在真实笔记库与官方 DeepSeek 上复验：停止（正文停滞/思考中/排队）、medium 总览（可用本轮的并行并发数缩短总时长）、检索首字延迟。需要用户明确授权付费调用与真实笔记访问。
+2. 若真实总览仍在某批次超时，按本轮新增的 `done/batches/failed` 计数与 `request-diagnostics.jsonl` 阶段日志定位到具体批次与阶段，再决定是否调整批次大小、思考预算或并发数。
+3. 并行数是“所选总览模型所在提供商”的设置（当前 DeepSeek 为 5）：批次多于并发时会排队；调高并发会同时占用更多服务额度，可按实际限流调整 `maxConcurrentRequests`。
+4. 大库（>2000 篇）FTS 排序仍是单次约 150ms 同步块；如需更低延迟，下一步是把索引与检索移入 worker 线程（本轮未做，避免在 Windows 上引入 SQLite 多进程写入风险）。
+5. 推送源码、按用户指示更新同一个 Release Draft 附件（保持 Draft）。
+
