@@ -13,6 +13,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
   const artifacts = path.resolve(__dirname, '../../dist/acceptance'); await fs.mkdir(artifacts, { recursive: true });
   let apiCalls = 0;
   let receivedImage=false;
+  let heldStop=null,stopCalls=0;
   const recoveryCalls = new Map(), recoveryRequests = [], releaseRecovery = new Map();
   const server = createServer(async (req, res) => {
     if (req.url === '/v1/models') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: [{ id: 'isolated-learning-model', context_length: 65536, supports_reasoning: true, reasoning_efforts: ['off','low','medium'] }] })); return; }
@@ -43,6 +44,9 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
       res.write(`data: ${JSON.stringify(delta({},'tool_calls'))}\n\n`);res.end('data: [DONE]\n\n'); return;
     }
     if(!memory && userText==='QUEUE_START') await new Promise(r=>setTimeout(r,1800));
+    // Hold the connection open without sending anything: the stop button must end
+    // this turn locally and leave the window ready for the next message.
+    if(!memory && userText==='STOP_TEST'){stopCalls++;heldStop=res;res.writeHead(200,{'content-type':'text/event-stream'});res.flushHeaders();res.once('close',()=>{heldStop=null;});return;}
     res.write(`data: ${JSON.stringify(delta({role:'assistant',content:text}))}\n\n`); await new Promise(r=>setTimeout(r,50)); res.write(`data: ${JSON.stringify(delta({},'stop'))}\n\n`); res.write(`data: ${JSON.stringify({ ...delta({}), choices:[], usage:{prompt_tokens:100,completion_tokens:20,total_tokens:120} })}\n\n`); res.end('data: [DONE]\n\n');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -207,14 +211,31 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     await settings.screenshot({path:path.join(artifacts,'settings-memory.png')});
     const vault=path.join(os.tmpdir(),path.basename(data)+'-test-vault'),skill=path.join(data,'test-skill'); await fs.mkdir(vault);await fs.mkdir(skill);
     await fs.writeFile(path.join(vault,'线性代数.md'),'# 矩阵\n\n矩阵代表线性变换，复习时可以画图理解。\n');
+    await fs.mkdir(path.join(vault,'编程'));
+    await fs.writeFile(path.join(vault,'编程','CSS.md'),`---\ntags: [学习, 编程]\naliases:\n---\n\n${'层叠样式表（Cascading Style Sheets，缩写为 CSS）是描述矩阵无关样式的语言。'.repeat(8)}\n`);
     await fs.writeFile(path.join(skill,'SKILL.md'),'---\nname: desktop-study\ndescription: Desktop skill test\n---\nTeach with examples.\n');
     async function agentCommand(type,args={}) { return main.evaluate(async({type,args})=>new Promise(async(resolve,reject)=>{const id='desktop-'+Math.random();const off=await window.__TAURI__.event.listen('agent-event',e=>{if(e.payload.id===id){off();e.payload.type==='error'?reject(Error(e.payload.message)):resolve(e.payload);}});await window.__TAURI__.core.invoke('agent_command',{command:{id,type,...args}});}),{type,args}); }
     await agentCommand('configure_capabilities',{vaultPath:vault});await agentCommand('import_skill',{path:skill});
     await settings.locator('button[data-section="vault"]').click();await settings.locator('#vault-query').fill('矩阵');await settings.locator('#vault-search-form button').click();await settings.locator('#vault-results').filter({hasText:'线性变换'}).waitFor();assert.ok((await settings.locator('#vault-results').textContent()).includes('第 3'));
+    await settings.locator('#vault-query').fill('层叠样式表');await settings.locator('#vault-search-form button').click();
+    await settings.locator('#vault-results .note-excerpt').filter({hasText:'层叠样式表'}).first().waitFor();
+    const cardLayout=await settings.evaluate(()=>{
+      const grid=document.querySelector('#vault-results'),node=[...grid.querySelectorAll('.note-excerpt')].find(n=>n.textContent.includes('层叠样式表'));
+      const style=getComputedStyle(node),width=grid.clientWidth;
+      return { width, expected:width>=840?3:width>=560?2:1, actual:getComputedStyle(grid).gridTemplateColumns.trim().split(/\s+/).length, gap:parseFloat(getComputedStyle(grid).gap), clamp:style.webkitLineClamp, height:node.clientHeight, lineHeight:parseFloat(style.lineHeight), scrollHeight:node.scrollHeight, text:node.textContent, padding:getComputedStyle(grid.querySelector('.card')).padding };
+    });
+    assert.equal(cardLayout.actual,cardLayout.expected,`列数必须跟随可用宽度（${cardLayout.width}px）`);
+    assert.equal(cardLayout.gap,14);assert.equal(cardLayout.padding,'16px');
+    assert.equal(cardLayout.clamp,'5');
+    assert.ok(cardLayout.height<=Math.ceil(cardLayout.lineHeight*5)+1,`预览最多五行（${cardLayout.height}/${cardLayout.lineHeight}）`);
+    assert.ok(cardLayout.scrollHeight>cardLayout.height,'超长正文必须被截断');
+    assert.doesNotMatch(cardLayout.text,/tags:|aliases:|^\s*---/m,'原生窗口预览不得显示 frontmatter');
+    assert.match(cardLayout.text,/层叠样式表/);
     await settings.screenshot({path:path.join(artifacts,'settings-vault.png')});
     await settings.locator('button[data-section="skills"]').click();const testSkillRow=settings.locator('#skill-list .setting-row').filter({hasText:'desktop-study'});const toggle=testSkillRow.locator('input');await toggle.waitFor();assert.equal(await toggle.isChecked(),true);await toggle.uncheck();
     await settings.waitForFunction(()=>[...document.querySelectorAll('#skill-list .setting-row')].find(r=>r.textContent.includes('desktop-study'))?.querySelector('input')?.checked===false);await testSkillRow.locator('button').click();await settings.locator('#skill-detail').filter({hasText:'Teach with examples'}).waitFor();
     await settings.screenshot({path:path.join(artifacts,'settings-skills.png')}); checks.push('笔记目录检索、原文行号、技能导入启停和正文查看');
+    checks.push(`原生窗口卡片：${cardLayout.width}px 下 ${cardLayout.actual} 列、14px 间距、预览去 frontmatter 且五行截断`);
     await settings.locator('button[data-section="roles"]').click();
     await settings.locator('#role-name').fill('绑定技能测试');await settings.locator('#role-system').fill('一步一步教学，保持简洁');
     await settings.locator('#role-skills select').selectOption('builtin-teach');
@@ -263,6 +284,24 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     await main.locator('#send-button').click();await main.getByRole('button',{name:'发送（引导）',exact:true}).click();
     await main.locator('.message-row.user').filter({hasText:'桌面排队测试'}).waitFor({timeout:25000});
     await main.waitForFunction(()=>document.getElementById('status').textContent==='就绪');checks.push('回复期间发送后续消息并记录投递');
+    await agentCommand('new_session',{noProject:true});
+    await main.locator('#prompt').fill('STOP_TEST');await main.locator('#send-button').click();
+    for(let n=0;n<100&&!heldStop;n++)await new Promise(resolve=>setTimeout(resolve,50));
+    assert.ok(heldStop,'停止用例的模型请求未抵达隔离服务');
+    const stopStarted=Date.now();
+    await main.locator('#stop-button').click();
+    // Idle is authoritative: the stop button only hides once the turn really
+    // settled; the status line then reports the stopped outcome.
+    await main.locator('#stop-button').waitFor({state:'hidden',timeout:20000});
+    const stopMs=Date.now()-stopStarted;
+    assert.match(await main.locator('#status').innerText(),/已停止|就绪/);
+    assert.equal(await main.locator('#messages .message-error').count(),0,'停止不应留下错误提示');
+    assert.ok(stopMs<15000,`停止必须在 15 秒内回到空闲（实测 ${stopMs}ms）`);
+    await main.locator('#prompt').fill('停止后继续');await main.locator('#send-button').click();
+    await main.locator('#messages .prose-chat').filter({hasText:'桌面验收'}).last().waitFor({timeout:25000});
+    await main.waitForFunction(()=>document.getElementById('status').textContent==='就绪');
+    assert.equal(stopCalls,1,'停止后不得重发上一条请求');
+    checks.push(`停止正文停滞请求：${stopMs}ms 内回到就绪、无错误残留、下一条消息正常完成`);
     const readonly=path.join(neutralWorkspace,'readonly');await fs.mkdir(readonly);await fs.writeFile(path.join(readonly,'note.txt'),'protected note');
     await settings.locator('button[data-section="security"]').click();
     // The native directory chooser uses frozen Tauri IPC; exercise its submitted command with an isolated directory.

@@ -25,22 +25,10 @@ finally { Pop-Location }
 Copy-Item -LiteralPath (Join-Path $targetDir 'release\summon-desktop.exe') -Destination (Join-Path $Output 'Reed.exe') -Force
 New-Item -ItemType Directory -Force -Path (Join-Path $Output 'runtime'), (Join-Path $Output 'agent') | Out-Null
 Copy-Item -LiteralPath $nodeExe -Destination (Join-Path $Output 'runtime\node.exe') -Force
-Copy-Item -LiteralPath (Join-Path $agentDir 'bridge.mjs') -Destination (Join-Path $Output 'agent\bridge.mjs') -Force
-Copy-Item -LiteralPath (Join-Path $agentDir 'approval.mjs') -Destination (Join-Path $Output 'agent\approval.mjs') -Force
-Copy-Item -LiteralPath (Join-Path $agentDir 'roles.mjs') -Destination (Join-Path $Output 'agent\roles.mjs') -Force
-Copy-Item -LiteralPath (Join-Path $agentDir 'images.mjs') -Destination (Join-Path $Output 'agent\images.mjs') -Force
-Copy-Item -LiteralPath (Join-Path $agentDir 'files.mjs') -Destination (Join-Path $Output 'agent\files.mjs') -Force
-Copy-Item -LiteralPath (Join-Path $agentDir 'endpoint.mjs') -Destination (Join-Path $Output 'agent\endpoint.mjs') -Force
-Copy-Item -LiteralPath (Join-Path $agentDir 'memory.mjs') -Destination (Join-Path $Output 'agent\memory.mjs') -Force
-Copy-Item -LiteralPath (Join-Path $agentDir 'providers.mjs') -Destination (Join-Path $Output 'agent\providers.mjs') -Force
-Copy-Item -LiteralPath (Join-Path $agentDir 'memory-agent.mjs') -Destination (Join-Path $Output 'agent\memory-agent.mjs') -Force
-foreach ($module in @('capabilities.mjs', 'browser.mjs', 'learning-tools.mjs', 'learner.mjs', 'sandbox.mjs', 'user-config.mjs', 'mcp.mjs', 'turn-outcome.mjs', 'turn-recovery.mjs', 'stream-diagnostics.mjs', 'context-policy.mjs', 'visual-review.mjs', 'memory-match.mjs', 'memory-value.mjs', 'work-memory.mjs', 'goals.mjs', 'role-features.mjs', 'vault-overview.mjs')) { Copy-Item -LiteralPath (Join-Path $agentDir $module) -Destination (Join-Path $Output "agent\$module") -Force }
-Copy-Item -LiteralPath (Join-Path $agentDir 'role-skills.mjs') -Destination (Join-Path $Output 'agent\role-skills.mjs') -Force
-Copy-Item -LiteralPath (Join-Path $agentDir 'note-retrieval.mjs') -Destination (Join-Path $Output 'agent\note-retrieval.mjs') -Force
-Copy-Item -LiteralPath (Join-Path $agentDir 'local-search.mjs') -Destination (Join-Path $Output 'agent\local-search.mjs') -Force
-Copy-Item -LiteralPath (Join-Path $agentDir 'work-recall.mjs') -Destination (Join-Path $Output 'agent\work-recall.mjs') -Force
-foreach ($module in @('model-requests.mjs', 'auxiliary-runtime.mjs', 'work-applicability.mjs', 'work-evidence.mjs', 'live-learning.mjs')) {
-    Copy-Item -LiteralPath (Join-Path $agentDir $module) -Destination (Join-Path $Output "agent\$module") -Force
+# Copy the agent runtime by pattern so a newly added module cannot be forgotten;
+# test files stay out of the package.
+Get-ChildItem -LiteralPath $agentDir -Filter '*.mjs' -File | Where-Object { $_.Name -notlike '*.test.mjs' } | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $Output "agent\$($_.Name)") -Force
 }
 Copy-Item -LiteralPath (Join-Path $agentDir 'skills') -Destination (Join-Path $Output 'agent\skills') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $agentDir 'package.json') -Destination (Join-Path $Output 'agent\package.json') -Force

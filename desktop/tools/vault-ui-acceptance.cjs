@@ -29,7 +29,7 @@ const {chromium}=require(process.env.SUMMON_PLAYWRIGHT_PATH);
       }}};
     });
     await page.goto(`http://127.0.0.1:${server.address().port}/settings.html`);await page.waitForFunction(()=>document.querySelectorAll('#vault-browse .card').length===5);
-    assert.match(await page.locator('#vault-overview-status').innerText(),/总览已保存.*test\/test-model/);
+    assert.match(await page.locator('#vault-overview-status').innerText(),/总览已生成并保存.*test\/test-model/);
     await page.screenshot({path:path.join(artifacts,'first-five.png'),fullPage:true});
     await page.locator('#vault-browse-more').click();assert.equal(await page.locator('#vault-browse .card').count(),10);await page.locator('#vault-browse-more').click();assert.equal(await page.locator('#vault-browse .card').count(),12);assert.equal(await page.locator('#vault-browse-more').isVisible(),false);await page.screenshot({path:path.join(artifacts,'browse.png'),fullPage:true});
     await page.locator('button[data-section="models"]').click();await page.locator('#providers .configured').click();assert.equal(await page.locator('#parallel-requests').isChecked(),false);assert.equal(await page.locator('#parallel-limit').isDisabled(),true);
