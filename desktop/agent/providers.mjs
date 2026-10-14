@@ -157,11 +157,13 @@ export class ProviderStore {
     if (input.maxTokens !== undefined) model.maxTokens = input.maxTokens;
     if (typeof input.vision === "boolean") model.input=["text",...(input.vision?["image"]:[])];
     if (typeof input.reasoning === "boolean") model.reasoning = input.reasoning;
+    const previousFormat=model.compat?.thinkingFormat;
     if (input.thinkingFormat) {
       model.reasoning = true;
       if (!["openai", "qwen", "qwen-chat-template", "deepseek"].includes(input.thinkingFormat)) throw new Error("思考协议无效");
       model.compat = { ...model.compat, thinkingFormat: input.thinkingFormat, supportsReasoningEffort: input.thinkingFormat === "openai" };
       if (["qwen", "qwen-chat-template"].includes(input.thinkingFormat)) model.thinkingLevels = ["off", "medium"];
+      else if (["qwen", "qwen-chat-template"].includes(previousFormat) && input.thinkingFormat === "openai") model.thinkingLevels = [...defaultThinkingLevels];
     }
     if (Array.isArray(input.thinkingLevels) && input.thinkingLevels.length && !["qwen", "qwen-chat-template"].includes(model.compat?.thinkingFormat)) {
       if (input.thinkingLevels.some(level => !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(level))) throw new Error("思考档位无效");
@@ -169,7 +171,7 @@ export class ProviderStore {
     }
     if(typeof input.reasoning==="boolean")model.reasoning=input.reasoning;
     model.overrides={...model.overrides};
-    for(const key of ["contextWindow","maxTokens","reasoning","thinkingLevels","compat"])if(input[key]!==undefined || (key==="compat"&&input.thinkingFormat))model.overrides[key]=model[key];
+    for(const key of ["contextWindow","maxTokens","reasoning","thinkingLevels","compat"])if(input[key]!==undefined || (["compat","thinkingLevels"].includes(key)&&input.thinkingFormat))model.overrides[key]=model[key];
     if(typeof input.vision==="boolean")model.overrides.input=model.input;
     model.infoSource = "user";
     await this.persist(); await this.install(runtime);

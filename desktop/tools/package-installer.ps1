@@ -68,8 +68,27 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
 }
 finally { Pop-Location }
+$nsisDir = Join-Path $target 'release/nsis/x64'
+$optimized = Join-Path $nsisDir 'installer-reuse.nsi'
+& node (Join-Path $PSScriptRoot 'optimize-installer.cjs') (Join-Path $nsisDir 'installer.nsi') $portable $optimized
+if ($LASTEXITCODE -ne 0) { throw 'Dependency reuse preparation failed' }
+$makensis = Join-Path $target '.tauri/NSIS/makensis.exe'
+Push-Location $nsisDir
+try {
+    & $makensis '/INPUTCHARSET' 'UTF8' $optimized
+    if ($LASTEXITCODE -ne 0) { throw 'Dependency reuse installer compilation failed' }
+}
+finally { Pop-Location }
 $installer = Get-ChildItem -LiteralPath (Join-Path $target 'release/bundle/nsis') -Filter '*setup.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $installer) { throw 'Installer output not found' }
+$optimizedSetup=Join-Path $nsisDir 'nsis-output.exe'
+if (-not (Test-Path -LiteralPath $optimizedSetup)) { throw 'Optimized NSIS output not found' }
+Copy-Item -LiteralPath $optimizedSetup -Destination $installer.FullName -Force
+# The generated installer changed after bundling; never keep its old updater signature.
+if ($env:TAURI_SIGNING_PRIVATE_KEY) {
+    & $tauri signer sign $installer.FullName
+    if ($LASTEXITCODE -ne 0) { throw 'Optimized installer signing failed' }
+}
 $installerPath = Join-Path $Output "Reed-$appVersion-setup.exe"
 Copy-Item -LiteralPath $installer.FullName -Destination $installerPath
 Set-ReedExecutableIntegrity -Path $installerPath

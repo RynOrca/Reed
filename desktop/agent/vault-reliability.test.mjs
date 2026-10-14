@@ -53,3 +53,11 @@ test('切换笔记库后，旧目录延迟恢复不能覆盖新目录状态',()=
   const old=task.start();while(!release)await new Promise(r=>setTimeout(r,5));task.cancel();caps.state.vaultPath=other;await task.start();release('旧总览');await old;
   assert.equal(task.snapshot().path,join(other,OVERVIEW_FILE));assert.equal(events.at(-1).path,join(other,OVERVIEW_FILE));
 }));
+
+test('timeout explains preserved batches and retry resumes instead of restarting',()=>fixture(async(dir,root)=>{
+  await writeFile(join(root,'note.md'),'# 矩阵\n正文');let calls=0;
+  const capabilities={dir,state:{vaultPath:root}};
+  const task=new VaultOverview({capabilities,model,send(){},runtime:async()=>({completeSimple:async(_m,_c,options)=>{calls++;assert.equal(options.requestTimeoutMs,300000);assert.equal(options.signal.aborted,false);if(calls===2)return {stopReason:'error',errorMessage:'Request timed out.',content:[]};return {stopReason:'stop',content:[{type:'text',text:'note.md：矩阵'}]};}})});
+  await task.ensure();assert.equal(task.snapshot().state,'error');assert.match(task.snapshot().message,/模型服务请求超时/);assert.match(task.snapshot().message,/已保存完成批次/);
+  await task.ensure();assert.equal(calls,3);assert.equal(task.snapshot().state,'ready');
+}));

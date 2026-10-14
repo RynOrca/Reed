@@ -8,6 +8,9 @@ const tauri = window.__TAURI__;
 await initBrand(tauri);
 let sequence = 0, templates = [], providers = [], editing = null, providerId = null, recording = false, savedShortcut = "", memory = {}, roleId = null;
 const pending = new Map();
+const thinkingHint=document.createElement('p');thinkingHint.className='hint';thinkingHint.id='thinking-protocol-hint';$("manual-levels").parentElement.after(thinkingHint);
+function explainThinkingProtocol(){const binary=["qwen","qwen-chat-template"].includes($("thinking-format").value);$("manual-levels").disabled=binary;thinkingHint.textContent=binary?"Qwen enable_thinking 仅控制开启/关闭，不区分 low、medium 等深度。仅在服务支持 reasoning_effort 时切换该协议。":"档位必须由模型服务支持；reasoning_effort 可配置 off、low、medium、high、xhigh。";}
+$("thinking-format").onchange=()=>{if($("thinking-format").value==="openai"&&$("manual-levels").value.trim()==="medium")$("manual-levels").value="low, medium, high, xhigh";explainThinkingProtocol();};
 let browseRoot=null,browseNext=0,browseVersion=0,browseBusy=false;
 const browseList=element("div"),browseMore=element("button","继续浏览","secondary"),browseStatus=element("p","","hint");
 browseList.id="vault-browse";browseMore.id="vault-browse-more";browseMore.type="button";browseMore.hidden=true;
@@ -142,7 +145,7 @@ function renderProviders() {
   }
   if (providerId) renderProviderModels(providers.find(p => p.id === providerId)?.models || []);
 }
-function modelEditor(config){$("manual-model").value=config.id;$("manual-context").value=config.contextWindow||"";$("manual-output").value=config.maxTokens||"";$("manual-reasoning").value=config.reasoning==null?"unknown":config.reasoning?"yes":"no";$("manual-vision").checked=config.input?.includes("image")||false;$("thinking-format").value=config.compat?.thinkingFormat||"";$("manual-levels").value=config.reasoning?config.thinkingLevels?.filter(l=>l!=="off").join(", ")||"":"";document.querySelector(".advanced").open=true;$("manual-model").scrollIntoView({block:"nearest"});}
+function modelEditor(config){$("manual-model").value=config.id;$("manual-context").value=config.contextWindow||"";$("manual-output").value=config.maxTokens||"";$("manual-reasoning").value=config.reasoning==null?"unknown":config.reasoning?"yes":"no";$("manual-vision").checked=config.input?.includes("image")||false;$("thinking-format").value=config.compat?.thinkingFormat||"";$("manual-levels").value=config.reasoning?config.thinkingLevels?.filter(l=>l!=="off").join(", ")||"":"";explainThinkingProtocol();document.querySelector(".advanced").open=true;$("manual-model").scrollIntoView({block:"nearest"});}
 function renderProviderModels(models) {
   $("discovered-models").replaceChildren();
   for (const model of models) {

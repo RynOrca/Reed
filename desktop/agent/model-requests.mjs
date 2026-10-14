@@ -58,6 +58,23 @@ export class ModelRequests {
     const release = await this.acquire(model, options);
     try { return await request(); } finally { release(); }
   }
+  async complete(model, {signal, priority, queueTimeoutMs=300000, requestTimeoutMs=300000, onState}, request) {
+    const started=Date.now(),queue=new AbortController();
+    const timeout=(phase)=>Object.assign(new Error(phase==='queue'?'等待模型服务空闲超时':'模型生成超时'),{name:'ModelRequestTimeoutError',phase});
+    const queueTimer=setTimeout(()=>queue.abort(timeout('queue')),queueTimeoutMs);
+    let release;
+    try { release=await this.acquire(model,{signal:signal?AbortSignal.any([signal,queue.signal]):queue.signal,priority,onWait:()=>onState?.({state:'waiting',queuedMs:0})}); }
+    finally {clearTimeout(queueTimer);}
+    const running=new AbortController(),timer=setTimeout(()=>running.abort(timeout('request')),requestTimeoutMs);
+    const requestSignal=signal?AbortSignal.any([signal,running.signal]):running.signal;
+    try {
+      onState?.({state:'running',queuedMs:Date.now()-started});
+      const result=await request(requestSignal);
+      if(running.signal.aborted)throw running.signal.reason;
+      return result;
+    } catch(error) {if(running.signal.aborted)throw running.signal.reason;throw error;}
+    finally {clearTimeout(timer);release();}
+  }
   async stream(model, options, request) {
     const release = await this.acquire(model, options);
     try {

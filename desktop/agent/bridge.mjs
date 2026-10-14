@@ -154,7 +154,8 @@ async function getRuntime() {
     await providers.install(runtime);
     const completeAuxiliary = createAuxiliaryCompleter(runtime.completeSimple.bind(runtime));
     runtime.completeSimple = (model, context, options={}) => {
-      const {requestPriority='foreground', ...requestOptions}=options;
+      const {requestPriority='foreground',requestTimeoutMs,queueTimeoutMs,onRequestState,...requestOptions}=options;
+      if(requestTimeoutMs!==undefined)return modelRequests.complete(model,{signal:options.signal,priority:requestPriority,requestTimeoutMs,queueTimeoutMs,onState:onRequestState},signal=>completeAuxiliary(model,context,{...requestOptions,signal}));
       return modelRequests.run(model,{signal:options.signal,priority:requestPriority},()=>completeAuxiliary(model,context,requestOptions));
     };
   }

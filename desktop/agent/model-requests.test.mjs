@@ -59,3 +59,16 @@ test('early stream iterator return does not falsely free an unfinished provider 
  for await(const event of stream){assert.equal(event,'partial');break;}
  let began=false;const next=scheduler.run(model,{},async()=>{began=true;});await tick();assert.equal(began,false);gate.resolve('done');await stream.result();await next;
 });
+
+test('completion request budget starts after queue, and waiting is visible',async()=>{
+ const scheduler=new ModelRequests(),release=await scheduler.acquire(model),states=[];
+ const result=scheduler.complete(model,{requestTimeoutMs:20,queueTimeoutMs:1000,onState:s=>states.push(s)},async signal=>{assert.equal(signal.aborted,false);return 'ok';});
+ await new Promise(r=>setTimeout(r,60));release();assert.equal(await result,'ok');
+ assert.deepEqual(states.map(s=>s.state),['waiting','running']);assert.ok(states[1].queuedMs>=50);
+});
+test('queue deadline never calls provider; request deadline waits for provider settlement before release',async()=>{
+ const scheduler=new ModelRequests(),release=await scheduler.acquire(model);let calls=0;
+ await assert.rejects(scheduler.complete(model,{queueTimeoutMs:10,requestTimeoutMs:100},async()=>calls++),e=>e.phase==='queue');assert.equal(calls,0);release();
+ let settled=false;await assert.rejects(scheduler.complete(model,{requestTimeoutMs:10},signal=>new Promise(resolve=>signal.addEventListener('abort',()=>setTimeout(()=>{settled=true;resolve('late');},10),{once:true}))),e=>e.phase==='request');
+ assert.equal(settled,true);assert.equal(scheduler.endpoints.size,0);
+});

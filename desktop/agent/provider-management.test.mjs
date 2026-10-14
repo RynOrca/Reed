@@ -66,3 +66,15 @@ test("parallel requests are opt-in, validated, persisted and preserved by older 
   await store.save({...input,providerId:provider.id,parallelRequests:false,maxConcurrentRequests:3});assert.equal(store.providers[0].parallelRequests,false);
  }finally{await rm(root,{recursive:true,force:true});}
 });
+
+test('Qwen switch to effort restores depth levels and persists through rediscovery',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'reed-thinking-protocol-'));
+ try{
+  const store=new ProviderStore(root,{protect:async x=>x,unprotect:async x=>x,request:async()=>({ok:true,json:async()=>({data:[{id:'test',thinking_format:'qwen'}]})})});
+  const runtime={refresh:async()=>{},setRuntimeApiKey:async()=>{},getModels:()=>[],getModel:()=>null};
+  const provider=await store.save({template:'custom',baseUrl:'http://127.0.0.1:1234/v1',protocol:'openai-completions'});
+  await store.updateModel(provider.id,{id:'test',thinkingFormat:'qwen'},runtime);assert.deepEqual(provider.models[0].thinkingLevels,['off','medium']);
+  await store.updateModel(provider.id,{id:'test',thinkingFormat:'openai'},runtime);assert.deepEqual(provider.models[0].thinkingLevels,['off','low','medium','high','xhigh']);
+  await store.discover(provider.id,runtime);assert.equal(provider.models[0].compat.thinkingFormat,'openai');assert.deepEqual(provider.models[0].thinkingLevels,['off','low','medium','high','xhigh']);
+ }finally{await rm(root,{recursive:true,force:true});}
+});
