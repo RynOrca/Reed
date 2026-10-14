@@ -9,12 +9,13 @@ import {createServer} from 'node:http';
 import {once} from 'node:events';
 import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
+import {singleSlotChecks} from './single-slot-report.mjs';
 
 const project=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 const artifacts=join(project,'dist','real-memory-acceptance');await mkdir(artifacts,{recursive:true});
 function option(name){const index=process.argv.indexOf(name);return index>=0?process.argv[index+1]:null;}
 const helperEffort=option('--helper-effort')||'low';assert.ok(['low','none','configured'].includes(helperEffort),'辅助思考只允许low、none或保留配置');
-const suite=option('--suite')||'full';assert.ok(['full','notes-profile','profile-only','profile-correction','work-shell','work-pwsh','work-scope','work-update','work-replace','work-learn','notes-only','learning-study','learning-review','latency','latency-wire','latency-compare'].includes(suite),`未知验收套件：${suite}`);
+const suite=option('--suite')||'full';assert.ok(['full','notes-profile','profile-only','profile-correction','work-shell','work-pwsh','work-scope','work-update','work-replace','work-learn','notes-only','learning-study','learning-review','latency','latency-wire','latency-compare','single-slot-live'].includes(suite),`未知验收套件：${suite}`);
 const bridgePath=resolve(option('--bridge-path')||join(artifacts,'snapshot-agent','bridge.mjs'));
 const reportPath=option('--report-path')?resolve(project,option('--report-path')):join(artifacts,suite==='notes-profile'?'continuation-notes-profile.json':suite==='profile-only'?'continuation-profile-only.json':'report.json');
 assert.ok(reportPath.startsWith(artifacts+sep),`报告路径必须位于 ${artifacts} 下`);
@@ -27,16 +28,16 @@ const provider=settings.providers.providers.find(p=>p.id===appState.provider);
 assert.ok(provider,'当前模型提供商未配置');
 assert.equal(provider.protocol,'openai-completions','这个验收脚本目前仅支持 OpenAI 兼容服务');
 const selected=provider.models.find(m=>m.id===appState.modelId);assert.ok(selected);
-const requests=[],shellCalls=[],cases=[];let caseName='setup',bridge,lastAgentPayload,lastAuthorization;
+const requests=[],shellCalls=[],cases=[];let caseName='setup',bridge,lastAgentPayload,lastAuthorization,upstreamActive=0,upstreamPeak=0;
 const boundedSuite=suite!=='full',suiteStarted=Date.now(),maxSuiteMs=boundedSuite?360000:Infinity,maxCaseMs=boundedSuite?115000:150000,maxUpstreamMs=boundedSuite?60000:120000,maxRequestsPerCase=suite==='work-learn'?10:suite.startsWith('work-')?8:boundedSuite?5:12,maxSuiteRequests=boundedSuite?18:Infinity;
 const report={suite,bridgePath,model:selected.id,thinking:'low',helperThinking:helperEffort,thinkingCeiling:'medium',outputLimit:2400,syntheticOnly:true,root,cases,requests,shellCalls,requestBudget:{maxSuiteMs:Number.isFinite(maxSuiteMs)?maxSuiteMs:null,maxCaseMs,maxUpstreamMs,maxRequestsPerCase:Number.isFinite(maxRequestsPerCase)?maxRequestsPerCase:null,maxSuiteRequests:Number.isFinite(maxSuiteRequests)?maxSuiteRequests:null}};
-report.sourceSha256={};for(const name of ['bridge.mjs','work-applicability.mjs','work-memory.mjs','work-recall.mjs','memory-value.mjs','auxiliary-runtime.mjs','learner.mjs','memory-agent.mjs','role-features.mjs','role-skills.mjs','capabilities.mjs','note-retrieval.mjs']){try{report.sourceSha256[name]=createHash('sha256').update(await readFile(join(dirname(bridgePath),name))).digest('hex');}catch{}}
+report.sourceSha256={};for(const name of ['bridge.mjs','model-requests.mjs','vault-overview.mjs','work-applicability.mjs','work-memory.mjs','work-recall.mjs','memory-value.mjs','auxiliary-runtime.mjs','learner.mjs','memory-agent.mjs','role-features.mjs','role-skills.mjs','capabilities.mjs','note-retrieval.mjs']){try{report.sourceSha256[name]=createHash('sha256').update(await readFile(join(dirname(bridgePath),name))).digest('hex');}catch{}}
 report.sourceSha256['learning-tools.mjs']=createHash('sha256').update(await readFile(join(dirname(bridgePath),'learning-tools.mjs'))).digest('hex');
 let reportWrites=Promise.resolve();const writeReport=()=>{const snapshot=JSON.stringify(report,null,2);reportWrites=reportWrites.catch(()=>{}).then(()=>writeFile(reportPath,snapshot));return reportWrites;};
 function classify(system){return /工作经验整理器/.test(system)?'experience_extract':/记忆价值审查器/.test(system)?'value_gate':/判断新增记忆/.test(system)?'deduplicate':/为工作经验检索/.test(system)?'work_expand':/个人笔记检索规划器/.test(system)?'note_expand':/笔记库导航整理器|根据分批笔记浏览结果/.test(system)?'overview':'agent';}
-const helperKinds=new Set(['value_gate','work_expand','note_expand','experience_extract','deduplicate']);
+const helperKinds=new Set(['overview','value_gate','work_expand','note_expand','experience_extract','deduplicate']);
 const proxy=createServer(async(req,res)=>{
-  let record,streamComplete=false,reviewBytes=0;const reviewChunks=[],upstream=new AbortController();
+  let record,streamComplete=false,reviewBytes=0,upstreamTracked=false;const reviewChunks=[],upstream=new AbortController();
   const cancel=()=>{if(!res.writableEnded)upstream.abort();};req.once('aborted',cancel);res.once('close',cancel);
   try{
     if(req.method!=='POST'||!req.url.endsWith('/chat/completions')){res.writeHead(404);res.end();return;}
@@ -47,6 +48,7 @@ const proxy=createServer(async(req,res)=>{
     record={case:requestCase,kind:classify(system),system,model:input.model,requestedEffort,effectiveEffort:input.reasoning_effort,started:Date.now(),tools:(input.tools||[]).map(t=>t.function?.name),recentToolResults:input.messages.filter(m=>m.role==='tool').slice(-2).map(m=>({name:m.name,content:typeof m.content==='string'?m.content.slice(0,2500):JSON.stringify(m.content).slice(0,2500)}))};record.payload={bytes:Buffer.byteLength(JSON.stringify(input)),messages:input.messages.length,toolCount:input.tools?.length||0,stream:input.stream,maxTokens:input.max_tokens,maxCompletionTokens:input.max_completion_tokens,temperature:input.temperature,reasoningEffort:input.reasoning_effort,chatTemplate:input.chat_template_kwargs,enableThinking:input.enable_thinking};requests.push(record);await writeReport();
     const caseCount=requests.filter(r=>r.case===requestCase).length;
     if(caseCount>maxRequestsPerCase||requests.length>maxSuiteRequests||Date.now()-suiteStarted>maxSuiteMs){record.status=429;record.budgetExceeded=true;res.writeHead(429,{'content-type':'application/json'});res.end(JSON.stringify({error:{message:'Isolated acceptance request/time budget exceeded'}}));return;}
+    upstreamTracked=true;upstreamActive++;upstreamPeak=Math.max(upstreamPeak,upstreamActive);
     const response=await fetch(provider.baseUrl.replace(/\/$/,'')+'/chat/completions',{method:'POST',headers:{'content-type':'application/json',...(req.headers.authorization?{authorization:req.headers.authorization}:{})},body:JSON.stringify(input),signal:AbortSignal.any([AbortSignal.timeout(maxUpstreamMs),upstream.signal])});
     record.headersMs=Date.now()-record.started;record.status=response.status;res.writeHead(response.status,{'content-type':response.headers.get('content-type')||'application/json'});
     const wireDecoder=new TextDecoder();let wirePending='';record.wireChunks=0;
@@ -61,6 +63,7 @@ const proxy=createServer(async(req,res)=>{
     if(record){record.clientCancelled=upstream.signal.aborted;record.proxyStatus=record.clientCancelled?499:502;record.status??=record.proxyStatus;record.error=record.clientCancelled?'Isolated agent cancelled request':error.name==='TimeoutError'?'Real model timeout':'Real model request failed';const code=error.cause?.code||error.code;if(typeof code==='string'&&/^[A-Z0-9_]{1,60}$/.test(code))record.errorCode=code;}
     if(!res.destroyed){if(res.headersSent)res.end();else{res.writeHead(502,{'content-type':'application/json'});res.end(JSON.stringify({error:{message:'Isolated upstream request did not complete'}}));}}
   }finally{
+    if(upstreamTracked){upstreamActive--;report.upstreamPeak=upstreamPeak;}
     req.removeListener('aborted',cancel);res.removeListener('close',cancel);
     if(record){
       record.ms=Date.now()-record.started;record.finished=Date.now();record.streamComplete=streamComplete;
@@ -100,13 +103,13 @@ const mcp=createServer(async(req,res)=>{
 
 const data=join(root,'profile'),workspace=join(root,'project-a'),other=join(root,'project-b'),vault=join(root,'vault');
 await Promise.all([mkdir(data),mkdir(workspace),mkdir(other),mkdir(vault)]);
-await writeFile(join(data,'user-config.json'),JSON.stringify({version:1,providers:{providers:[{...provider,baseUrl:`http://127.0.0.1:${proxy.address().port}/v1`,models:[{...selected,maxTokens:2400}]}]},credentials:{[provider.id]:settings.credentials[provider.id]},security:{approval:'auto',access:'full'},capabilities:{skills:[],vaultPath:null,webEnabled:false,browserEnabled:false},memoryEnabled:{l1:false,l2:false,l3:false,work:true},mcp:[{id:'acceptance-shell',name:'隔离真实命令',transport:'http',url:`http://127.0.0.1:${mcp.address().port}/mcp`,enabled:true}]}));
+await writeFile(join(data,'user-config.json'),JSON.stringify({version:1,providers:{providers:[{...provider,...(suite==='single-slot-live'?{parallelRequests:false,maxConcurrentRequests:2}:{}),baseUrl:`http://127.0.0.1:${proxy.address().port}/v1`,models:[{...selected,maxTokens:2400}]}]},credentials:{[provider.id]:settings.credentials[provider.id]},security:{approval:'auto',access:'full'},capabilities:{skills:[],vaultPath:null,webEnabled:false,browserEnabled:false},memoryEnabled:{l1:false,l2:false,l3:false,work:true},mcp:[{id:'acceptance-shell',name:'隔离真实命令',transport:'http',url:`http://127.0.0.1:${mcp.address().port}/mcp`,enabled:true}]}));
 await writeFile(join(data,'app-state.json'),JSON.stringify({provider:provider.id,modelId:selected.id,projectPath:workspace}));
 let seq=0;
 async function start(){
   const child=spawn(process.execPath,[bridgePath],{cwd:workspace,windowsHide:true,env:{...process.env,SUMMON_DATA_DIR:data,SUMMON_WORKSPACE:workspace},stdio:['pipe','pipe','pipe']});
   const seen=[],waiters=new Set();let stderr='';child.stderr.on('data',c=>stderr+=c);
-  createInterface({input:child.stdout}).on('line',line=>{let event;try{event=JSON.parse(line);}catch{return;}event.observedAt=Date.now();seen.push(event);for(const w of [...waiters])if(w.p(event)){waiters.delete(w);clearTimeout(w.timer);w.resolve(event);}});
+  createInterface({input:child.stdout}).on('line',line=>{let event;try{event=JSON.parse(line);}catch{return;}event.observedAt=Date.now();if(event.type==='vault_overview'){report.overviewEvents??=[];report.overviewEvents.push({state:event.state,observedAt:event.observedAt});void writeReport().catch(()=>{});}seen.push(event);for(const w of [...waiters])if(w.p(event)){waiters.delete(w);clearTimeout(w.timer);w.resolve(event);}});
   const until=(p,timeout=maxCaseMs)=>{const match=seen.find(p);if(match)return Promise.resolve(match);return new Promise((resolve,reject)=>{const w={p,resolve};w.timer=setTimeout(()=>{waiters.delete(w);reject(Error('隔离Agent等待超时'));},timeout);waiters.add(w);});};
   child.on('exit',()=>{for(const w of waiters){clearTimeout(w.timer);w.resolve({type:'error',message:'隔离Agent退出'});}waiters.clear();});
   bridge={child,seen,until,async command(type,args={},timeout=maxCaseMs){const id='real-'+(++seq);child.stdin.write(JSON.stringify({id,type,...args})+'\n');const event=await until(m=>m.id===id&&['ack','done','error','goals'].includes(m.type),timeout);if(event.type==='error')throw Error(event.message);return event;}};
@@ -246,6 +249,20 @@ async function runLearningSuite(){
   await writeReport();
 }
 async function run(){
+  if(suite==='single-slot-live'){
+    await writeFile(join(vault,'特征分解.md'),'# 特征分解\n\n本学习组规定：先画两支定向杆，再用紫色标注伸缩倍率。验收口令：青铜海燕。\n');
+    await start();await bridge.command('save_role',{roleId:'agent',name:'串行真实验收',system:'回答简短，笔记原文足够时直接引用，不保存记忆、不调用无关工具。',learnerProfileEnabled:false});await bridge.command('new_session');await bridge.command('memory_enabled',{layer:'work',enabled:false});
+    await bridge.command('configure_capabilities',{vaultPath:vault});caseName='single-slot-overview';await bridge.command('generate_vault_overview');
+    const waitStart=Date.now();while(!requests.some(r=>r.kind==='overview')&&Date.now()-waitStart<15000)await new Promise(r=>setTimeout(r,20));assert.ok(requests.some(r=>r.kind==='overview'),'background overview must actually request service');
+    const queuedStart=Date.now(),queued=prompt('single-slot-cancel-queued','只回答收到，不使用工具或保存记忆。',{continueOnError:true});
+    await bridge.until(e=>e.type==='model_queue'&&e.state==='waiting'&&e.observedAt>=queuedStart,15000);report.queuedCancellation={observed:true};
+    await bridge.command('abort');await queued;report.queuedCancellation.sentMainRequest=requests.some(r=>r.kind==='agent');assert.equal(report.queuedCancellation.sentMainRequest,false,'cancelled queued prompt must not reach Qwen');
+    caseName='single-slot-overview-finish';const overview=await bridge.until(e=>e.type==='vault_overview'&&['ready','error'].includes(e.state)&&e.observedAt>=waitStart,145000);report.overviewState=overview.state;assert.equal(overview.state,'ready','background overview failed; inspect upstream transport record');report.overviewReady=true;
+    await bridge.command('new_session');await prompt('single-slot-notes','根据我的特征分解笔记，简短回答作图顺序、颜色和验收口令，并引用原文。');
+    await prompt('single-slot-follow-up','再用一句话复述这份笔记的作图顺序与口令，引用笔记，不使用额外工具或保存记忆。');
+    report.checks=singleSlotChecks(report);
+    await writeReport();assert.ok(Object.values(report.checks).every(Boolean),'single-slot live checks must all pass');return;
+  }
   if(suite==='latency-compare'){
     await start();await bridge.command('save_role',{roleId:'agent',name:'串行延迟对照',system:'回答简短，不调用工具、不保存记忆。',learnerProfileEnabled:false});
     const direct=async(label,payload)=>{
