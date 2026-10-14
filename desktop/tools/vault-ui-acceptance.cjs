@@ -22,6 +22,7 @@ const {chromium}=require(process.env.SUMMON_PLAYWRIGHT_PATH);
           if(c.type==='memory_work_delete'){working=working.filter(i=>i.id!==c.workId);emit({type:'memory',state:{enabled:{},working}});}
           if(c.type==='draft_work_skill'){emit({type:'ack',id:c.id,draft:{dir:'C:\\draft',body:'# 技能草稿\n\n适用条件、验证办法'}});return;}
           if(c.type==='browse_notes'){const all=Array.from({length:12},(_,i)=>({title:`数学/笔记${i+1}.md`,content:'矩阵与线性变换的笔记摘要。',url:`summon-file:note-${i}`}));emit({type:'ack',id:c.id,results:all.slice(c.offset,c.offset+5),next:c.offset+5<12?c.offset+5:null,total:12});return;}
+          if(c.type==='search_notes'){setTimeout(()=>emit({type:'ack',id:c.id,results:[{title:'数学/线代.md',content:'矩阵与线性变换',display:'矩阵与线性变换',startLine:3,endLine:4,url:'summon-file:linea'}].slice(0,c.query.includes('空')?0:1)}),250);return;}
           if(c.type==='save_provider'){provider.parallelRequests=c.parallelRequests;provider.maxConcurrentRequests=c.maxConcurrentRequests;window.lastProviderSave={parallelRequests:c.parallelRequests,maxConcurrentRequests:c.maxConcurrentRequests};emit({type:'providers',templates:[{id:'custom',name:'自定义',protocol:'openai-completions'}],providers:[provider]});}
           if(c.type==='update_model'&&window.failSave){emit({type:'error',id:c.id,message:'隔离保存失败'});return;}
           emit({type:'ack',id:c.id,providerId:'test'});
@@ -42,6 +43,29 @@ const {chromium}=require(process.env.SUMMON_PLAYWRIGHT_PATH);
     await page.screenshot({path:path.join(artifacts,'overview-progress.png'),fullPage:true});
     await page.evaluate(()=>window.__emit({type:'vault_overview',state:'ready',path:'C:\\test-vault\\Reed-笔记库总览.md',model:'test/test-model',concurrency:2,progress:1}));
     await page.waitForFunction(()=>document.getElementById('overview-progress').hidden&&document.getElementById('vault-overview-status').textContent.includes('并发 2'));
+    // 检索：按钮在输入框右侧、检索中动画与计数反馈、结果出现时不再叠加浏览预览。
+    const searchRow=await page.evaluate(()=>{const input=document.getElementById('vault-query').getBoundingClientRect(),button=document.getElementById('vault-search-button').getBoundingClientRect();
+      return {sameLine:Math.abs((input.top+input.bottom)/2-(button.top+button.bottom)/2)<6,rightOfInput:button.left>=input.right-1};});
+    assert.deepEqual(searchRow,{sameLine:true,rightOfInput:true},'检索按钮必须在输入框右侧同一行');
+    await page.locator('#vault-browse .card').first().waitFor();
+    await page.fill('#vault-query','矩阵');
+    await page.locator('#vault-search-button').click();
+    await page.locator('#vault-search-status .search-spinner').waitFor({timeout:2000});
+    assert.match(await page.locator('#vault-search-status').innerText(),/正在检索/);
+    assert.equal(await page.locator('#vault-browse').isVisible(),false,'检索中必须隐藏浏览预览');
+    await page.locator('#vault-results .card').first().waitFor({timeout:5000});
+    await page.waitForFunction(()=>document.getElementById('vault-search-status').classList.contains('is-done'));
+    assert.equal((await page.locator('#vault-search-status').innerText()).trim(),'成功检索 1 条');
+    assert.equal(await page.locator('#vault-browse').isVisible(),false,'检索完成后不得继续显示最初的浏览预览');
+    await page.screenshot({path:path.join(artifacts,'vault-search.png'),fullPage:true});
+    await page.fill('#vault-query','');
+    await page.waitForFunction(()=>document.getElementById('vault-browse').hidden===false);
+    assert.equal(await page.locator('#vault-search-status').isVisible(),false,'清空输入框后隐藏检索状态');
+    await page.fill('#vault-query','空结果');
+    await page.locator('#vault-search-button').click();
+    await page.waitForFunction(()=>document.getElementById('vault-search-status').classList.contains('is-done'));
+    assert.equal((await page.locator('#vault-search-status').innerText()).trim(),'没有匹配段落');
+    await page.fill('#vault-query','');
     await page.locator('#vault-browse-more').click();assert.equal(await page.locator('#vault-browse .card').count(),10);await page.locator('#vault-browse-more').click();assert.equal(await page.locator('#vault-browse .card').count(),12);assert.equal(await page.locator('#vault-browse-more').isVisible(),false);await page.screenshot({path:path.join(artifacts,'browse.png'),fullPage:true});
     await page.locator('button[data-section="models"]').click();await page.locator('#providers .configured').click();assert.equal(await page.locator('#parallel-requests').isChecked(),false);assert.equal(await page.locator('#parallel-limit').isDisabled(),true);
     assert.match(await page.locator('label').filter({has:page.locator('#parallel-requests')}).innerText(),/实验性/);

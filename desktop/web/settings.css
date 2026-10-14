@@ -22,7 +22,16 @@ textarea { width:100%; resize:vertical; background:#191a1d; color:#eee; border:1
 .profile-section { border:1px solid #393c42; border-radius:12px; padding:16px; margin-bottom:12px; }.profile-section summary { cursor:pointer; font-weight:600; padding-bottom:12px; }.profile-section .memory-item { background:transparent; margin-top:8px; }
 .profile-status { font-size:11px; color:#b5c8e8; background:#303b4c; padding:5px 9px; border-radius:8px; height:fit-content; white-space:nowrap; }
 .path-label { overflow-wrap:anywhere; padding:12px 0; font-size:12px; }.note-link { background:transparent; color:#bed1f2; text-align:left; padding:0; }.note-excerpt { white-space:pre-wrap; font-size:13px; margin-top:14px; }
-#vault-search-form { margin-bottom:20px; }
+#vault-search-form { margin-bottom:12px; }
+#vault-search-form > label { margin:0 0 6px; }
+.vault-search-row { display:flex; align-items:center; gap:10px; }
+.vault-search-row input { flex:1; min-width:0; }
+.vault-search-row .secondary { flex:none; min-height:38px; padding:0 16px; }
+.search-status { display:flex; align-items:center; gap:8px; margin:0 0 14px; font-size:12px; color:#a8abb2; }
+.search-status.is-done { color:#bcd1f8; }
+.search-spinner { width:13px; height:13px; flex:none; border-radius:50%; border:2px solid #ffffff26; border-top-color:#b8cdf5; animation:search-spin .8s linear infinite; }
+@keyframes search-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce) { .search-spinner { animation-duration:2.4s; } }
 #vault-results:not(:empty) { margin-bottom:20px; }
 /* Column count follows the width next to the sidebar (set by settings.js), with
    media queries only as the pre-script fallback. */

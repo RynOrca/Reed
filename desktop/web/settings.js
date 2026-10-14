@@ -42,6 +42,42 @@ async function browseNotes(reset=false){
 }
 function notice(text, error = false) { $("notice").hidden = !text; $("notice").textContent = text; $("notice").classList.toggle("error", error); }
 async function action(work) { try { await work(); } catch (error) { notice(String(error.message || error), true); } }
+
+// 浏览区与检索结果互斥：检索后只显示结果，清空输入框回到浏览。
+function setBrowseVisible(visible){browseList.hidden=!visible;browseMore.hidden=!visible||browseNext===null;browseStatus.hidden=!visible;}
+function setSearchStatus(state,text){
+  const node=$("vault-search-status");node.hidden=!text;node.textContent=text||"";
+  node.classList.toggle("is-running",state==="running");node.classList.toggle("is-done",state==="done");
+  node.replaceChildren();
+  if(!text)return;
+  if(state==="running"){const spin=element("span",undefined,"search-spinner");spin.setAttribute("aria-hidden","true");node.append(spin);}
+  node.append(element("span",text));
+}
+let searching=false;
+function searchNotes(){
+  if(searching)return;
+  const query=$("vault-query").value.trim();
+  if(!query)return;
+  searching=true;
+  const results=$("vault-results"),button=$("vault-search-button");
+  results.replaceChildren();setBrowseVisible(false);
+  setSearchStatus("running","正在检索…");button.disabled=true;
+  void action(async()=>{
+    try{
+      const reply=await command("search_notes",{query});
+      const hits=reply.results||[];
+      for(const hit of hits){
+        const row=element("div",undefined,"card"),link=element("button",`${hit.title} · 第 ${hit.startLine}–${hit.endLine} 行`,"note-link");
+        link.onclick=()=>action(async()=>{const file=await command("resolve_file",{path:hit.url});await tauri.core.invoke("open_local_file",{path:file.path});});
+        row.append(link,element("p",excerpt(hit),"note-excerpt"));results.append(row);
+      }
+      applyCardColumns();
+      setSearchStatus("done",hits.length?`成功检索 ${hits.length} 条`:"没有匹配段落");
+      if(!hits.length)results.append(element("p","没有匹配段落。可以尝试笔记标题或更具体的关键词。清空输入框可回到浏览。","hint"));
+    }catch(error){setSearchStatus("","");setBrowseVisible(true);throw error;}
+    finally{searching=false;button.disabled=false;}
+  });
+}
 if(typeof ResizeObserver==="function")new ResizeObserver(()=>applyCardColumns()).observe(document.querySelector("main"));
 window.addEventListener("resize",applyCardColumns);
 function command(type, args = {}) {
@@ -99,12 +135,12 @@ $("choose-vault").onclick = () => action(async () => { const vaultPath = await t
 $("disconnect-vault").onclick = () => action(async () => { await command("configure_capabilities", { vaultPath: null }); $("vault-results").replaceChildren(); });
 $("save-tavily").onclick = () => action(async () => { if (!$("tavily-key").value.trim()) throw new Error("请填写 Tavily Key"); await command("configure_capabilities", { key: $("tavily-key").value, webEnabled: true }); $("tavily-key").value = ""; notice("搜索 Key 已保存，联网搜索已开启。"); });
 for (const [id, key] of [["web-enabled", "webEnabled"], ["browser-enabled", "browserEnabled"]]) $(id).onchange = () => action(async () => { try { await command("configure_capabilities", { [key]: $(id).checked }); } catch(e) { $(id).checked = !$(id).checked; throw e; } });
-$("vault-search-form").onsubmit = event => { event.preventDefault(); void action(async () => {
-  const r = await command("search_notes", { query: $("vault-query").value }); $("vault-results").replaceChildren();
-  for (const hit of r.results || []) { const row = element("div", undefined, "card"), link = element("button", `${hit.title} · 第 ${hit.startLine}–${hit.endLine} 行`, "note-link"); link.onclick = () => action(async () => { const file = await command("resolve_file", { path: hit.url }); await tauri.core.invoke("open_local_file", { path: file.path }); }); row.append(link, element("p", excerpt(hit), "note-excerpt")); $("vault-results").append(row); }
-  applyCardColumns();
-  if (!r.results?.length) $("vault-results").append(element("p", "没有匹配段落。可以尝试笔记标题或更具体的关键词。", "hint"));
-}); };
+$("vault-search-form").onsubmit = event => { event.preventDefault(); searchNotes(); };
+// 清空输入框回到浏览视图，避免检索结果和浏览卡片同时堆在页面上。
+$("vault-query").addEventListener("input", () => {
+  if ($("vault-query").value.trim()) return;
+  $("vault-results").replaceChildren(); setSearchStatus("", ""); setBrowseVisible(true);
+});
 function renderLearner(profile) {
   const groups = [["学习目标", profile.goals || []], ["知识状态", profile.knowledge || []], ["误解记录", profile.misconceptions || []], ["学习偏好", profile.preferences || []]];
   $("learner-overview").replaceChildren(); $("learner-profile").replaceChildren();
