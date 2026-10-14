@@ -40,5 +40,7 @@
 
 用户明确要求源码推送到GitHub且不是main，并创建Release draft。将0.2.2推送到origin同名分支，禁止强推与合并main；创建v0.2.2草稿，目标为0.2.2提交，上传已验收的安装包、便携包及SHA256SUMS.txt。标明产品构建源2be17c1，后续仅验收脚本/文档变更，不重建或冒充签名更新包。检查现有分支/标签/草稿避免覆盖公开版本；完成后核对草稿状态、附件大小与远端提交。
 
-- [ ] origin/0.2.2源码推送并核对。
-- [ ] v0.2.2 Release Draft及三个附件创建并核对。
+- [x] origin/0.2.2源码推送成功，首推9cb82f4；后续仅提交本次推送/草稿完成记录。
+- [x] v0.2.2 Release Draft创建，ID412479090，target=9cb82f4；三个附件uploaded，GitHub附件digest与本地SHA256一致，未公开发布。
+
+草稿：https://github.com/RynOrca/Reed/releases/tag/untagged-7b1c454b4148d89781eb 。安装包49,999,784字节，ZIP81,181,837字节，校验文件179字节。网络曾出现登录检查/TLS读取失败，实际推送、创建与上传退出码0，最终API核对成功。
