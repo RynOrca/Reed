@@ -27,6 +27,7 @@ let activeSessionName = "";
 let sequence = 0;
 const commandPrefix=`chat-${crypto.randomUUID()}-`;
 let activePromptId=null;
+let activeTurnId=null;
 let running = false;
 let stopping = false;
 let recoveryStatus = "";
@@ -54,12 +55,19 @@ function scrollToLatest() { if(followLatest)transcript.scrollTop = transcript.sc
 function refreshEmpty() { $("empty-state").hidden = messages.childElementCount > 0; }
 function setRunning(value) {
   running = value;
-  if(!value)stopping=false;
+  if(!value){stopping=false;activeTurnId=null;}
   $("stop-button").disabled=stopping;
   if (!value) recoveryStatus = "";
   updateSendAvailability();
   $("stop-button").hidden = !value;
   status(value ? "PI 正在回复…" : "就绪");
+}
+// Terminal events carry the turn that produced them. A late event from a stopped
+// turn must never close the reply the user is waiting for now.
+function turnMatches(response) {
+  if (response.turnId === undefined || response.turnId === null) return true;
+  if (!activeTurnId) return true;
+  return response.turnId === activeTurnId;
 }
 function errorRow(message) {
   const row = document.createElement("div");
@@ -423,6 +431,7 @@ function onEvent(event) {
     const { resolve, reject, timer } = pending.get(response.id); clearTimeout(timer); pending.delete(response.id);
     response.type === "error" ? reject(new Error(response.message)) : resolve(response);
   }
+  if(response.type==="ack"&&response.stale){stopping=false;$("stop-button").disabled=false;status(running?"这一轮已结束，正在等待 Agent 同步…":"已停止");}
   switch (response.type) {
     case "queue": {
       $("queue-items").replaceChildren();
@@ -454,7 +463,7 @@ function onEvent(event) {
       if (response.roleId) { activeRoleId = response.roleId; renderRoles(); }
       void command("list_sessions");
       break;
-    case "session_sync": setRunning(response.busy === true); break;
+    case "session_sync": if(turnMatches(response))setRunning(response.busy === true); break;
     case "thinking_level": void command("get_state"); break;
     case "session_name":
       if (response.sessionId === activeSessionId) activeSessionName = response.name || "";
@@ -474,7 +483,12 @@ function onEvent(event) {
     case "memory_status": if (!running) status(response.status === "organizing" ? "Agent 正在整理记忆…" : "就绪"); break;
     case "sessions": renderSessions(response.sessions || []); break;
     case "history": restoreHistory(response.messages || []); status("就绪"); break;
-    case "stopping": stopping=true;$("stop-button").disabled=true;status("正在停止，等待请求结束…");break;
+    case "stopping": stopping=true;$("stop-button").disabled=true;if(response.turnId)activeTurnId=response.turnId;status(response.message||"正在停止，等待请求结束…");break;
+    case "turn_forced_end":
+      setRunning(false);finishThinking({status:"aborted"});
+      status("已停止（本地）");
+      errorRow(response.message||"模型服务未结束上一条请求，已恢复本地输入。");
+      break;
     case "request_phase": if(running&&!stopping)status(recoveryStatus||(response.phase==='connecting'?'正在连接模型服务…':response.phase==='headers'?'模型服务已连接，等待首段内容…':response.phase==='first_body'?'已收到模型数据，正在生成回复…':'正在生成回复…'));break;
     case "model_queue": if (running&&!stopping) status(response.state === "waiting" ? (recoveryStatus ? recoveryStatus + "（等待模型服务空闲）" : "正在等待模型服务空闲…") : recoveryStatus || "正在准备模型请求…"); break;
     case "delta": {
@@ -507,7 +521,7 @@ function onEvent(event) {
       break;
     }
     case "compaction": $("compaction-state").textContent=response.status==="running"?"正在压缩上下文…":response.status==="error"?"压缩失败："+response.message:response.status==="skipped"?response.message:"上下文已压缩";$("compact-now").disabled=response.status==="running";break;
-    case "started": recoveryStatus = ""; submitted = null; turnErrorShown = false; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
+    case "started": recoveryStatus = ""; submitted = null; turnErrorShown = false; activeTurnId = response.turnId || response.id || null; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
     case "message_outcome":
       finishThinking(response.outcome);
       assistantRow = null; thinkingRow = null; break;
@@ -522,6 +536,7 @@ function onEvent(event) {
       break;
     case "done": case "settled":
       if (response.final === false) break;
+      if (!turnMatches(response)) break;
       setRunning(false); finishThinking(response.outcome);
       if (response.outcome && response.outcome.status !== "complete") {
         status(outcomeLabel(response.outcome));
@@ -530,6 +545,7 @@ function onEvent(event) {
       assistantRow = null; thinkingRow = null; break;
     case "error":
       if(handledReply)break;
+      if(!turnMatches(response))break;
       // Agent events are broadcast to both windows. A settings failure must not
       // end the unrelated foreground turn or remove its stop button.
       if(response.id&&response.commandType!=="prompt"&&response.id!==activePromptId){
@@ -576,7 +592,7 @@ function command(type, args = {}, awaitReply = false) {
   if (!tauri) return Promise.reject(new Error("需要在 Tauri 桌面窗口中运行"));
   const id = `${commandPrefix}${++sequence}`;
   if(type==='prompt')activePromptId=id;
-  const response = awaitReply ? new Promise((resolve, reject) => { const timer = setTimeout(() => { pending.delete(id); reject(new Error("操作超时，请检查 Agent 连接")); }, type==="compact"?180000:30000); pending.set(id, { resolve, reject, timer }); }) : Promise.resolve();
+  const response = awaitReply ? new Promise((resolve, reject) => { const timer = setTimeout(() => { pending.delete(id); reject(new Error("操作超时，请检查 Agent 连接")); }, type==="compact"?180000:type==="abort"?15000:30000); pending.set(id, { resolve, reject, timer }); }) : Promise.resolve();
   tauri.core.invoke("agent_command", { command: { id, type, ...args } }).catch((error) => {
     if (pending.has(id)) { clearTimeout(pending.get(id).timer); pending.get(id).reject(error); pending.delete(id); }
     else onEvent({payload:{type:'error',id,commandType:type,message:String(error)}});
@@ -646,7 +662,14 @@ prompt.addEventListener("input", () => {
 $("stop-button").addEventListener("click", async () => {
   if(stopping)return;
   stopping=true;$("stop-button").disabled=true;status("正在停止…");
-  try{await command("abort",{promptId:activePromptId},true);}catch(error){stopping=false;$("stop-button").disabled=false;status("停止未确认，请重试");errorRow(String(error.message||error));}
+  try{await command("abort",{promptId:activePromptId},true);}
+  catch(error){
+    // A missing acknowledgement means the request did not reach the Agent in
+    // time, not that the turn ended: stay honest and let the user stop again.
+    stopping=false;$("stop-button").disabled=false;
+    status(running?"停止未确认，可再次点击停止":"已停止");
+    errorRow(`${String(error.message||error)}；本轮可能仍在运行，可再次点击停止或等待 Agent 同步。`);
+  }
 });
 $("header-new-chat").addEventListener("click", () => void newSession());
 $("history-new-chat").addEventListener("click", () => void newSession());

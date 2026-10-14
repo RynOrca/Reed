@@ -9,6 +9,7 @@ import { createInterface } from "node:readline";
 import { mkdir, stat, readFile, writeFile, appendFile, rename, realpath, unlink } from "node:fs/promises";
 import { classifyAssistantOutcome } from "./turn-outcome.mjs";
 import { createTurnRecovery } from "./turn-recovery.mjs";
+import { createAbortWatchdog } from "./turn-watchdog.mjs";
 import { createDiagnosticFetch, createRequestFetch } from "./stream-diagnostics.mjs";
 import { createVisualReview, VISUAL_TOOLS } from "./visual-review.mjs";
 import { createContextPolicy } from "./context-policy.mjs";
@@ -87,6 +88,7 @@ const modelRequests = new ModelRequests({providers:()=>providers.providers});
 let runtime;
 let runtimePending;
 let turnController;
+let activeTurnId = null;
 let providersPending = false;
 let activePrompt;
 let applyingProviders=false;
@@ -191,6 +193,33 @@ async function applyProviders() {
   if(session?.model){const updated=runtime.getModel(session.model.provider,session.model.id);if(updated)await session.setModel(updated);else if(session.model.provider!=='unknown')await openSession();}
 }
 async function flushProviders(){if(!busy&&providersPending&&!applyingProviders){applyingProviders=true;try{await applyProviders();await emitState();}catch(error){send({type:'credential_error',message:`配置已保存但暂未应用：${error.message}`});}finally{applyingProviders=false;}}}
+
+function abortWatchdogMs(name,fallback){const value=Number(process.env[name]);return Number.isFinite(value)&&value>0?value:fallback;}
+// Cancelling must always reach a terminal state. The watchdog only recovers the
+// local session; it never claims the remote service already stopped.
+const abortWatchdog = createAbortWatchdog({
+  escalateMs:abortWatchdogMs('SUMMON_ABORT_ESCALATE_MS',15000),
+  forceMs:abortWatchdogMs('SUMMON_ABORT_FORCE_MS',30000),
+  escalate: turnId => send({type:'stopping',turnId,escalated:true,message:'模型服务仍在结束上一条请求，继续等待；长时间无响应时只会恢复本地输入。'}),
+  force: turnId => { void forceLocalTurnEnd(turnId); },
+});
+// The upstream may ignore cancellation; recovery rebuilds the session locally
+// instead of pretending the remote request ended.
+async function forceLocalTurnEnd(turnId) {
+  const controller = turnController;
+  if (!turnId || controller?.promptId !== turnId) return;
+  const previousModel = session?.model, previousManager = session?.sessionManager;
+  turnController = null; activeTurnId = null; busy = false;
+  try { session?.dispose(); } catch {}
+  session = undefined;
+  send({type:'session_sync',busy:false,turnId,forced:true});
+  send({type:'done',id:turnId,turnId,outcome:{status:'aborted',message:'已停止（本地）',forced:true}});
+  send({type:'turn_forced_end',turnId,message:'模型服务未在预期时间内结束上一条请求，已恢复本地输入；服务端可能仍在处理，下一条消息会重建会话。'});
+  try {
+    await openSession(previousModel?.provider==='unknown'?undefined:previousModel?.provider,previousModel?.provider==='unknown'?undefined:previousModel?.id,previousManager);
+    await emitState();
+  } catch (error) { send({type:'error',message:`停止后重建会话失败：${error.message}，请重新选择模型或新建会话`}); }
+}
 
 async function openSession(provider, modelId, sessionManager) {
   memoryAgent.cancel();
@@ -669,7 +698,7 @@ async function handle(command) {
         if(busy || !session) throw new Error("请等待当前任务完成");
         busy=true;send({type:"compaction",status:"running",enabled:session.autoCompactionEnabled});
         try { await session.compact(); emitTelemetry();send({type:"compaction",status:"done",enabled:session.autoCompactionEnabled});send({type:"ack",id}); }
-        catch(e){if(e.message?.includes("Nothing to compact")){send({type:"compaction",status:"skipped",message:"当前会话较短，无需压缩；自动压缩仍保持开启",enabled:session.autoCompactionEnabled});send({type:"ack",id,skipped:true});}else{send({type:"compaction",status:"error",message:e.message,enabled:session.autoCompactionEnabled});throw e;}}
+        catch(e){if(e.message?.includes("Nothing to compact")){send({type:"compaction",status:"skipped",message:"当前会话较短，无需压缩；自动压缩仍保持开启",enabled:session?.autoCompactionEnabled});send({type:"ack",id,skipped:true});}else if(/Compaction cancelled/i.test(e.message||"")){send({type:"compaction",status:"skipped",message:"压缩已停止，原上下文保留",enabled:session?.autoCompactionEnabled});send({type:"ack",id,stopped:true});}else{send({type:"compaction",status:"error",message:e.message,enabled:session?.autoCompactionEnabled});throw e;}}
         finally{busy=false;}break;
       }
       case "archive_session":
@@ -715,12 +744,12 @@ async function handle(command) {
         if (!command.text.trim() && !images.length) throw new Error("请输入消息或添加图片");
         busy = true;
         const controller = new AbortController();turnController=controller;
-        controller.promptId=id;
+        controller.promptId=id;activeTurnId=id;
         turnRecovery.begin();
         visualReview.begin(command.text);
         outputTokens = 0; generationMs = 0; missingUsage = false;
         memoryAgent.cancel();
-        send({ type: "started", id });
+        send({ type: "started", id, turnId:id });
         let completedOutcome;
         try {
           await applyProviders();
@@ -736,28 +765,39 @@ async function handle(command) {
           }
           completedOutcome=outcome;
         } catch(error) {
-          if(controller.signal.aborted)completedOutcome={status:'aborted',message:'用户已停止回复'};
+          // A turn replaced by a forced local stop is aborted, not a new failure.
+          if(controller.signal.aborted||turnController!==controller)completedOutcome={status:'aborted',message:'用户已停止回复'};
           else throw error;
         } finally {
           turnRecovery.end();
-          if(turnController===controller)turnController=null;
-          try{while(providersPending&&!vaultOverview.running)await applyProviders();if(providersPending===false)await emitState();}
-          finally{busy=false;}
-          send({type:'session_sync',busy:false});
+          abortWatchdog.disarm(id);
+          // Only the turn that still owns the lifecycle may publish terminal events,
+          // so a late settlement can never close a newer turn's UI.
+          if(turnController===controller){
+            turnController=null;activeTurnId=null;
+            try{while(providersPending&&!vaultOverview.running)await applyProviders();if(providersPending===false)await emitState();}
+            finally{busy=false;}
+            send({type:'session_sync',busy:false,turnId:id});
+            send({type:'done',id,turnId:id,outcome:completedOutcome});
+          }
         }
-        send({type:'done',id,outcome:completedOutcome});
         if(completedOutcome?.status==='complete'){memoryAgent.schedule();void workingTools.consolidate();}
         break;
-      case "abort":
-        if(command.promptId&&turnController?.promptId!==command.promptId){send({type:'ack',id,stale:true});break;}
+      case "abort": {
+        const turn=turnController;
+        const stale=Boolean(command.promptId&&turn?.promptId!==command.promptId);
         // Acknowledge before invoking synchronous abort listeners.
-        send({ type: "ack", id });
-        send({type:'stopping'});
-        turnController?.abort(new DOMException('用户已停止回复','AbortError'));
+        send({ type: "ack", id, stale:stale||undefined });
+        if(stale){send({type:'session_sync',busy,turnId:activeTurnId});break;}
+        send({type:'stopping',turnId:activeTurnId,message:busy?'正在停止，等待请求结束…':'已停止'});
         turnRecovery.end();
         approvalGate.cancel("用户停止了当前操作");
+        if(!turn&&!busy){send({type:'session_sync',busy:false,turnId:null});break;}
+        turn?.abort(new DOMException('用户已停止回复','AbortError'));
+        abortWatchdog.arm(turn?.promptId||activeTurnId);
         if (session) void session.abort().catch(error=>send({type:'error',message:error.message}));
         break;
+      }
       case "tool_decision": {
         approvalGate.decide(command.requestId, command.decision, command.reason);
         send({ type: "ack", id });
