@@ -25,7 +25,10 @@ let editingRoleId = null;
 let activeSessionId = "";
 let activeSessionName = "";
 let sequence = 0;
+const commandPrefix=`chat-${crypto.randomUUID()}-`;
+let activePromptId=null;
 let running = false;
+let stopping = false;
 let recoveryStatus = "";
 let turnErrorShown = false;
 let assistantRow = null;
@@ -51,6 +54,8 @@ function scrollToLatest() { if(followLatest)transcript.scrollTop = transcript.sc
 function refreshEmpty() { $("empty-state").hidden = messages.childElementCount > 0; }
 function setRunning(value) {
   running = value;
+  if(!value)stopping=false;
+  $("stop-button").disabled=stopping;
   if (!value) recoveryStatus = "";
   updateSendAvailability();
   $("stop-button").hidden = !value;
@@ -469,10 +474,12 @@ function onEvent(event) {
     case "memory_status": if (!running) status(response.status === "organizing" ? "Agent 正在整理记忆…" : "就绪"); break;
     case "sessions": renderSessions(response.sessions || []); break;
     case "history": restoreHistory(response.messages || []); status("就绪"); break;
-    case "model_queue": if (running) status(response.state === "waiting" ? (recoveryStatus ? recoveryStatus + "（等待模型服务空闲）" : "正在等待模型服务空闲…") : recoveryStatus || "PI 正在回复…"); break;
+    case "stopping": stopping=true;$("stop-button").disabled=true;status("正在停止，等待请求结束…");break;
+    case "request_phase": if(running&&!stopping)status(response.phase==='connecting'?'正在连接模型服务…':response.phase==='headers'?'模型服务已连接，等待首段内容…':response.phase==='first_body'?'已收到模型数据，正在生成回复…':'正在生成回复…');break;
+    case "model_queue": if (running&&!stopping) status(response.state === "waiting" ? (recoveryStatus ? recoveryStatus + "（等待模型服务空闲）" : "正在等待模型服务空闲…") : recoveryStatus || "正在准备模型请求…"); break;
     case "delta": {
       recoveryStatus = "";
-      if (running) status("PI 正在回复…");
+      if (running&&!stopping) status("PI 正在回复…");
       if (response.kind === "thinking") {
         if (!thinkingRow) { thinkingRow = disclosure({ kind: "thinking", title: "思考过程", state: "running" }); thinkingRow.head.click(); }
         thinkingRow.content.textContent += response.text || "";
@@ -523,6 +530,12 @@ function onEvent(event) {
       assistantRow = null; thinkingRow = null; break;
     case "error":
       if(handledReply)break;
+      // Agent events are broadcast to both windows. A settings failure must not
+      // end the unrelated foreground turn or remove its stop button.
+      if(response.id&&response.commandType!=="prompt"&&response.id!==activePromptId){
+        if(response.id.startsWith(commandPrefix))errorRow(response.message||"操作失败");
+        break;
+      }
       finishThinking({ status: "error" });
       if (submitted) {
         submitted.row.remove();
@@ -561,11 +574,12 @@ document.addEventListener("click", event => {
 });
 function command(type, args = {}, awaitReply = false) {
   if (!tauri) return Promise.reject(new Error("需要在 Tauri 桌面窗口中运行"));
-  const id = `chat-${++sequence}`;
+  const id = `${commandPrefix}${++sequence}`;
+  if(type==='prompt')activePromptId=id;
   const response = awaitReply ? new Promise((resolve, reject) => { const timer = setTimeout(() => { pending.delete(id); reject(new Error("操作超时，请检查 Agent 连接")); }, type==="compact"?180000:30000); pending.set(id, { resolve, reject, timer }); }) : Promise.resolve();
   tauri.core.invoke("agent_command", { command: { id, type, ...args } }).catch((error) => {
     if (pending.has(id)) { clearTimeout(pending.get(id).timer); pending.get(id).reject(error); pending.delete(id); }
-    else errorRow(String(error));
+    else onEvent({payload:{type:'error',id,commandType:type,message:String(error)}});
   });
   return response;
 }
@@ -629,7 +643,11 @@ prompt.addEventListener("input", () => {
   prompt.style.height = `${Math.min(prompt.scrollHeight, 150)}px`;
   updateSendAvailability();
 });
-$("stop-button").addEventListener("click", () => void command("abort"));
+$("stop-button").addEventListener("click", async () => {
+  if(stopping)return;
+  stopping=true;$("stop-button").disabled=true;status("正在停止…");
+  try{await command("abort",{},true);}catch(error){stopping=false;$("stop-button").disabled=false;status("停止未确认，请重试");errorRow(String(error.message||error));}
+});
 $("header-new-chat").addEventListener("click", () => void newSession());
 $("history-new-chat").addEventListener("click", () => void newSession());
 $("history-button").addEventListener("click", openHistory);

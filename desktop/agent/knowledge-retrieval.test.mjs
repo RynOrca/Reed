@@ -87,6 +87,18 @@ test('不完整扫描保留未检查文件旧索引并暴露扫描状态',()=>fi
   assert.ok((await caps.searchNotes('稀有主题')).length);
 }));
 
+test('扫描中取消会保留旧索引，不把中止扫描当完整结果清理',()=>fixture(async(dir,root)=>{
+  const stale=join(root,'旧笔记.md'),current=join(root,'当前笔记.md');
+  await writeFile(stale,'# 稀有旧主题\n应保留的旧索引');const caps=new CapabilityStore(dir);caps.state.vaultPath=root;
+  assert.ok((await caps.searchNotes('稀有旧主题')).length);
+  await rm(stale,{force:true});await writeFile(current,'# 当前主题\n中止扫描内容');
+  const controller=new AbortController();caps.canRead=async()=>{controller.abort();return true;};
+  await assert.rejects(caps.searchNotes('当前主题',4,{signal:controller.signal}));
+  const retained=new LocalSearchIndex(join(dir,'local-search.sqlite'));
+  try{assert.ok(retained.search('notes',root,'稀有旧主题',8).some(hit=>hit.payload.content.includes('应保留的旧索引')),'取消扫描不能 retain 清掉未确认的旧索引');}
+  finally{retained.close();}
+}));
+
 test('笔记库不可达时不泄露旧结果，恢复后的完整扫描清理已删除条目',()=>fixture(async(dir,root)=>{
   const note=join(root,'留存.md');await writeFile(note,'# 暂存主题\n旧内容');
   const caps=new CapabilityStore(dir);caps.state.vaultPath=root;
@@ -123,3 +135,14 @@ test('队列消息每次刷新笔记上下文，断开后清除旧资料',()=>fi
   const first=(await events.context_with_system(event)).messages.at(-1).sections;assert.match(first.summon_notes,/矩阵.md/);assert.match(first.summon_note_policy,/主动调用/);
   caps.state.vaultPath=null;const second=(await events.context_with_system(event)).messages.at(-1).sections;assert.equal(second.summon_notes,null);assert.equal(second.summon_vault_overview,null);tools.close();
 }));
+
+test('纯问候保留笔记导航但跳过本地检索和模型扩词',async()=>{
+  let searches=0,expansions=0,signalReads=0;const handlers={};
+  const capabilities={dir:'.',state:{vaultPath:'vault'}};
+  capabilities.searchNotes=async()=>{searches++;return [];};
+  const tools=createLearningTools({capabilities,currentWorkspace:()=>'.',roles:{current:()=>({})},send(){},vaultOverview:{context:async()=>'数学：矩阵目录'},model:()=>({provider:'test',id:'rag'}),runtime:async()=>{expansions++;return {completeSimple:async()=>({stopReason:'stop',content:[{type:'text',text:'{"queries":[]}'}]})};},turnSignal:()=>{signalReads++;return new AbortController().signal;}});
+  tools.extension({registerTool(){},on:(name,fn)=>handlers[name]=fn});
+  const result=await handlers.context_with_system({messages:[{role:'system',content:''},{role:'user',content:'Hi!'}]});const sections=result.messages.at(-1).sections;
+  assert.match(sections.summon_vault_overview,/数学：矩阵目录/);assert.equal(sections.summon_notes,null);assert.ok(sections.summon_note_policy);
+  assert.equal(searches,0);assert.equal(expansions,0);assert.equal(signalReads,0);tools.close();
+});

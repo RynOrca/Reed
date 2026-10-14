@@ -61,11 +61,13 @@ export class CapabilityStore {
     const results=[];for(const file of readable.slice(offset,offset+5)){const body=await readFile(file.path,"utf8");results.push({path:file.path,title:relative(root,file.path),content:body.slice(0,400),url:`summon-file:${encodeURIComponent(file.path)}`});}
     return {results,total:readable.length,next:offset+results.length<readable.length?offset+results.length:null};
   }
-  async searchNotes(query,limit=4) {
-    const operation=(this.searchQueue||Promise.resolve()).catch(()=>{}).then(()=>this.searchNotesOnce(query,limit));
+  async searchNotes(query,limit=4,{signal}={}) {
+    signal?.throwIfAborted();
+    const operation=(this.searchQueue||Promise.resolve()).catch(()=>{}).then(()=>this.searchNotesOnce(query,limit,{signal}));
     this.searchQueue=operation;return operation;
   }
-  async searchNotesOnce(query,limit=4) {
+  async searchNotesOnce(query,limit=4,{signal}={}) {
+    signal?.throwIfAborted();
     if(!this.state.vaultPath) { this.noteScanStatus={state:"idle",checkedFiles:0,errorCount:0,errors:[]};return []; }
     const needles=terms(query);if(!needles.length)return [];
     const root=this.state.vaultPath, files=[];
@@ -73,8 +75,10 @@ export class CapabilityStore {
     const confirmedIds=new Set();
     const fail=(path,error)=>{status.state="incomplete";status.errorCount++;if(status.errors.length<20)status.errors.push({path,message:error?.message||String(error)});};
     const visit=async dir=>{
+      signal?.throwIfAborted();
       let entries;try{entries=await readdir(dir,{withFileTypes:true});}catch(error){fail(dir,error);return;}
       for(const item of entries){
+        signal?.throwIfAborted();
         if(status.budgetStopped)return;
         if(item.isSymbolicLink()||[".git",".obsidian","node_modules"].includes(item.name))continue;
         const path=join(dir,item.name);
@@ -89,6 +93,7 @@ export class CapabilityStore {
     try{
     if(!this.localSearch)this.localSearch=new LocalSearchIndex(join(this.dir,"local-search.sqlite"));
     for(const file of files) {
+      signal?.throwIfAborted();
       status.checkedFiles++;
       if(this.canRead){try{if(!(await this.canRead(file.path))){fail(file.path,new Error("读取权限被拒绝"));continue;}}catch(error){fail(file.path,error);continue;}}
       if(file.size>1024*1024) continue;
@@ -113,11 +118,12 @@ export class CapabilityStore {
         }
       }
     }
+    signal?.throwIfAborted();
     if(status.state==="complete")this.localSearch.retain("notes",root,activeIds);
     this.noteScanStatus=status;
     if(!terms(query).length)return [];
     return this.localSearch.search("notes",root,query,Math.min(100,Math.max(1,limit*4))).filter(hit=>confirmedIds.has(hit.id)).slice(0,Math.min(8,Math.max(1,limit))).map(hit=>({...hit.payload,score:hit.score}));
-    }catch(error){fail(root,error);this.noteScanStatus=status;return [];
+    }catch(error){if(signal?.aborted)throw signal.reason;fail(root,error);this.noteScanStatus=status;return [];
     }finally{this.close();}
   }
   close() {

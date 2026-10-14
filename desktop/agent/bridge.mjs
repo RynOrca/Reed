@@ -9,7 +9,7 @@ import { createInterface } from "node:readline";
 import { mkdir, stat, readFile, writeFile, appendFile, rename, realpath, unlink } from "node:fs/promises";
 import { classifyAssistantOutcome } from "./turn-outcome.mjs";
 import { createTurnRecovery } from "./turn-recovery.mjs";
-import { createDiagnosticFetch } from "./stream-diagnostics.mjs";
+import { createDiagnosticFetch, createRequestFetch } from "./stream-diagnostics.mjs";
 import { createVisualReview, VISUAL_TOOLS } from "./visual-review.mjs";
 import { createContextPolicy } from "./context-policy.mjs";
 import { GoalStore } from "./goals.mjs";
@@ -67,6 +67,7 @@ await memory.load();
 const savedMemory=(await userConfig.read()).memoryEnabled;if(savedMemory)Object.assign(memory.state.enabled,savedMemory);
 const providers = new ProviderStore(agentDir,{config:userConfig});
 await providers.load();
+let overviewSelection=(await userConfig.read()).vaultOverviewSelection||null;
 const capabilities = new CapabilityStore(dataDir,{config:userConfig});
 await capabilities.load();
 capabilities.canUseSkill=skill=>!skill.experienceId||memory.workItems(cwd).some(item=>item.id===skill.experienceId&&(item.revision||1)===skill.experienceRevision);
@@ -84,6 +85,12 @@ const turnRecovery = createTurnRecovery({ send, diagnostic });
 const contextPolicy = createContextPolicy({ dataDir, currentSession: () => session, send, diagnostic });
 const modelRequests = new ModelRequests({providers:()=>providers.providers});
 let runtime;
+let runtimePending;
+let turnController;
+let providersPending = false;
+let activePrompt;
+let applyingProviders=false;
+let providerRevision=0;
 let session;
 let busy = false;
 let queue = Promise.resolve();
@@ -95,7 +102,10 @@ const scope = new FileScope({ workspace: () => cwd, readOnly: () => [capabilitie
   ...["memory.json","learner.json","local-search.sqlite","local-search.sqlite-wal","local-search.sqlite-shm"].map(name=>({path:join(dataDir,name),denyRead:true})),
 ] });
 capabilities.canRead = async path => {try {await scope.check(path);return true;}catch{return false;}};
-const vaultOverview = new VaultOverview({capabilities,runtime:getRuntime,model:()=>session?.model,send,canRead:capabilities.canRead});
+const vaultOverview = new VaultOverview({capabilities,runtime:getRuntime,model:()=>overviewSelection?runtime?.getModel(overviewSelection.providerId,overviewSelection.modelId):session?.model,send,canRead:capabilities.canRead});
+// Restore persisted navigation on startup; generation requires the user's model
+// and reasoning choice, so no invisible inference job is started here.
+const ensureOverview=()=>vaultOverview.running?Promise.resolve():vaultOverview.restore();
 await vaultOverview.restore();
 const visualReview = createVisualReview({ scope, send, enabled: () => capabilities.state.browserEnabled });
 const mcp=new LazyMcp({config:userConfig,scope,send});await mcp.load();
@@ -125,7 +135,7 @@ async function prepareSkills(text) {
   if(hasRequiredReview(roles.current(),capabilities,text))preparedReviews.add(key);
   if(preparedSkills.size>100){const oldest=preparedSkills.keys().next().value;preparedSkills.delete(oldest);preparedReviews.delete(oldest);}
 }
-const learningTools = createLearningTools({ capabilities, currentWorkspace: () => cwd, roles, send, scope, vaultOverview,runtime:getRuntime,model:()=>session?.model, roleSkillInstructions: prompt=>prepareRoleSkills(roles.current(),capabilities,prompt) });
+const learningTools = createLearningTools({ capabilities, currentWorkspace: () => cwd, roles, send, scope, vaultOverview,runtime:getRuntime,model:()=>session?.model, turnSignal:()=>turnController?.signal,roleSkillInstructions: prompt=>prepareRoleSkills(roles.current(),capabilities,prompt) });
 const learnerTools = learnerExtension({ learner, memory, judgeValue, currentSession: () => session, send, enabled:()=>roles.current().learnerProfileEnabled === true });
 const roleFeatures = roleFeatureExtension({roles,goals,project:()=>projectPath,workspace:()=>cwd,learner,memory,currentSession:()=>session,reviewEnabled});
 let generationStart = null, firstDelta = null, outputTokens = 0, generationMs = 0, missingUsage = false;
@@ -139,28 +149,48 @@ function emitTelemetry() {
 }
 
 async function getRuntime() {
-  if (!runtime) {
-    runtime = await ModelRuntime.create({
+  if (runtime) return runtime;
+  if (!runtimePending) runtimePending = (async () => {
+    const created = await ModelRuntime.create({
       authPath: join(agentDir, "auth.json"),
       modelsPath: join(agentDir, "models.json"),
       refreshOnCreate: false,
     });
     try {
       const savedKey = await endpoint.loadKey();
-      if (savedKey) await runtime.setRuntimeApiKey(REMOTE_PROVIDER, savedKey);
+      if (savedKey) await created.setRuntimeApiKey(REMOTE_PROVIDER, savedKey);
     } catch (error) {
       send({ type: "credential_error", message: `远程模型凭据无法读取，请重新输入 Key：${error.message}` });
     }
-    await providers.install(runtime);
-    const completeAuxiliary = createAuxiliaryCompleter(runtime.completeSimple.bind(runtime));
-    runtime.completeSimple = (model, context, options={}) => {
+    await providers.install(created);
+    const completeAuxiliary = createAuxiliaryCompleter(created.completeSimple.bind(created));
+    created.completeSimple = (model, context, options={}) => {
       const {requestPriority='foreground',requestTimeoutMs,queueTimeoutMs,onRequestState,...requestOptions}=options;
+      requestOptions.fetch = createRequestFetch(options.fetch || globalThis.fetch, {signal:options.signal, diagnostic:entry=>diagnostic({...entry,provider:model.provider,model:model.id,requestGroup:'auxiliary'})});
       if(requestTimeoutMs!==undefined)return modelRequests.complete(model,{signal:options.signal,priority:requestPriority,requestTimeoutMs,queueTimeoutMs,onState:onRequestState},signal=>completeAuxiliary(model,context,{...requestOptions,signal}));
       return modelRequests.run(model,{signal:options.signal,priority:requestPriority},()=>completeAuxiliary(model,context,requestOptions));
     };
-  }
-  return runtime;
+    runtime = created;
+    return created;
+  })().catch(error=>{runtimePending=null;throw error;});
+  return runtimePending;
 }
+
+// Persist settings immediately, but never mutate credentials/catalog of a running
+// foreground turn. The next turn gets the new configuration after settlement.
+async function providerRuntime() {
+  const current = await getRuntime();
+  if (!busy&&!vaultOverview.running) return current;
+  return { getModels:()=>current.getModels(),getModel:(...args)=>current.getModel(...args),
+    refresh:async()=>{providersPending=true;providerRevision++;},setRuntimeApiKey:async()=>{providersPending=true;providerRevision++;} };
+}
+async function applyProviders() {
+  if(!providersPending||vaultOverview.running)return;
+  const revision=providerRevision;
+  await providers.install(await getRuntime());providersPending=revision!==providerRevision;modelRequests.refresh();
+  if(session?.model){const updated=runtime.getModel(session.model.provider,session.model.id);if(updated)await session.setModel(updated);else if(session.model.provider!=='unknown')await openSession();}
+}
+async function flushProviders(){if(!busy&&providersPending&&!applyingProviders){applyingProviders=true;try{await applyProviders();await emitState();}catch(error){send({type:'credential_error',message:`配置已保存但暂未应用：${error.message}`});}finally{applyingProviders=false;}}}
 
 async function openSession(provider, modelId, sessionManager) {
   memoryAgent.cancel();
@@ -174,8 +204,9 @@ async function openSession(provider, modelId, sessionManager) {
   }
   approvalGate.cancel("会话已切换，工具操作未执行");
   const models = await getRuntime();
-  const model = provider && modelId ? models.getModel(provider, modelId) : undefined;
-  if (provider && modelId && !model) throw new Error(`Unknown model: ${provider}/${modelId}`);
+  const disabled=providers.providers.find(p=>p.id===provider)?.models.find(m=>m.id===modelId)?.enabled===false;
+  const model = provider && modelId && !disabled ? models.getModel(provider, modelId) : undefined;
+  if (provider && modelId && !model && !disabled) throw new Error(`Unknown model: ${provider}/${modelId}`);
   const settingsManager = SettingsManager.create(cwd, agentDir);
   contextPolicy.bindSettings(settingsManager, model);
   const resourceLoader = new DefaultResourceLoader({
@@ -211,14 +242,19 @@ async function openSession(provider, modelId, sessionManager) {
   session?.dispose();
   session = created.session;
   const streamFunction = session.agent.streamFunction;
-  session.agent.streamFunction = (model, context, options) => modelRequests.stream(model, {
-    signal:options?.signal, priority:'foreground', onWait:()=>send({type:'model_queue',state:'waiting'}),
+  session.agent.streamFunction = (model, context, options) => {
+    const signal=AbortSignal.any([options?.signal,turnController?.signal].filter(Boolean));
+    return modelRequests.stream(model, {
+    signal, priority:'foreground', onWait:()=>send({type:'model_queue',state:'waiting'}),
   },()=>{
     send({type:'model_queue',state:'running'});
     return streamFunction(model, context, {
-      ...options, fetch: createDiagnosticFetch(options?.fetch || globalThis.fetch, diagnostic),
+      ...options, signal, maxRetries:0,
+      fetch: createDiagnosticFetch(createRequestFetch(options?.fetch || globalThis.fetch, {signal,diagnostic:entry=>diagnostic({...entry,provider:model.provider,model:model.id,requestGroup:'foreground'}),
+        onPhase:phase=>{if(busy&&!signal.aborted)send({type:'request_phase',phase});}}), diagnostic),
     });
   });
+  };
   metadata[session.sessionId] = { ...metadata[session.sessionId], projectPath };
   Object.assign(appState, { activeSessionId: session.sessionId, projectPath, provider: session.model?.provider, modelId: session.model?.id });
   await saveJson(metadataPath, metadata); await saveJson(appStatePath, appState);
@@ -287,8 +323,8 @@ function emitSession() {
 async function emitState() {
   const models = await getRuntime();
   const available = await models.getAvailable();
-  send({ type: "models", models: available.map((model) => ({ ...providers.modelInfo(model.provider, model.id, models), provider: model.provider, id: model.id, name: model.name })) });
-  send({ type: "providers", providers: providers.snapshot(), templates: providers.templates(models) });
+  send({ type: "models", models: available.filter(model=>providers.providers.find(p=>p.id===model.provider)?.models.find(m=>m.id===model.id)?.enabled!==false).map((model) => ({ ...providers.modelInfo(model.provider, model.id, models), provider: model.provider, id: model.id, name: model.name })) });
+  send({ type: "providers", providers: providers.snapshot().map(provider=>({...provider,models:provider.models.map(model=>model.enabled===false?model:{...model,thinkingLevels:providers.modelInfo(provider.id,model.id,models).thinkingLevels})})), templates: providers.templates(models),pending:providersPending });
   send({ type: "roles", ...roles.list() });
   send({ type: "memory", state: memory.snapshot() });
   send({ type: "learner", state: learner.snapshot() });
@@ -296,6 +332,7 @@ async function emitState() {
   const active = new Set(session?.getActiveToolNames() || []);
   send({ type: "agent_capabilities", approval: security.approval, access: security.access === "full" ? "full" : "workspace", workspace: cwd, readOnly: scope.readOnly(), customReadOnly: security.readOnly || [], tools: (session?.getAllTools() || []).map(t => ({ name: t.name, description: t.description, active: active.has(t.name) && !(["web_search", "fetch_url"].includes(t.name) && (!capabilities.state.webEnabled || !capabilities.key)) && !(t.name === "browser" && !capabilities.state.browserEnabled), scope: ["write", "edit", "file_manage"].includes(t.name) ? (security.access === "full" ? "完全文件权限" : "当前工作区") : FILE_TOOLS.includes(t.name) ? "任意可读取目录" : "按工具配置" })), extensions: ["文件范围限制", "权限审批", "分层记忆", "学习画像", "联网与笔记工具"], mcp: mcp.snapshot(), terminal: "disabled" });
   send({type:"vault_overview",...vaultOverview.snapshot()});
+  send({type:'vault_overview_config',selection:overviewSelection});
   emitSession();
 }
 
@@ -312,7 +349,7 @@ async function handle(command) {
         if(reusingSession)emitHistory();
         send({type:"session_sync",busy});
         send({ type: "ack", id });
-        if(capabilities.state.vaultPath)void vaultOverview.ensure();
+        if(capabilities.state.vaultPath)void ensureOverview();
         break;
       }
       case "save_mcp":
@@ -374,9 +411,23 @@ async function handle(command) {
         send({type:"goals",id,goal,enabled:roles.current().learningGoalsEnabled});break;
       }
       case "generate_vault_overview":
-        if(busy)throw new Error("请等待当前回复结束");
         if(!capabilities.state.vaultPath)throw new Error("请先连接笔记库");
-        void vaultOverview.start();send({type:"ack",id});break;
+        { const current=await getRuntime();
+          const selected=command.providerId&&command.modelId?current.getModel(command.providerId,command.modelId):session?.model;
+          if(providersPending)throw Error('模型配置已保存，等待当前模型任务结束后即可生成总览');
+          if(!selected||selected.provider==='unknown')throw Error('请先选择总览生成模型');
+          if(providers.providers.find(p=>p.id===selected.provider)?.models.find(m=>m.id===selected.id)?.enabled===false)throw Error('请勾选启用总览生成模型');
+          const reasoning=command.reasoning||'off';
+          if(!providers.modelInfo(selected.provider,selected.id,current).thinkingLevels.includes(reasoning))throw Error('此模型不支持选择的思考档位');
+          void vaultOverview.start({model:selected,reasoning}).finally(flushProviders);send({type:'ack',id});break;
+        }
+      case "save_vault_overview_config": {
+        const current=await getRuntime(),selected=current.getModel(command.providerId,command.modelId);
+        if(!selected||providers.providers.find(p=>p.id===command.providerId)?.models.find(m=>m.id===command.modelId)?.enabled===false)throw Error('请选择已启用的总览模型');
+        if(!providers.modelInfo(selected.provider,selected.id,current).thinkingLevels.includes(command.reasoning))throw Error('模型不支持此思考档位');
+        const selection={providerId:command.providerId,modelId:command.modelId,reasoning:command.reasoning};
+        await userConfig.set('vaultOverviewSelection',selection);overviewSelection=selection;send({type:'vault_overview_config',selection});send({type:'ack',id});break;
+      }
       case "cancel_vault_overview":
         vaultOverview.cancel();vaultOverview.emit("idle",{message:"已停止生成，可以重新开始"});send({type:"ack",id});break;
       case "configure_capabilities":
@@ -393,7 +444,7 @@ async function handle(command) {
         const model = session?.model;
         if (session) await openSession(model?.provider === "unknown" ? undefined : model?.provider, model?.provider === "unknown" ? undefined : model?.id);
         await emitState(); send({ type: "ack", id });
-        if(command.type==="configure_capabilities" && command.vaultPath)void vaultOverview.ensure();
+        if(command.type==="configure_capabilities" && command.vaultPath)void ensureOverview();
         break;
       }
       case "search_notes":
@@ -408,22 +459,19 @@ async function handle(command) {
       case "resolve_file":
         send({ type: "ack", id, path: await capabilities.resolveFile(command.path, cwd) }); break;
       case "save_provider": {
-        if (busy) throw new Error("请等待当前回复结束");
         const saved = await providers.save(command);
-        await providers.install(await getRuntime());
+        await providers.install(await providerRuntime());
         modelRequests.refresh();
-        await emitState(); send({ type: "ack", id, providerId: saved.id });
+        await emitState(); send({ type: "ack", id, providerId: saved.id, message:providersPending?'已保存，当前模型任务结束后生效':'提供商已保存' });
         break;
       }
       case "discover_models": {
-        if (busy) throw new Error("请等待当前回复结束");
-        await providers.discover(command.providerId, await getRuntime());
+        await providers.discover(command.providerId, await providerRuntime());
         await emitState(); send({ type: "ack", id });
         break;
       }
       case "refresh_model": {
-        if(busy)throw new Error("请等待当前回复结束");
-        const info=await providers.refreshModel(command.providerId,command.modelId,await getRuntime());
+        const info=await providers.refreshModel(command.providerId,command.modelId,await providerRuntime());
         await emitState();send({type:"ack",id,modelInfo:info});break;
       }
       case "delete_provider":
@@ -432,10 +480,9 @@ async function handle(command) {
         if(session?.model?.provider===command.providerId){delete appState.provider;delete appState.modelId;await openSession();}
         await emitState();send({type:"ack",id});break;
       case "update_model": {
-        if (busy) throw new Error("请等待当前回复结束");
-        await providers.updateModel(command.providerId, command.model, await getRuntime());
-        if(session?.model?.provider===command.providerId && session.model.id===command.model.id)await session.setModel((await getRuntime()).getModel(command.providerId,command.model.id));
-        await emitState(); send({ type: "ack", id });
+        await providers.updateModel(command.providerId, command.model, await providerRuntime());
+        if(!busy&&session?.model?.provider===command.providerId && session.model.id===command.model.id){const selected=(await getRuntime()).getModel(command.providerId,command.model.id);if(selected)await session.setModel(selected);else await openSession();}
+        await emitState(); send({ type: "ack", id, message:providersPending?'模型信息已保存，当前模型任务结束后生效':'模型信息已保存' });
         break;
       }
       case "configure_remote": {
@@ -536,6 +583,7 @@ async function handle(command) {
       }
       case "select_model": {
         if (busy) throw new Error("Wait for the current response to finish");
+        if(providers.providers.find(p=>p.id===command.provider)?.models.find(m=>m.id===command.model)?.enabled===false)throw Error('该模型尚未勾选启用');
         const info=providers.modelInfo(command.provider,command.model,await getRuntime());
         if(command.thinkingLevel!==undefined && !info.thinkingLevels.includes(command.thinkingLevel))throw new Error("该模型不支持此思考选项");
         await openSession(command.provider, command.model);
@@ -543,7 +591,7 @@ async function handle(command) {
         send({ type: "ack", id });
         // 笔记库已连接但总览还没生成时，模型一旦就绪就补上。
         // 总览文件已存在时 ensure() 会直接返回，不会重复调用模型。
-        if(capabilities.state.vaultPath)void vaultOverview.ensure();
+        if(capabilities.state.vaultPath)void ensureOverview();
         break;
       }
       case "set_thinking_level": {
@@ -658,36 +706,51 @@ async function handle(command) {
         if (busy) throw new Error("A response is already running");
         if (!session) await openSession();
         if (!session.model || session.model.provider === "unknown") throw new Error("Configure an API key and select a model first");
+        if(providers.providers.find(p=>p.id===session.model.provider)?.models.find(m=>m.id===session.model.id)?.enabled===false)throw Error('当前模型已取消勾选，请选择一个已启用模型');
         if (typeof command.text !== "string") throw new Error("消息文字无效");
         const images = normalizeImages(command.images);
         if(images.length && !session.model.input?.includes("image"))throw new Error("当前模型未启用视觉能力。请在设置 → 模型中启用支持图片，再重新发送。");
         if (!command.text.trim() && !images.length) throw new Error("请输入消息或添加图片");
-        await prepareSkills(command.text);
         busy = true;
+        const controller = new AbortController();turnController=controller;
         turnRecovery.begin();
         visualReview.begin(command.text);
         outputTokens = 0; generationMs = 0; missingUsage = false;
         memoryAgent.cancel();
         send({ type: "started", id });
+        let completedOutcome;
         try {
+          await applyProviders();
+          await prepareSkills(command.text);controller.signal.throwIfAborted();
           await contextPolicy.preparePrompt(command.text, images);
+          controller.signal.throwIfAborted();
           await session.prompt(command.text, { images });
           emitTelemetry();
-          const outcome = visualReview.outcome(turnRecovery.outcome());
+          const outcome = controller.signal.aborted?{status:'aborted',message:'用户已停止回复'}:visualReview.outcome(turnRecovery.outcome());
           if (visualReview.snapshot().required) {
             const lastAssistant = session.sessionManager.getBranch().findLast(entry => entry.type === "message" && entry.message.role === "assistant");
             if (lastAssistant) session.sessionManager.appendCustomEntry("reed_turn_verification", { messageEntryId: lastAssistant.id, outcome, review: visualReview.snapshot() });
           }
-          send({ type: "done", id, outcome });
-          if (outcome.status === "complete") {memoryAgent.schedule();void workingTools.consolidate();}
+          completedOutcome=outcome;
+        } catch(error) {
+          if(controller.signal.aborted)completedOutcome={status:'aborted',message:'用户已停止回复'};
+          else throw error;
         } finally {
           turnRecovery.end();
-          busy = false;
+          if(turnController===controller)turnController=null;
+          try{while(providersPending&&!vaultOverview.running)await applyProviders();if(providersPending===false)await emitState();}
+          finally{busy=false;}
+          send({type:'session_sync',busy:false});
         }
+        send({type:'done',id,outcome:completedOutcome});
+        if(completedOutcome?.status==='complete'){memoryAgent.schedule();void workingTools.consolidate();}
         break;
       case "abort":
+        turnController?.abort(new DOMException('用户已停止回复','AbortError'));
+        turnRecovery.end();
         approvalGate.cancel("用户停止了当前操作");
-        if (session) await session.abort();
+        if (session) void session.abort().catch(error=>send({type:'error',message:error.message}));
+        send({type:'stopping'});
         send({ type: "ack", id });
         break;
       case "tool_decision": {
@@ -699,7 +762,7 @@ async function handle(command) {
         throw new Error(`Unknown command: ${command.type}`);
     }
   } catch (error) {
-    send({ type: "error", id, message: error instanceof Error ? error.message : String(error) });
+    send({ type: "error", id, commandType:command.type, message: error instanceof Error ? error.message : String(error) });
   }
 }
 
@@ -714,11 +777,14 @@ for await (const line of createInterface({ input: process.stdin })) {
   }
   if ((command.type === "init" && session) || ["get_goals", "save_goals", "cancel_vault_overview", "abort", "tool_decision", "queue_message", "promote_queue", "clear_queue", "set_approval"].includes(command.type)) {
     void handle(command);
+  } else if(command.type==='prompt') {
+    // Do not hold the settings/read command queue for an entire agent turn.
+    queue = queue.then(()=>{if(busy||applyingProviders){send({type:'error',id:command.id,message:'当前任务或配置仍在结束，请稍后重试。'});return;}activePrompt=handle(command);});
   } else {
     queue = queue.then(() => handle(command));
   }
 }
-await queue;vaultOverview.cancel();await mcp.closeAll();
+await queue;turnController?.abort();if(session)void session.abort();await activePrompt;vaultOverview.cancel();await mcp.closeAll();
 memoryAgent.cancel();
 workingTools.cancel();
 capabilities.close();

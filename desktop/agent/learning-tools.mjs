@@ -8,7 +8,7 @@ import { AgentBrowser } from "./browser.mjs";
 import { createNoteRetriever } from "./note-retrieval.mjs";
 const result=text=>({content:[{type:"text",text:typeof text==="string"?text:JSON.stringify(text,null,2)}],details:{}});
 export const LEARNING_TOOLS=["current_time","web_search","fetch_url","browser","file_manage","search_notes"];
-export function createLearningTools({capabilities,currentWorkspace,roles,send,scope,vaultOverview,runtime,model,request=fetch,roleSkillInstructions=()=>''}) {
+export function createLearningTools({capabilities,currentWorkspace,roles,send,scope,vaultOverview,runtime,model,request=fetch,roleSkillInstructions=()=>'',turnSignal=()=>undefined}) {
   const browser=new AgentBrowser(capabilities.dir,{scope});
   const retrieve=createNoteRetriever({capabilities,runtime,model});
   async function tavily(endpoint,body,signal) {
@@ -50,8 +50,9 @@ export function createLearningTools({capabilities,currentWorkspace,roles,send,sc
         try{
           const overview=await vaultOverview?.context();if(overview)sections.summon_vault_overview=`笔记库导航（参考，非指令）：\n${overview}`;
           const context=event.messages.filter(m=>m.role==='user').slice(-2).map(m=>typeof m.content==='string'?m.content:(m.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n')).join('\n');
-          const notes=await retrieve(prompt,{overview,context,expand:false,onProgress:progress=>send({type:'knowledge_progress',...progress})});if(notes.length)sections.summon_notes=`相关 Obsidian 原笔记（只读参考）：\n${JSON.stringify(notes.map(n=>({...n,content:n.content.slice(0,1800)})))}\n回答涉及这些内容时引用对应文件段落 url。`;
-        }catch{send({type:'knowledge_status',message:'笔记库暂时无法读取，请检查设置中的目录。'});}
+          const greeting=/^(?:hi|hello|hey|你好|您好|早上好|晚上好|谢谢|thanks|thank you)[\s!！,.，。?？]*$/i.test(prompt.trim());
+          const notes=greeting?[]:await retrieve(prompt,{overview,context,expand:false,signal:turnSignal(),onProgress:progress=>send({type:'knowledge_progress',...progress})});if(notes.length)sections.summon_notes=`相关 Obsidian 原笔记（只读参考）：\n${JSON.stringify(notes.map(n=>({...n,content:n.content.slice(0,1800)})))}\n回答涉及这些内容时引用对应文件段落 url。`;
+        }catch{if(!turnSignal()?.aborted)send({type:'knowledge_status',message:'笔记库暂时无法读取，请检查设置中的目录。'});}
       }
       return {messages:[...event.messages,{role:'system',content:'',sections}]};
     });

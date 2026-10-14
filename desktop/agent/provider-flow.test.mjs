@@ -26,6 +26,10 @@ test("discovery leaves missing metadata unknown and clears obsolete endpoint mod
     await store.discover(provider.id, runtime);
     assert.equal(provider.models[0].contextWindow, 65536);
     assert.deepEqual(provider.models[0].thinkingLevels, ["off", "low", "high"]);
+    assert.equal(provider.models[0].enabled, false);
+    assert.equal(JSON.parse(await readFile(store.modelsPath, "utf8")).providers[provider.id], undefined);
+    await store.updateModel(provider.id, { id: "test", enabled: true }, runtime);
+    assert.deepEqual(JSON.parse(await readFile(store.modelsPath, "utf8")).providers[provider.id].models.map(model => model.id), ["test"]);
     assert.ok(!(await readFile(store.path, "utf8")).includes("isolated-key"));
     await store.save({ providerId: provider.id, template: "custom", baseUrl: "http://127.0.0.1:12346/v1", protocol: "openai-completions" }); await store.install(runtime);
     assert.equal(JSON.parse(await readFile(store.modelsPath, "utf8")).providers[provider.id], undefined);
@@ -49,7 +53,7 @@ test("real PI bridge: discover, stream, remember, background memory, projects an
   const requests = [];
   let overviewRequests=0;
   const server = createServer(async (request, response) => {
-    if (request.url === "/v1/models") { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ data: [{ id: "test-model", context_length: 65536, supports_reasoning: true, reasoning_efforts: ["off", "low", "high"] },{id:"unknown-model",context_length:65536}] })); return; }
+    if (request.url === "/v1/models") { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ data: [{ id: "test-model", context_length: 65536, supports_reasoning: true, reasoning_efforts: ["off", "low", "medium"] },{id:"unknown-model",context_length:65536}] })); return; }
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString());
     if(body.messages.some(m=>/笔记库导航整理器|根据分批笔记浏览结果|合并笔记目录导航/.test(typeof m.content==='string'?m.content:'')))overviewRequests++;
@@ -103,15 +107,18 @@ test("real PI bridge: discover, stream, remember, background memory, projects an
     start(); await until(m => m.type === "ready"); await command("init");
     const provider = await command("save_provider", { template: "custom", name: "隔离测试", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, protocol: "openai-completions" });
     await command("discover_models", { providerId: provider.providerId });
+    assert.equal(messages.filter(m => m.type === "models").at(-1).models.some(m => m.id === "test-model"), false);
+    await command("update_model", { providerId: provider.providerId, model: { id: "test-model", enabled: true } });
     assert.equal(messages.filter(m => m.type === "models").at(-1).models.find(m => m.id === "test-model").contextWindow, 65536);
     await command("select_model", { provider: provider.providerId, model: "test-model" });
     await command("select_model", { provider: provider.providerId, model: "test-model", thinkingLevel:"low" });
     assert.equal(messages.filter(m=>m.type==="session").at(-1).thinkingLevel,"low");
-    await command("set_thinking_level", { level: "high" });
+    await command("set_thinking_level", { level: "medium" });
     const vault = join(root, "test-vault"), skill = join(root, "test-skill"); await mkdir(vault); await mkdir(skill);
     await writeFile(join(vault, "线性代数.md"), "# 矩阵\n\n矩阵可以表示线性变换。\n");
     await writeFile(join(skill, "SKILL.md"), "---\nname: test-study\ndescription: TEST_SKILL_DESCRIPTION\n---\nONLY_BODY_SENTINEL\n");
     await command("configure_capabilities", { vaultPath: vault });
+    await command("generate_vault_overview",{providerId:provider.providerId,modelId:"test-model",reasoning:"off"});
     await command("import_skill", { path: skill });
     const role = await command("save_role", { name: "测试导师", system: "TEST_ROLE_SYSTEM_PRIORITY：用中文教学", learnerProfileEnabled:true });
     const roleId = messages.filter(m => m.type === "roles").at(-1).roles.find(r => r.name === "测试导师").id;
@@ -143,7 +150,7 @@ test("real PI bridge: discover, stream, remember, background memory, projects an
     assert.match((await until(m=>m.id===skillBlockedId&&m.type==="error")).message,/已停用/);
     assert.equal(requests.length,beforeBlocked);
     assert.ok(requests[0].messages.some(m => ["system", "developer"].includes(m.role) && JSON.stringify(m.content).includes("remember")), JSON.stringify(requests[0].messages[0]));
-    assert.equal(requests[0].reasoning_effort, "high");
+    assert.equal(requests[0].reasoning_effort, "medium");
     const first = messages.filter(m => m.type === "session").at(-1).sessionId;
     const project = join(root, "test-project"); await mkdir(project);
     const readonly=join(project,"readonly");await mkdir(readonly);
@@ -210,9 +217,12 @@ test("real PI bridge: discover, stream, remember, background memory, projects an
     assert.match(JSON.stringify(requests.at(-1).messages[0]),/Planner/);
     const plannerId=messages.filter(m=>m.type==="session").at(-1).sessionId;await command("delete_session",{sessionId:plannerId,confirm:true});assert.ok(!(await command("list_sessions")).sessions.some(s=>s.id===plannerId));
     await command("select_role",{roleId});await command("open_session",{sessionId:first});
+    assert.equal(messages.filter(m=>m.type==="models").at(-1).models.some(m=>m.id==="unknown-model"),false);
+    await command("update_model",{providerId:provider.providerId,model:{id:"unknown-model",enabled:true}});
     const unknown=messages.filter(m=>m.type==="models").at(-1).models.find(m=>m.id==="unknown-model");assert.equal(unknown.reasoning,null);assert.deepEqual(unknown.thinkingLevels,["off","low","medium","high","xhigh"]);
-    await command("select_model",{provider:provider.providerId,model:"unknown-model",thinkingLevel:"xhigh"});assert.equal(messages.filter(m=>m.type==="session").at(-1).thinkingLevel,"xhigh");
-    await command("prompt",{text:"默认档位验证"});assert.equal(requests.at(-1).reasoning_effort,"xhigh");
+    assert.equal(messages.filter(m=>m.type==="models").at(-1).models.find(m=>m.id==="unknown-model").enabled,true);
+    await command("select_model",{provider:provider.providerId,model:"unknown-model",thinkingLevel:"medium"});assert.equal(messages.filter(m=>m.type==="session").at(-1).thinkingLevel,"medium");
+    await command("prompt",{text:"默认档位验证"});assert.equal(requests.at(-1).reasoning_effort,"medium");
     await command("set_thinking_level",{level:"off"});await command("prompt",{text:"关闭默认思考"});assert.ok(!requests.at(-1).reasoning_effort);
     const image={type:"image",mimeType:"image/png",data:(await readFile(join(dirname(fileURLToPath(import.meta.url)),"../src-tauri/icons/icon.png"))).toString("base64")};
     const requestCount=requests.length,blockedId=`full-${++seq}`;child.stdin.write(JSON.stringify({type:"prompt",id:blockedId,text:"未启用视觉",images:[image]})+"\n");const blocked=await until(m=>m.id===blockedId&&m.type==="error");assert.match(blocked.message,/未启用视觉/);assert.equal(requests.length,requestCount);

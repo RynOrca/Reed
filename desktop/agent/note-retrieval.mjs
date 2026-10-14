@@ -35,12 +35,13 @@ export function createNoteRetriever({capabilities,runtime,model,expansionTimeout
     if(!capabilities.state.vaultPath)return [];
     const progress=(phase,count)=>{if(!signal?.aborted)onProgress({phase,count});};
     progress('local');
-    const original=await capabilities.searchNotes(query,8);
+    signal?.throwIfAborted();
+    const original=await capabilities.searchNotes(query,8,{signal});
     // Skip expansion only for a direct title/heading or complete-phrase match.
     const needsExpansion=expand&&!signal?.aborted&&!hasPreciseLocalEvidence(query,original);
     if(needsExpansion)progress('expanding',original.length);
     const queries=needsExpansion?await plan(query,overview||'',context,signal):[];
-    const lists=[original];for(const term of queries){if(signal?.aborted)break;if(term!==query)lists.push(await capabilities.searchNotes(term,8));}
+    const lists=[original];for(const term of queries){if(signal?.aborted)break;if(term!==query)lists.push(await capabilities.searchNotes(term,8,{signal}));}
     const hits=new Map();lists.forEach(list=>list.forEach((hit,index)=>{const key=hit.path+':'+hit.startLine;const old=hits.get(key);hits.set(key,{...hit,relevance:(old?.relevance||0)+1/(20+index)});}));
     const selected=[...hits.values()].sort((a,b)=>b.relevance-a.relevance).slice(0,6);
     progress(needsExpansion&&!queries.length?'fallback':'ready',selected.length);
