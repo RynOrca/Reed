@@ -1,0 +1,268 @@
+{
+  "provider": "DeepSeek",
+  "baseUrl": "https://api.deepseek.com",
+  "model": "deepseek-flash",
+  "reasoning": "off",
+  "concurrency": 2,
+  "notes": 6,
+  "vault": "C:\\Users\\Orca\\AppData\\Local\\Temp\\reed-deepseek-overview-J4K83c\\vault",
+  "events": [
+    {
+      "state": "idle",
+      "message": "尚未生成总览。",
+      "at": 208
+    },
+    {
+      "state": "scanning",
+      "message": "正在浏览笔记库目录与 Markdown",
+      "at": 208
+    },
+    {
+      "state": "generating",
+      "done": 0,
+      "batches": 2,
+      "failed": 0,
+      "concurrency": 2,
+      "message": "正在理解笔记第 1/2 批（已完成 0/2 批，并发 2）",
+      "at": 208
+    },
+    {
+      "state": "generating",
+      "done": 0,
+      "batches": 2,
+      "failed": 0,
+      "concurrency": 2,
+      "message": "正在理解笔记第 2/2 批（已完成 0/2 批，并发 2）",
+      "at": 208
+    },
+    {
+      "state": "generating",
+      "done": 0,
+      "batches": 2,
+      "failed": 0,
+      "phase": "running",
+      "queuedMs": 1,
+      "message": "正在理解笔记第 1/2 批（已完成 0/2 批，并发 2）（排队 0.0 秒，单次生成最多等待 5 分钟）",
+      "at": 208
+    },
+    {
+      "state": "generating",
+      "done": 0,
+      "batches": 2,
+      "failed": 0,
+      "phase": "running",
+      "queuedMs": 2,
+      "message": "正在理解笔记第 2/2 批（已完成 0/2 批，并发 2）（排队 0.0 秒，单次生成最多等待 5 分钟）",
+      "at": 208
+    },
+    {
+      "state": "generating",
+      "done": 0,
+      "batches": 2,
+      "failed": 0,
+      "phase": "connecting",
+      "elapsedMs": 0,
+      "message": "正在理解笔记第 1/2 批（已完成 0/2 批，并发 2）（连接模型，单次生成最多等待 5 分钟）",
+      "at": 413
+    },
+    {
+      "state": "generating",
+      "done": 0,
+      "batches": 2,
+      "failed": 0,
+      "phase": "connecting",
+      "elapsedMs": 0,
+      "message": "正在理解笔记第 2/2 批（已完成 0/2 批，并发 2）（连接模型，单次生成最多等待 5 分钟）",
+      "at": 413
+    },
+    {
+      "state": "generating",
+      "done": 0,
+      "batches": 2,
+      "failed": 0,
+      "phase": "headers",
+      "elapsedMs": 318,
+      "message": "正在理解笔记第 2/2 批（已完成 0/2 批，并发 2）（已连接，等待数据，单次生成最多等待 5 分钟）",
+      "at": 823
+    },
+    {
+      "state": "generating",
+      "done": 0,
+      "batches": 2,
+      "failed": 0,
+      "phase": "first_body",
+      "elapsedMs": 328,
+      "message": "正在理解笔记第 2/2 批（已完成 0/2 批，并发 2）（已收到模型数据，单次生成最多等待 5 分钟）",
+      "at": 823
+    },
+    {
+      "state": "generating",
+      "done": 0,
+      "batches": 2,
+      "failed": 0,
+      "phase": "headers",
+      "elapsedMs": 368,
+      "message": "正在理解笔记第 1/2 批（已完成 0/2 批，并发 2）（已连接，等待数据，单次生成最多等待 5 分钟）",
+      "at": 823
+    },
+    {
+      "state": "generating",
+      "done": 0,
+      "batches": 2,
+      "failed": 0,
+      "phase": "first_body",
+      "elapsedMs": 371,
+      "message": "正在理解笔记第 1/2 批（已完成 0/2 批，并发 2）（已收到模型数据，单次生成最多等待 5 分钟）",
+      "at": 823
+    },
+    {
+      "state": "generating",
+      "done": 0,
+      "batches": 2,
+      "failed": 0,
+      "phase": "finished",
+      "elapsedMs": 3147,
+      "message": "正在理解笔记第 2/2 批（已完成 0/2 批，并发 2）（本次数据接收完成，单次生成最多等待 5 分钟）",
+      "at": 3479
+    },
+    {
+      "state": "generating",
+      "done": 1,
+      "batches": 2,
+      "failed": 0,
+      "concurrency": 2,
+      "message": "已整理 1/2 批，并发 2",
+      "at": 3685
+    },
+    {
+      "state": "generating",
+      "done": 1,
+      "batches": 2,
+      "failed": 0,
+      "phase": "finished",
+      "elapsedMs": 4056,
+      "message": "正在理解笔记第 1/2 批（已完成 0/2 批，并发 2）（本次数据接收完成，单次生成最多等待 5 分钟）",
+      "at": 4501
+    },
+    {
+      "state": "generating",
+      "done": 2,
+      "batches": 2,
+      "failed": 0,
+      "concurrency": 2,
+      "message": "已整理 2/2 批，并发 2",
+      "at": 4501
+    },
+    {
+      "state": "generating",
+      "done": 2,
+      "batches": 2,
+      "failed": 0,
+      "concurrency": 2,
+      "message": "批次整理已完成，正在汇总总览",
+      "at": 4501
+    },
+    {
+      "state": "generating",
+      "done": 2,
+      "batches": 2,
+      "failed": 0,
+      "phase": "running",
+      "queuedMs": 1,
+      "message": "批次整理已完成，正在汇总总览（排队 0.0 秒，单次生成最多等待 5 分钟）",
+      "at": 4501
+    },
+    {
+      "state": "generating",
+      "done": 2,
+      "batches": 2,
+      "failed": 0,
+      "phase": "connecting",
+      "elapsedMs": 0,
+      "message": "批次整理已完成，正在汇总总览（连接模型，单次生成最多等待 5 分钟）",
+      "at": 4501
+    },
+    {
+      "state": "generating",
+      "done": 2,
+      "batches": 2,
+      "failed": 0,
+      "phase": "headers",
+      "elapsedMs": 136,
+      "message": "批次整理已完成，正在汇总总览（已连接，等待数据，单次生成最多等待 5 分钟）",
+      "at": 4705
+    },
+    {
+      "state": "generating",
+      "done": 2,
+      "batches": 2,
+      "failed": 0,
+      "phase": "first_body",
+      "elapsedMs": 146,
+      "message": "批次整理已完成，正在汇总总览（已收到模型数据，单次生成最多等待 5 分钟）",
+      "at": 4705
+    },
+    {
+      "state": "generating",
+      "done": 2,
+      "batches": 2,
+      "failed": 0,
+      "phase": "finished",
+      "elapsedMs": 5110,
+      "message": "批次整理已完成，正在汇总总览（本次数据接收完成，单次生成最多等待 5 分钟）",
+      "at": 9512
+    },
+    {
+      "state": "ready",
+      "failed": 0,
+      "concurrency": 2,
+      "at": 9512
+    }
+  ],
+  "totalMs": 9512,
+  "outcome": {
+    "state": "ready",
+    "failed": 0,
+    "concurrency": 2
+  },
+  "overview": "# Reed 笔记库总览\n\n生成时间：2026-10-14T15:26:01.387Z\n生成模型：summon-cabf8631-dce7-4aa8-99e3-9afc9dc8b43a/deepseek-flash\n\n浏览范围：6 份 Markdown，模型阅读了每份笔记的标题与前 2500 字抽样，并非逐字阅读全部正文。目录中的附件、隐藏配置和链接不纳入。\n批次理解并发：2（来自提供商的并行请求设置）。\n\n# 笔记库总览\n\n> 本总览仅依据输入的 6 个文件路径整理，不补造任何路径或内容。所有文件均为「合成笔记」，标题同为「合成主题 N」，正文抽样为高度重复的合成文本，同时混入多个不相关学科的关键词，因此无法可靠归入单一科目，统一标注「待确认」。\n\n## 一、整体理解\n\n本笔记库当前可见内容为一批**同构的合成/占位笔记**，命名规律为 `合成笔记-N.md`（N=0~5），标题对应「合成主题 N」。抽样正文在多个文件中重复出现，且在同一段文本内混合了数学、前端、生物、文学等不同领域的关键词，未形成清晰的学科边界或知识体系。因此，本批次资料**不宜按传统学科目录硬性归类**，更适合按下文「目录—候选科目」对应表做临时索引，待取得完整正文后再确认归属。\n\n## 二、目录与科目对应表（候选，均待确认）\n\n| 文件路径 | 标题 | 候选科目（仅据关键词罗列） | 状态 |\n|---|",
+  "requests": [
+    {
+      "requestId": 1,
+      "startMs": 0,
+      "endMs": 4056,
+      "phases": [
+        "connecting",
+        "first_body",
+        "headers",
+        "finished"
+      ]
+    },
+    {
+      "requestId": 2,
+      "startMs": 11,
+      "endMs": 3159,
+      "phases": [
+        "connecting",
+        "headers",
+        "first_body",
+        "finished"
+      ]
+    },
+    {
+      "requestId": 3,
+      "startMs": 4072,
+      "endMs": 9181,
+      "phases": [
+        "connecting",
+        "headers",
+        "first_body",
+        "finished"
+      ]
+    }
+  ],
+  "observedPeakConcurrency": 2,
+  "stderrTail": [
+    ""
+  ]
+}
