@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, readFile, writeFile, realpath, stat } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile, realpath, stat, rm } from "node:fs/promises";
 import { join, dirname, resolve, relative, extname } from "node:path";
 import { createServer } from "node:http";
 import { randomUUID, createHash } from "node:crypto";
@@ -48,12 +48,14 @@ export class AgentBrowser {
     const candidates=[process.env.PROGRAMFILES,process.env["PROGRAMFILES(X86)"],process.env.LOCALAPPDATA].filter(Boolean).map(p=>join(p,"Microsoft","Edge","Application","msedge.exe"));
     let executable; for(const path of candidates) { if(await access(path).then(()=>true,()=>false)) { executable=path; break; } }
     if(!executable) throw new Error("未找到 Microsoft Edge，请安装后使用浏览器工具");
-    const profile=join(this.dir,`browser-${process.pid}`); await mkdir(profile,{recursive:true});
+    const profile=join(this.dir,`browser-${process.pid}-${randomUUID()}`); await mkdir(profile,{recursive:true});
     this.child=spawn(executable,["--headless=new","--remote-debugging-port=0",`--user-data-dir=${profile}`,"--no-first-run","--no-default-browser-check","about:blank"],{windowsHide:true,stdio:"ignore"});
+    const ownedChild=this.child, generation=this.generation;
+    ownedChild.once("exit",()=>{void rm(profile,{recursive:true,force:true,maxRetries:10,retryDelay:200}).catch(()=>{});});
     let launchError; this.child.once("error",e=>{launchError=e;});
     try {
       let port;
-      for(let i=0;i<100;i++) { if(launchError) throw launchError; if(this.child.exitCode!==null) throw new Error("浏览器启动失败"); try { port=Number((await readFile(join(profile,"DevToolsActivePort"),"utf8")).split("\n")[0]); if(port) break; } catch {} await new Promise(r=>setTimeout(r,100)); }
+      for(let i=0;i<100;i++) { if(launchError) throw launchError; if(generation!==this.generation) throw new Error("浏览器操作已取消"); if(ownedChild.exitCode!==null) throw new Error("浏览器启动失败"); try { port=Number((await readFile(join(profile,"DevToolsActivePort"),"utf8")).split("\n")[0]); if(port) break; } catch {} await new Promise(r=>setTimeout(r,100)); }
       if(!port) throw new Error("浏览器启动超时");
       const response=await fetch(`http://127.0.0.1:${port}/json/version`,{signal:AbortSignal.timeout(5000)}); const version=await response.json();
       this.socket=new WebSocket(version.webSocketDebuggerUrl);
@@ -63,10 +65,14 @@ export class AgentBrowser {
       this.socket.addEventListener("close",()=>{ if(this.socket && this.socket!==ownedSocket)return; for(const req of this.pending.values()) {clearTimeout(req.timer);req.reject(new Error("浏览器已断开"));} this.pending.clear(); this.sessionId=null; });
       const target=await this.call("Target.createTarget",{url:"about:blank"}); const attached=await this.call("Target.attachToTarget",{targetId:target.targetId,flatten:true}); this.sessionId=attached.sessionId;
       await this.call("Page.enable");
-    } catch(e) { this.close(); throw e; }
+    } catch(e) {
+      if(this.child===ownedChild)this.close();
+      if(e.message==="fetch failed")throw new Error(`无法连接本次启动的 Edge 调试服务（${e.cause?.code||"连接失败"}）；请报告环境问题，不要重复调用同一操作`);
+      throw e;
+    }
   }
-  call(method,params={}) { const id=++this.sequence; return new Promise((resolve,reject)=>{ const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error("浏览器操作超时"));},15000); this.pending.set(id,{resolve,reject,timer}); this.socket.send(JSON.stringify({id,method,params,...(this.sessionId?{sessionId:this.sessionId}:{})})); }); }
-  async evaluate(expression) { const r=await this.call("Runtime.evaluate",{expression,returnByValue:true,awaitPromise:true}); if(r.exceptionDetails) throw new Error("网页操作失败"); return r.result.value; }
+  call(method,params={}) { const id=++this.sequence; return new Promise((resolve,reject)=>{ const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error("浏览器操作超时"));},15000); this.pending.set(id,{resolve,reject,timer}); try{this.socket.send(JSON.stringify({id,method,params,...(this.sessionId?{sessionId:this.sessionId}:{})}));}catch(error){this.pending.delete(id);clearTimeout(timer);reject(error);} }); }
+  async evaluate(expression) { const r=await this.call("Runtime.evaluate",{expression,returnByValue:true,awaitPromise:true}); if(r.exceptionDetails) throw new Error(`网页操作失败：${String(r.exceptionDetails.exception?.description||r.exceptionDetails.text||"未知错误").split("\n")[0].slice(0,300)}`); return r.result.value; }
   async navigate(url) {
     const navigation=await this.call("Page.navigate",{url});
     if(navigation.errorText) throw new Error(navigation.errorText);
@@ -82,23 +88,28 @@ export class AgentBrowser {
     }
     throw new Error("页面加载超时，请确认本地资源或网页可访问后重试");
   }
-  run(input) {
+  run(input,{signal}={}) {
+    if(signal?.aborted)return Promise.reject(new Error("浏览器操作已取消"));
     if(this.queued>=20) return Promise.reject(new Error("浏览器待处理操作过多，请等待当前操作完成"));
     const generation=this.generation; this.queued++;
-    const operation=this.operations.then(()=>{
+    const operation=this.operations.then(async()=>{
       if(generation!==this.generation) throw new Error("浏览器操作已取消");
-      return this.runOne(input);
+      if(signal?.aborted)throw new Error("浏览器操作已取消");
+      const abort=()=>this.close();signal?.addEventListener("abort",abort,{once:true});
+      try{return await this.runOne(input,signal);}catch(error){if(signal?.aborted){this.close();throw new Error("浏览器操作已取消");}throw error;}finally{signal?.removeEventListener("abort",abort);}
+
     });
     this.operations=operation.catch(()=>{});
     return operation.finally(()=>{this.queued--;});
   }
-  async runOne(input) {
+  async runOne(input,signal) {
     const {action,url,index,text,path}=input;
     if(!["navigate","preview","snapshot","screenshot","click","fill"].includes(action)) throw new Error("未知浏览器操作");
     const options=captureOptions({...input,viewport:input.viewport || this.viewport});
     let destination;
     if(action==="navigate") {const u=new URL(url);if(!["http:","https:"].includes(u.protocol) || u.username || u.password) throw new Error("浏览器只接受 HTTP(S) 地址；本地 HTML 请使用 preview");destination=u.href;}
     if(action==="preview") destination=await this.preview(path);
+    if(signal?.aborted)throw new Error("浏览器操作已取消");
     clearTimeout(this.idleTimer);
     this.idleTimer=setTimeout(()=>this.close(),60000); this.idleTimer.unref();
     await this.start();
@@ -109,7 +120,11 @@ export class AgentBrowser {
       if(!Number.isInteger(index) || index<1) throw new Error("请使用最近快照中的元素编号");
       await this.evaluate(`(()=>{const e=document.querySelector('[data-summon-element="${index}"]'); if(!e) throw Error('元素已失效，请刷新快照'); ${action==="click" ? "e.click();" : `if(!('value' in e)) throw Error('不是输入框'); const setter=Object.getOwnPropertyDescriptor(e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value')?.set; if(setter) setter.call(e,${JSON.stringify(String(text||"").slice(0,10000))}); else e.value=${JSON.stringify(String(text||"").slice(0,10000))}; e.dispatchEvent(new Event('input',{bubbles:true})); e.dispatchEvent(new Event('change',{bubbles:true}));`} return true;})()`);
     }
-    if(options.waitMs) await new Promise(r=>setTimeout(r,options.waitMs));
+    if(options.waitMs) await new Promise((resolve,reject)=>{
+      const abort=()=>{clearTimeout(timer);signal?.removeEventListener("abort",abort);reject(new Error("浏览器操作已取消"));};
+      const timer=setTimeout(()=>{signal?.removeEventListener("abort",abort);resolve();},options.waitMs);
+      signal?.addEventListener("abort",abort,{once:true});if(signal?.aborted)abort();
+    });
     if(action==="screenshot") {
       const metrics=await this.call("Page.getLayoutMetrics");
       const size=options.fullPage?(metrics.cssContentSize || metrics.contentSize):this.viewport;

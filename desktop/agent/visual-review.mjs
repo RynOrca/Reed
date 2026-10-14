@@ -13,7 +13,7 @@ const text = value => ({ content: [{ type: "text", text: JSON.stringify(value) }
 // The gate keeps the artifact, screenshots and assessments tied to the same revision.
 export function createVisualReview({ scope, send = () => {}, enabled = () => true, maxRounds = 6, maxNudges = 8 }) {
   let state;
-  const reset = prompt => { state = { prompt, files: new Map(), captures: [], reviews: [], nudges: 0, lastStop: null, blocked: null, changedAt: 0 }; };
+  const reset = prompt => { state = { prompt, files: new Map(), captures: [], reviews: [], nudges: 0, lastStop: null, blocked: null, browserFailures:0, browserFailureStreak:0, browserStopped:false, changedAt: 0 }; };
   reset("");
   const revisions = () => [...state.files].map(([path, hash]) => ({ path, hash }));
   const revisionId = () => digest(JSON.stringify(revisions()));
@@ -26,7 +26,7 @@ export function createVisualReview({ scope, send = () => {}, enabled = () => tru
   }
   function snapshot() {
     return { required: state.files.size > 0, passed: state.files.size > 0 && !pending(), rounds: state.reviews.length,
-      maxRounds, revisions: revisions(), screenshots: state.captures.map(c => ({ ...c })), reviews: state.reviews, reason: limitReason() };
+      maxRounds, browserFailures:state.browserFailures, browserStopped:state.browserStopped, revisions: revisions(), screenshots: state.captures.map(c => ({ ...c })), reviews: state.reviews, reason: limitReason() };
   }
   async function refresh() {
     for (const path of state.files.keys()) {
@@ -35,12 +35,13 @@ export function createVisualReview({ scope, send = () => {}, enabled = () => tru
     }
   }
   function instruction() {
-    return `网页产物验收规则：写入/修改网页后，必须使用 browser 预览，再 screenshot 获取真实图片；桌面宽度至少 900px、窄屏宽度至多 480px各一次。动画还需等待至少 1000ms后再次截图。仔细查看图片，按用户要求检查裁切、布局、可读性、运动和交互，调用 visual_review 记录逐项检查与问题。发现问题应修复并重新截图；修改后旧截图无效。最多 ${maxRounds} 次评审，停滞时明确报告剩余问题。不得把写文件成功或未经截图的猜测当作验收通过。当前验收状态：${JSON.stringify(snapshot())}`;
+    return `browser失败时先核对参数和错误，只允许一次纠正后重试；连续两次或本轮累计三次失败必须停止浏览器验收并如实报告，不能反复换参数重试或声称验收通过。网页产物验收规则：写入/修改网页后，必须使用 browser 预览，再 screenshot 获取真实图片；桌面宽度至少 900px、窄屏宽度至多 480px各一次。动画还需等待至少 1000ms后再次截图。仔细查看图片，按用户要求检查裁切、布局、可读性、运动和交互，调用 visual_review 记录逐项检查与问题。发现问题应修复并重新截图；修改后旧截图无效。最多 ${maxRounds} 次评审，停滞时明确报告剩余问题。不得把写文件成功或未经截图的猜测当作验收通过。当前验收状态：${JSON.stringify(snapshot())}`;
   }
   return {
     begin: reset,
     snapshot,
     outcome(base) {
+      if(base.status==="complete" && state.browserStopped)return {...base,status:"unverified",message:state.blocked,visualReview:snapshot()};
       if (base.status !== "complete" || !pending()) return base;
       return { ...base, status: "unverified", message: limitReason() || "文件已生成，但视觉验收尚未通过", visualReview: snapshot() };
     },
@@ -70,20 +71,29 @@ export function createVisualReview({ scope, send = () => {}, enabled = () => tru
         event.systemPromptOptions.sections.reed_visual_review = instruction();
       });
       pi.on("input", event => { if (event.streamingBehavior && event.text) state.prompt += `\n用户补充：${event.text}`; });
-      pi.on("tool_call", () => {
+      pi.on("tool_call", event => {
+        if(event.toolName==="browser" && state.browserStopped)return {block:true,terminate:true,reason:state.blocked};
         if (pending() && state.reviews.length >= maxRounds) return { block: true, terminate: true, reason: limitReason() };
       });
       pi.on("context_with_system", event => ({ messages: [...event.messages, { role: "system", content: "", sections: { reed_visual_review: instruction() } }] }));
       pi.on("tool_result", async event => {
         if (event.isError) {
-          if (event.toolName === "browser" && pending()) state.blocked = "浏览器验收失败：请报告错误与尚未验收的项目";
+          if(event.toolName==="browser"){
+            state.browserFailures++;state.browserFailureStreak++;
+            state.browserStopped=state.browserFailureStreak>=2||state.browserFailures>=3;
+            state.blocked=state.browserStopped?"browser多次失败，本轮已停止重试；请报告实际错误和未验收项目":"浏览器验收失败：请先核对错误，最多纠正后重试一次";
+          }
           return;
+        }
+        if(event.toolName==="browser"){
+          state.browserFailureStreak=0;
+          if(!state.browserStopped && /^浏览器验收失败/.test(state.blocked||""))state.blocked=null;
         }
         if (["write", "edit"].includes(event.toolName) && visualExtensions.has(extname(event.input.path || "").toLowerCase())) {
           const path = await scope.check(event.input.path);
           state.files.set(path, digest(await readFile(path)));
           state.changedAt = Date.now();
-          state.blocked = null;
+          if(!state.browserStopped)state.blocked = null;
         }
         if (event.toolName === "browser" && event.input.action === "screenshot" && event.content.some(c => c.type === "image")) {
           await refresh();
@@ -95,7 +105,7 @@ export function createVisualReview({ scope, send = () => {}, enabled = () => tru
             if (sourcePath && state.files.has(sourcePath) && c.sourceHash !== state.files.get(sourcePath)) return;
             state.captures.push({ ...c, sourcePath, revision: revisionId() });
             state.captures = state.captures.slice(-24);
-            state.blocked = null;
+            if(!state.browserStopped)state.blocked = null;
           }
         }
       });
