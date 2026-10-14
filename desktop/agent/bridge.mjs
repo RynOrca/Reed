@@ -10,6 +10,7 @@ import { mkdir, stat, readFile, writeFile, appendFile, rename, realpath, unlink 
 import { classifyAssistantOutcome } from "./turn-outcome.mjs";
 import { createTurnRecovery } from "./turn-recovery.mjs";
 import { createAbortWatchdog } from "./turn-watchdog.mjs";
+import { createReviewGate } from "./review-gate.mjs";
 import { createDiagnosticFetch, createRequestFetch } from "./stream-diagnostics.mjs";
 import { createVisualReview, VISUAL_TOOLS } from "./visual-review.mjs";
 import { createContextPolicy } from "./context-policy.mjs";
@@ -120,17 +121,22 @@ memory.workAllowed=source=>memory.state.enabled.work&&!sessionDisallowsMemory(se
 memory.recallWork=createWorkRecaller({memory,runtime:getRuntime,model:()=>session?.model});
 memory.matchWorkTopic=semanticMatcher({runtime:getRuntime,model:()=>session?.model?.provider!=="unknown"?session?.model:null,allowed:()=>memory.state.enabled.work&&!sessionDisallowsMemory(session)});
 const preparedSkills=new Map(),preparedReviews=new Set();
-let reviewReadKey=null;
 const lastUserPrompt=()=>{const u=session?.state.messages.findLast(m=>m.role==="user");return typeof u?.content==="string"?u.content:(u?.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");};
-const reviewEnabled=(prompt=lastUserPrompt())=>reviewReadKey===session?.sessionId+"\n"+prompt||preparedReviews.has(roles.activeId+"\n"+prompt);
-const workingTools=workMemoryExtension({memory,learner,roles,currentSession:()=>session,reviewEnabled,send,judgeValue,runtime:getRuntime,currentWorkspace:()=>cwd});
-const reviewGate=pi=>pi.on("tool_result",event=>{
-  if(event.toolName!=="read"||event.isError||!roles.current().learnerProfileEnabled)return;
-  const skill=capabilities.state.skills.find(s=>s.name==="spaced-review"&&s.enabled&&roles.current().skills.some(b=>b.skillId===s.id));
-  if(skill&&event.input?.path&&resolve(cwd,event.input.path)===resolve(skill.path,"SKILL.md"))reviewReadKey=session.sessionId+"\n"+lastUserPrompt();
+const spacedReviewSkill=()=>capabilities.state.skills.find(s=>s.name==="spaced-review"&&s.enabled&&roles.current().skills.some(b=>b.skillId===s.id));
+const reviewSkillPath=()=>{const skill=spacedReviewSkill();return skill?join(skill.path,"SKILL.md"):null;};
+// 门控按“轮次”而不是用户原文：同一轮的引导/排队消息不会关闭它，新一轮仍要重读技能。
+const reviewGateState=createReviewGate({
+  match:event=>{if(event?.toolName!=="read"||!roles.current().learnerProfileEnabled)return false;const skill=spacedReviewSkill();return Boolean(skill&&typeof event.input?.path==="string"&&resolve(cwd,event.input.path)===resolve(skill.path,"SKILL.md"));},
+  turnKey:()=>`${session?.sessionId||""}\u0000${activeTurnId||"idle"}`,
 });
+const reviewEnabled=(prompt=lastUserPrompt())=>reviewGateState.isLoaded()||preparedReviews.has(roles.activeId+"\n"+prompt);
+const workingTools=workMemoryExtension({memory,learner,roles,currentSession:()=>session,reviewEnabled,reviewHint:reviewSkillPath,send,judgeValue,runtime:getRuntime,currentWorkspace:()=>cwd});
+const reviewGate=pi=>{
+  // tool_call 在工具执行前触发：同一批并行发出的 read+recall_memory 也能看到已加载状态。
+  pi.on("tool_call",event=>reviewGateState.mark(event));
+  pi.on("tool_result",event=>reviewGateState.mark(event,!event.isError));
+};
 async function prepareSkills(text) {
-  reviewReadKey=null;
   const key=roles.activeId+'\n'+text;
   preparedSkills.set(key,await prepareRoleSkills(roles.current(),capabilities,text));
   preparedReviews.delete(key);
