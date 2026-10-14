@@ -240,6 +240,10 @@ async function openSession(provider, modelId, sessionManager) {
   });
   emitSession();
   outputTokens = 0; generationMs = 0; missingUsage = false; emitTelemetry();
+  emitHistory();
+}
+
+function emitHistory() {
   const historyBranch = session.sessionManager.getBranch();
   const visualOutcomes = new Map(historyBranch.filter(entry => entry.type === "custom" && entry.customType === "reed_turn_verification").map(entry => [entry.data?.messageEntryId, entry.data?.outcome]));
   send({
@@ -288,10 +292,13 @@ async function handle(command) {
   try {
     switch (command.type) {
       case "init": {
+        const reusingSession=!!session;
         const remoteConfig = await endpoint.config();
         send({ type: "endpoint", config: remoteConfig, hasKey: await endpoint.loadKey().then(Boolean).catch(() => false) });
         if (!session) await openSession(command.provider || appState.provider || (remoteConfig ? REMOTE_PROVIDER : undefined), command.model || appState.modelId || remoteConfig?.modelId);
         await emitState();
+        if(reusingSession)emitHistory();
+        send({type:"session_sync",busy});
         send({ type: "ack", id });
         if(capabilities.state.vaultPath)void vaultOverview.ensure();
         break;
@@ -692,7 +699,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     send({ type: "error", message: "Invalid JSON command" });
     continue;
   }
-  if (["get_goals", "save_goals", "cancel_vault_overview", "abort", "tool_decision", "queue_message", "promote_queue", "clear_queue", "set_approval"].includes(command.type)) {
+  if ((command.type === "init" && session) || ["get_goals", "save_goals", "cancel_vault_overview", "abort", "tool_decision", "queue_message", "promote_queue", "clear_queue", "set_approval"].includes(command.type)) {
     void handle(command);
   } else {
     queue = queue.then(() => handle(command));

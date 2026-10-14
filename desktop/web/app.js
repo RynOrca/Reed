@@ -447,6 +447,7 @@ function onEvent(event) {
       if (response.roleId) { activeRoleId = response.roleId; renderRoles(); }
       void command("list_sessions");
       break;
+    case "session_sync": setRunning(response.busy === true); break;
     case "thinking_level": void command("get_state"); break;
     case "session_name":
       if (response.sessionId === activeSessionId) activeSessionName = response.name || "";
