@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$NsisDir)
+param([Parameter(Mandatory=$true)][string]$NsisDir,[string]$ExistingFixtures='')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'executable-integrity.ps1')
 $root=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
@@ -6,9 +6,16 @@ $NsisDir=(Resolve-Path -LiteralPath $NsisDir).Path
 $compiler=Join-Path $root 'desktop/src-tauri/target/.tauri/NSIS/makensis.exe'
 $product='Reed Dependency Acceptance'
 $registry="HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$product"
-if(Test-Path -LiteralPath $registry){throw 'Owned test registration already exists; inspect before retry'}
-$testRoot=Join-Path $env:TEMP ('reed-dependency-upgrade-'+[Guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $testRoot | Out-Null
+if($ExistingFixtures){
+    $testRoot=(Resolve-Path -LiteralPath $ExistingFixtures).Path
+    $prefix=Join-Path ([IO.Path]::GetFullPath($env:TEMP)) 'reed-dependency-upgrade-'
+    if(-not $testRoot.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)){throw 'Fixtures must be in the owned temporary namespace'}
+    if((Test-Path -LiteralPath $registry) -and (Get-ItemProperty -LiteralPath $registry).InstallLocation.Trim('"').TrimEnd('\') -ne (Join-Path $testRoot 'app')){throw 'Test registration does not match owned fixtures'}
+}else{
+    if(Test-Path -LiteralPath $registry){throw 'Owned test registration already exists; inspect before retry'}
+    $testRoot=Join-Path $env:TEMP ('reed-dependency-upgrade-'+[Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $testRoot | Out-Null
+}
 $app=Join-Path $testRoot 'app'
 $checks=[Collections.Generic.List[string]]::new()
 function Compile-TestInstaller($source,$version,$name) {
@@ -30,20 +37,20 @@ function Compile-TestInstaller($source,$version,$name) {
     return $setup
 }
 function Install-Test($setup,$update=$false) {
-    $args=if($update){"/S /NS /UPDATE /D=$app"}else{"/S /NS /D=$app"}
+    $installArgs=if($update){"/S /NS /UPDATE /D=$app"}else{"/S /NS /D=$app"}
     $watch=[Diagnostics.Stopwatch]::StartNew()
-    $process=Start-Process -FilePath $setup -ArgumentList $args -WindowStyle Hidden -Wait -PassThru
+    $process=Start-Process -FilePath $setup -ArgumentList $installArgs -WindowStyle Hidden -Wait -PassThru
     if($process.ExitCode -ne 0){throw "Test install failed $($process.ExitCode)"}
     $watch.Stop();return $watch.ElapsedMilliseconds
 }
-$old=Compile-TestInstaller 'installer.nsi' '0.2.1' 'deps-old'
-$new=Compile-TestInstaller 'installer-reuse.nsi' '0.2.2' 'deps-new'
+$old=if($ExistingFixtures){Join-Path $testRoot 'deps-old.exe'}else{Compile-TestInstaller 'installer.nsi' '0.2.1' 'deps-old'}
+$new=if($ExistingFixtures){Join-Path $testRoot 'deps-new.exe'}else{Compile-TestInstaller 'installer-reuse.nsi' '0.2.2' 'deps-new'}
 $firstMs=Install-Test $old
 $deps=Join-Path $app 'agent/node_modules'
 $probe=Get-ChildItem -LiteralPath $deps -Filter '*.js' -Recurse -File | Select-Object -First 1
 if(-not $probe){throw 'Missing installed dependency probe'}
 $original=[IO.File]::ReadAllBytes($probe.FullName)
-$marker=[datetime]'2001-01-01T00:00:00Z'
+$marker=[datetime]::new(2001,1,1,0,0,0,[DateTimeKind]::Utc)
 [IO.File]::SetLastWriteTimeUtc($probe.FullName,$marker)
 $upgradeMs=Install-Test $new
 if([IO.File]::GetLastWriteTimeUtc($probe.FullName) -ne $marker){throw 'Unchanged dependency was rewritten during upgrade'}
