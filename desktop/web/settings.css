@@ -24,12 +24,15 @@ textarea { width:100%; resize:vertical; background:#191a1d; color:#eee; border:1
 .path-label { overflow-wrap:anywhere; padding:12px 0; font-size:12px; }.note-link { background:transparent; color:#bed1f2; text-align:left; padding:0; }.note-excerpt { white-space:pre-wrap; font-size:13px; margin-top:14px; }
 #vault-search-form { margin-bottom:20px; }
 #vault-results:not(:empty) { margin-bottom:20px; }
-#vault-browse,#vault-results { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px; }
+/* Column count follows the width next to the sidebar (set by settings.js), with
+   media queries only as the pre-script fallback. */
+#vault-browse,#vault-results { display:grid;grid-template-columns:repeat(var(--vault-columns,3),minmax(0,1fr));gap:14px; }
 #vault-browse .card,#vault-results .card { margin:0;min-width:0;padding:16px; }
 #vault-browse .note-link,#vault-results .note-link { overflow-wrap:anywhere; }
-@media(max-width:1000px) { #vault-browse,#vault-results { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-@media(max-width:660px) { #vault-browse,#vault-results { grid-template-columns:minmax(0,1fr); } }
-#vault-browse .note-excerpt,#vault-results .note-excerpt { line-height:1.6; max-height:8em; overflow:hidden; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:5; }
+@media(max-width:1000px) { #vault-browse,#vault-results { --vault-columns:2; } }
+@media(max-width:660px) { #vault-browse,#vault-results { --vault-columns:1; } }
+#vault-browse:not(:empty),#vault-browse-more { margin-bottom:14px; }
+#vault-browse .note-excerpt,#vault-results .note-excerpt { white-space:normal; line-height:1.6; max-height:8em; overflow:hidden; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:5; }
 .about-version { display:flex; align-items:baseline; gap:10px; padding:10px 0 2px; }.about-version span { color:#8f929b; font-size:12px; }.about-version strong { font-size:15px; font-variant-numeric:tabular-nums; }
 .update-progress { margin-top:12px; height:4px; border-radius:3px; background:#ffffff12; overflow:hidden; }.update-progress div { height:100%; width:0; border-radius:3px; background:#b8cdf5; transition:width .2s ease; }
 #skill-detail { white-space:pre-wrap; overflow-wrap:anywhere; padding:18px; background:#191a1d; border-radius:10px; font:12px/1.7 Consolas,monospace; }

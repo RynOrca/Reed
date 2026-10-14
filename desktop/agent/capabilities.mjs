@@ -130,7 +130,10 @@ export class CapabilityStore {
           const content=lines.slice(first,last).join("\n").trim();
           if(content) {
             const id=`${prefix}${first+1}`;
-            const payload={heading,startLine:first+1,endLine:last,content:content.slice(0,4000),path:file.path,title:name,url:`summon-file:${encodeURIComponent(file.path)}#L${first+1}`};
+            // Frontmatter is metadata: strip it from the card preview, but only for
+            // chunks that really start the file, never for a mid-note "---" rule.
+            const shown=first===0?noteBody(content):content;
+            const payload={heading,startLine:first+1,endLine:last,content:content.slice(0,4000),...(shown!==content?{display:shown.slice(0,4000)}:{}),path:file.path,title:name,url:`summon-file:${encodeURIComponent(file.path)}#L${first+1}`};
             pending.push({id,area:"notes",scope:root,text:`${name}\n${heading}\n${content.slice(0,4000)}`,payload,revision});
             activeIds.push(id);confirmedIds.add(id);
           }

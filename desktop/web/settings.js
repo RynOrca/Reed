@@ -17,18 +17,33 @@ const browseList=element("div"),browseMore=element("button","继续浏览","seco
 browseList.id="vault-browse";browseMore.id="vault-browse-more";browseMore.type="button";browseMore.hidden=true;
 $("vault-results").after(browseList,browseMore,browseStatus);
 browseMore.onclick=()=>action(()=>browseNotes());
+// Cards follow the width actually available next to the sidebar, not the window
+// width, so a three-column window never squeezes its cards.
+function applyCardColumns(){
+  for(const grid of [browseList,$("vault-results")]){
+    if(!grid)continue;
+    const width=grid.clientWidth;
+    grid.style.setProperty("--vault-columns",String(width>=840?3:width>=560?2:1));
+  }
+}
+// The preview shows note body text only: leading YAML frontmatter is metadata,
+// and whitespace is collapsed so the five-line clamp matches real lines.
+function excerpt(hit){const text=String(hit?.display??hit?.content??"").replace(/\s+/g," ").trim();return text.length>600?`${text.slice(0,600)}…`:text;}
 async function browseNotes(reset=false){
   if(reset){browseVersion++;browseBusy=false;browseNext=0;browseList.replaceChildren();browseMore.hidden=true;browseStatus.textContent="";}
   if(!browseRoot||browseBusy||browseNext===null)return;
   const version=browseVersion,offset=browseNext;browseBusy=true;browseMore.disabled=true;
   try{const reply=await command("browse_notes",{offset});if(version!==browseVersion)return;
-    for(const hit of reply.results||[]){const row=element("div",undefined,"card"),link=element("button",hit.title,"note-link");link.onclick=()=>action(async()=>{const file=await command("resolve_file",{path:hit.url});await tauri.core.invoke("open_local_file",{path:file.path});});row.append(link,element("p",hit.content,"note-excerpt"));browseList.append(row);}
+    for(const hit of reply.results||[]){const row=element("div",undefined,"card"),link=element("button",hit.title,"note-link");link.onclick=()=>action(async()=>{const file=await command("resolve_file",{path:hit.url});await tauri.core.invoke("open_local_file",{path:file.path});});row.append(link,element("p",excerpt(hit),"note-excerpt"));browseList.append(row);}
+    applyCardColumns();
     browseNext=reply.next;browseMore.hidden=browseNext===null;browseStatus.textContent=reply.total?`已展示 ${offset+reply.results.length} / ${reply.total} 篇${browseNext===null?"，已全部展示。":""}`:"笔记库暂无可浏览的 Markdown 笔记。";
   }catch(error){if(version===browseVersion){browseMore.hidden=false;browseStatus.textContent=`浏览失败：${error.message}，点击继续浏览重试。`;}}
   finally{if(version===browseVersion){browseBusy=false;browseMore.disabled=false;}}
 }
 function notice(text, error = false) { $("notice").hidden = !text; $("notice").textContent = text; $("notice").classList.toggle("error", error); }
 async function action(work) { try { await work(); } catch (error) { notice(String(error.message || error), true); } }
+if(typeof ResizeObserver==="function")new ResizeObserver(()=>applyCardColumns()).observe(document.querySelector("main"));
+window.addEventListener("resize",applyCardColumns);
 function command(type, args = {}) {
   const id = `${commandPrefix}${++sequence}`;
   return new Promise((resolve, reject) => {
@@ -86,7 +101,8 @@ $("save-tavily").onclick = () => action(async () => { if (!$("tavily-key").value
 for (const [id, key] of [["web-enabled", "webEnabled"], ["browser-enabled", "browserEnabled"]]) $(id).onchange = () => action(async () => { try { await command("configure_capabilities", { [key]: $(id).checked }); } catch(e) { $(id).checked = !$(id).checked; throw e; } });
 $("vault-search-form").onsubmit = event => { event.preventDefault(); void action(async () => {
   const r = await command("search_notes", { query: $("vault-query").value }); $("vault-results").replaceChildren();
-  for (const hit of r.results || []) { const row = element("div", undefined, "card"), link = element("button", `${hit.title} · 第 ${hit.startLine}–${hit.endLine} 行`, "note-link"); link.onclick = () => action(async () => { const file = await command("resolve_file", { path: hit.url }); await tauri.core.invoke("open_local_file", { path: file.path }); }); row.append(link, element("p", hit.content, "note-excerpt")); $("vault-results").append(row); }
+  for (const hit of r.results || []) { const row = element("div", undefined, "card"), link = element("button", `${hit.title} · 第 ${hit.startLine}–${hit.endLine} 行`, "note-link"); link.onclick = () => action(async () => { const file = await command("resolve_file", { path: hit.url }); await tauri.core.invoke("open_local_file", { path: file.path }); }); row.append(link, element("p", excerpt(hit), "note-excerpt")); $("vault-results").append(row); }
+  applyCardColumns();
   if (!r.results?.length) $("vault-results").append(element("p", "没有匹配段落。可以尝试笔记标题或更具体的关键词。", "hint"));
 }); };
 function renderLearner(profile) {
