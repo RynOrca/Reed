@@ -14,7 +14,7 @@ const project=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 const artifacts=join(project,'dist','real-memory-acceptance');await mkdir(artifacts,{recursive:true});
 function option(name){const index=process.argv.indexOf(name);return index>=0?process.argv[index+1]:null;}
 const helperEffort=option('--helper-effort')||'low';assert.ok(['low','none','configured'].includes(helperEffort),'辅助思考只允许low、none或保留配置');
-const suite=option('--suite')||'full';assert.ok(['full','notes-profile','profile-only','profile-correction','work-shell','work-pwsh','work-scope','work-update','work-replace','work-learn','notes-only','learning-study','learning-review'].includes(suite),`未知验收套件：${suite}`);
+const suite=option('--suite')||'full';assert.ok(['full','notes-profile','profile-only','profile-correction','work-shell','work-pwsh','work-scope','work-update','work-replace','work-learn','notes-only','learning-study','learning-review','latency'].includes(suite),`未知验收套件：${suite}`);
 const bridgePath=resolve(option('--bridge-path')||join(artifacts,'snapshot-agent','bridge.mjs'));
 const reportPath=option('--report-path')?resolve(project,option('--report-path')):join(artifacts,suite==='notes-profile'?'continuation-notes-profile.json':suite==='profile-only'?'continuation-profile-only.json':'report.json');
 assert.ok(reportPath.startsWith(artifacts+sep),`报告路径必须位于 ${artifacts} 下`);
@@ -99,7 +99,7 @@ let seq=0;
 async function start(){
   const child=spawn(process.execPath,[bridgePath],{cwd:workspace,windowsHide:true,env:{...process.env,SUMMON_DATA_DIR:data,SUMMON_WORKSPACE:workspace},stdio:['pipe','pipe','pipe']});
   const seen=[],waiters=new Set();let stderr='';child.stderr.on('data',c=>stderr+=c);
-  createInterface({input:child.stdout}).on('line',line=>{let event;try{event=JSON.parse(line);}catch{return;}seen.push(event);for(const w of [...waiters])if(w.p(event)){waiters.delete(w);clearTimeout(w.timer);w.resolve(event);}});
+  createInterface({input:child.stdout}).on('line',line=>{let event;try{event=JSON.parse(line);}catch{return;}event.observedAt=Date.now();seen.push(event);for(const w of [...waiters])if(w.p(event)){waiters.delete(w);clearTimeout(w.timer);w.resolve(event);}});
   const until=(p,timeout=maxCaseMs)=>{const match=seen.find(p);if(match)return Promise.resolve(match);return new Promise((resolve,reject)=>{const w={p,resolve};w.timer=setTimeout(()=>{waiters.delete(w);reject(Error('隔离Agent等待超时'));},timeout);waiters.add(w);});};
   child.on('exit',()=>{for(const w of waiters){clearTimeout(w.timer);w.resolve({type:'error',message:'隔离Agent退出'});}waiters.clear();});
   bridge={child,seen,until,async command(type,args={},timeout=maxCaseMs){const id='real-'+(++seq);child.stdin.write(JSON.stringify({id,type,...args})+'\n');const event=await until(m=>m.id===id&&['ack','done','error','goals'].includes(m.type),timeout);if(event.type==='error')throw Error(event.message);return event;}};
@@ -109,7 +109,7 @@ async function stop(){if(!bridge)return;const {child}=bridge;bridge=null;const c
 async function prompt(name,text,{continueOnError=false,timeoutMs=maxCaseMs}={}){
   caseName=name;const begin=Date.now(),index=bridge.seen.length,startRequest=requests.length,startCalls=shellCalls.length;
   console.log('START '+name);let outcome,error;try{outcome=await bridge.command('prompt',{text},timeoutMs);}catch(e){error=e;}
-  const events=bridge.seen.slice(index);const item={name,ms:Date.now()-begin,prompt:text,outcome:outcome?.outcome,error:error?.message,text:events.filter(e=>e.type==='delta'&&e.kind!=='thinking').map(e=>e.text).join(''),thinkingCharacters:events.filter(e=>e.type==='delta'&&e.kind==='thinking').reduce((n,e)=>n+(e.text?.length||0),0),toolStarts:events.filter(e=>e.type==='tool_start').map(e=>({name:e.name,args:e.args})),toolResults:events.filter(e=>e.type==='tool_end'),requestStart:startRequest,shellStart:startCalls};cases.push(item);console.log('DONE '+name+' '+item.ms+'ms');await writeReport();if(error&&!continueOnError)throw error;return item;
+  const events=bridge.seen.slice(index);const first=p=>{const e=events.find(p);return e?e.observedAt-begin:null;};const item={name,ms:Date.now()-begin,prompt:text,outcome:outcome?.outcome,error:error?.message,text:events.filter(e=>e.type==='delta'&&e.kind!=='thinking').map(e=>e.text).join(''),thinkingCharacters:events.filter(e=>e.type==='delta'&&e.kind==='thinking').reduce((n,e)=>n+(e.text?.length||0),0),toolStarts:events.filter(e=>e.type==='tool_start').map(e=>({name:e.name,args:e.args})),toolResults:events.filter(e=>e.type==='tool_end'),requestStart:startRequest,shellStart:startCalls,timing:{firstKnowledgeStatusMs:first(e=>e.type==='knowledge_progress'),firstThinkingMs:first(e=>e.type==='delta'&&e.kind==='thinking'&&e.text),firstVisibleTextMs:first(e=>e.type==='delta'&&e.kind!=='thinking'&&e.text),firstToolMs:first(e=>e.type==='tool_start')},knowledgeProgress:events.filter(e=>e.type==='knowledge_progress').map(e=>({phase:e.phase,count:e.count,ms:e.observedAt-begin}))};cases.push(item);console.log('DONE '+name+' '+item.ms+'ms');await writeReport();if(error&&!continueOnError)throw error;return item;
 }
 async function waitWork(){
   const end=Date.now()+50000;while(Date.now()<end){let memory;try{memory=JSON.parse(await readFile(join(data,'memory.json'),'utf8'));}catch{}if(memory?.working?.length)return memory;await new Promise(r=>setTimeout(r,500));}return null;
@@ -239,6 +239,15 @@ async function runLearningSuite(){
   await writeReport();
 }
 async function run(){
+  if(suite==='latency'){
+    await start();await bridge.command('save_role',{roleId:'agent',name:'响应速度验收',system:'你是学习辅助助手，回答简短。已有原文足够时直接引用，证据不足时主动查笔记，不编造，不保存记忆。',learnerProfileEnabled:false});await bridge.command('new_session');
+    await resilientPrompt('latency-plain','只回答“收到”，不要使用工具或保存记忆。','latency-plain');
+    await writeFile(join(vault,'特征分解.md'),'# 特征分解\n\n本学习组把特征向量称为“定向杆”。我们的独有约定：每轮先画两支定向杆，再用紫色标注对应的伸缩倍率。验收口令：青铜海燕。\n');await writeFile(join(vault,'Reed-笔记库总览.md'),'# 总览\n数学：特征分解.md，包含特征向量与本学习组的绘图约定。\n');
+    await bridge.command('configure_capabilities',{vaultPath:vault});await bridge.command('new_session');
+    await resilientPrompt('latency-local','根据我的特征分解笔记，简短回答作图顺序、标注颜色和验收口令，并引用原文。','latency-local');
+    await bridge.command('new_session');await resilientPrompt('latency-paraphrase','According to my notes, give the drawing order, highlight colour and verification phrase for eigenvectors. Cite the original note, do not guess.','latency-paraphrase');
+    report.latencySamples=cases.map(c=>({name:c.name,ms:c.ms,...c.timing,status:c.outcome?.status||c.status||'incomplete',requests:requests.filter(r=>r.case===c.name).length,failedRequests:requests.filter(r=>r.case===c.name&&r.status!==200).map(r=>({kind:r.kind,status:r.status,ms:r.ms})),hasEvidence:c.name==='latency-plain'?null:/特征分解\.md/.test(c.text)&&/紫色/.test(c.text)&&/青铜海燕/.test(c.text)}));await writeReport();return;
+  }
   const seedIndex=process.argv.indexOf('--continue-from');
   if(suite.startsWith('learning-')){await runLearningSuite();return;}
   if(suite.startsWith('work-')){await runWorkSuite();return;}
