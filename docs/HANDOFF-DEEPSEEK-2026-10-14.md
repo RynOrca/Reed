@@ -158,4 +158,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File desktop/tools/package-instal
 
 ## 保全记录
 
-本文件与 WIP 一起落盘。WIP 保全提交会以 `wip:` 标记，**不是修复完成提交**；最终交接记录提交在Git日志和CHANGELOG可查。接手可基于原基线审查 diff，避免丢失本轮未验收代码。没有运行中的本轮测试等待继续；性能基线和定向测试均已退出。全量、构建、原生、真实模型验证仍 pending；外部发布/运行态核对 out-of-scope；平台记忆未修改。
+WIP 保全提交：`c8e35a7553991c90b6546caba5269581c14147b2`（`wip: preserve unverified cancellation and vault fixes for DeepSeek handoff`），**不是修复完成提交**；最终交接记录提交在Git日志和CHANGELOG可查。接手可基于原基线审查 diff，避免丢失本轮未验收代码。没有运行中的本轮测试等待继续；性能基线和定向测试均已退出。全量、构建、原生、真实模型验证仍 pending；外部发布/运行态核对 out-of-scope；平台记忆未修改。
