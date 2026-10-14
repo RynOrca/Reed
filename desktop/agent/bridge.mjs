@@ -167,8 +167,11 @@ async function getRuntime() {
     await providers.install(created);
     const completeAuxiliary = createAuxiliaryCompleter(created.completeSimple.bind(created));
     created.completeSimple = (model, context, options={}) => {
-      const {requestPriority='foreground',requestTimeoutMs,queueTimeoutMs,onRequestState,...requestOptions}=options;
-      requestOptions.fetch = createRequestFetch(options.fetch || globalThis.fetch, {signal:options.signal, totalMs:requestTimeoutMs||300000, idleMs:requestTimeoutMs||90000,diagnostic:entry=>{onRequestState?.({state:'running',phase:entry.phase,elapsedMs:entry.elapsedMs});return diagnostic({...entry,provider:model.provider,model:model.id,requestGroup:'auxiliary'});}});
+      const {requestPriority='foreground',requestTimeoutMs,idleTimeoutMs,queueTimeoutMs,onRequestState,...requestOptions}=options;
+      // A silent stream must not hold the shared endpoint slot for the whole total
+      // bound: the idle bound is separate and callers may shorten it.
+      const totalMs=requestTimeoutMs||300000, idleMs=Math.min(idleTimeoutMs??totalMs,totalMs);
+      requestOptions.fetch = createRequestFetch(options.fetch || globalThis.fetch, {signal:options.signal, totalMs, idleMs, diagnostic:entry=>{onRequestState?.({state:'running',phase:entry.phase,elapsedMs:entry.elapsedMs});return diagnostic({...entry,provider:model.provider,model:model.id,requestGroup:'auxiliary'});}});
       if(requestTimeoutMs!==undefined)return modelRequests.complete(model,{signal:options.signal,priority:requestPriority,requestTimeoutMs,queueTimeoutMs,onState:onRequestState},signal=>completeAuxiliary(model,context,{...requestOptions,signal}));
       return modelRequests.run(model,{signal:options.signal,priority:requestPriority},()=>completeAuxiliary(model,context,requestOptions));
     };

@@ -101,7 +101,49 @@ test('切换笔记库后，旧目录延迟恢复不能覆盖新目录状态',()=
 test('timeout explains preserved batches and retry resumes instead of restarting',()=>fixture(async(dir,root)=>{
   await writeFile(join(root,'note.md'),'# 矩阵\n正文');let calls=0;
   const capabilities={dir,state:{vaultPath:root}};
-  const task=new VaultOverview({capabilities,model,send(){},runtime:async()=>({completeSimple:async(_m,_c,options)=>{calls++;assert.equal(options.requestTimeoutMs,300000);assert.equal(options.signal.aborted,false);if(calls===2)return {stopReason:'error',errorMessage:'Request timed out.',content:[]};return {stopReason:'stop',content:[{type:'text',text:'note.md：矩阵'}]};}})});
+  const task=new VaultOverview({capabilities,model,send(){},runtime:async()=>({completeSimple:async(_m,_c,options)=>{calls++;assert.equal(options.requestTimeoutMs,300000);assert.equal(options.idleTimeoutMs,120000);assert.equal(options.signal.aborted,false);if(calls===2)return {stopReason:'error',errorMessage:'Request timed out.',content:[]};return {stopReason:'stop',content:[{type:'text',text:'note.md：矩阵'}]};}})});
   await task.ensure();assert.equal(task.snapshot().state,'error');assert.match(task.snapshot().message,/模型服务请求超时/);assert.match(task.snapshot().message,/已保存完成批次/);
   await task.ensure();assert.equal(calls,3);assert.equal(task.snapshot().state,'ready');
+}));
+
+// Six notes force three 6000-character batches; one failed batch must not lose
+// the other two, and the retry must re-request only the missing batch.
+const batchFixture=async(root,count=6)=>{for(let i=0;i<count;i++)await writeFile(join(root,`note-${i}.md`),`# 笔记 ${i}\n\n${'矩阵特征值内容'.repeat(300)}`);};
+
+test('单个批次失败不丢弃其他批次，重试只补齐失败批次',()=>fixture(async(dir,root)=>{
+  await batchFixture(root);const capabilities={dir,state:{vaultPath:root}};const first=[],second=[];let run=1,fail=0;
+  const text=context=>context.messages[0].content[0].text;
+  const runtime=async()=>({completeSimple:async(_m,context)=>{
+    if(run===1){first.push(text(context));if(first.length===2){fail++;return {stopReason:'error',errorMessage:'Request timed out.',content:[]};}return {stopReason:'stop',content:[{type:'text',text:`摘要 ${first.length}`}]};}
+    second.push(text(context));return {stopReason:'stop',content:[{type:'text',text:'补齐摘要'}]};
+  }});
+  const task=new VaultOverview({capabilities,model,send(){},runtime});
+  await task.ensure();
+  assert.equal(fail,1);assert.equal(first.length,4,'三批摘要加一次汇总');
+  assert.equal(task.snapshot().state,'ready','一个批次失败后仍生成总览');
+  assert.equal(task.snapshot().failed,1);
+  const written=await readFile(join(root,OVERVIEW_FILE),'utf8');assert.match(written,/1 批笔记本轮未完成摘要/);
+  assert.match(written,/补齐|摘要/);
+  await rm(join(root,OVERVIEW_FILE));
+  run=2;const restarted=new VaultOverview({capabilities,model,send(){},runtime});
+  await restarted.ensure();
+  assert.equal(second.length,2,'重试只请求失败批次和最终汇总');
+  assert.equal(second[0],first[1],'重试请求的正是失败的那一批');
+  assert.equal(restarted.snapshot().state,'ready');
+  assert.equal(restarted.snapshot().failed,0);
+}));
+
+test('压缩阶段失败仍产出总览并标注未完整覆盖',()=>fixture(async(dir,root)=>{
+  await batchFixture(root);const capabilities={dir,state:{vaultPath:root}};let calls=0;
+  const runtime=async()=>({completeSimple:async(_m,context)=>{calls++;const input=context.messages[0].content[0].text;
+    if(calls<=3)return {stopReason:'stop',content:[{type:'text',text:'批'.repeat(6000)}]};
+    if(calls===4)return {stopReason:'error',errorMessage:'Request timed out.',content:[]};
+    return {stopReason:'stop',content:[{type:'text',text:'压缩后的总览正文'}]};}});
+  const task=new VaultOverview({capabilities,model,send(){},runtime});
+  await task.ensure();
+  assert.ok(calls>=5,'压缩失败后仍继续汇总');
+  assert.equal(task.snapshot().state,'ready');
+  const written=await readFile(join(root,OVERVIEW_FILE),'utf8');
+  assert.match(written,/压缩后的总览正文/);
+  assert.match(written,/最终汇总只读取了部分摘要/);
 }));
