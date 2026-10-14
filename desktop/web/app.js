@@ -26,6 +26,7 @@ let activeSessionId = "";
 let activeSessionName = "";
 let sequence = 0;
 let running = false;
+let recoveryStatus = "";
 let turnErrorShown = false;
 let assistantRow = null;
 let thinkingRow = null;
@@ -50,6 +51,7 @@ function scrollToLatest() { if(followLatest)transcript.scrollTop = transcript.sc
 function refreshEmpty() { $("empty-state").hidden = messages.childElementCount > 0; }
 function setRunning(value) {
   running = value;
+  if (!value) recoveryStatus = "";
   updateSendAvailability();
   $("stop-button").hidden = !value;
   status(value ? "PI 正在回复…" : "就绪");
@@ -467,8 +469,9 @@ function onEvent(event) {
     case "memory_status": if (!running) status(response.status === "organizing" ? "Agent 正在整理记忆…" : "就绪"); break;
     case "sessions": renderSessions(response.sessions || []); break;
     case "history": restoreHistory(response.messages || []); status("就绪"); break;
-    case "model_queue": if (running) status(response.state === "waiting" ? "正在等待模型服务空闲…" : "PI 正在回复…"); break;
+    case "model_queue": if (running) status(response.state === "waiting" ? (recoveryStatus ? recoveryStatus + "（等待模型服务空闲）" : "正在等待模型服务空闲…") : recoveryStatus || "PI 正在回复…"); break;
     case "delta": {
+      recoveryStatus = "";
       if (running) status("PI 正在回复…");
       if (response.kind === "thinking") {
         if (!thinkingRow) { thinkingRow = disclosure({ kind: "thinking", title: "思考过程", state: "running" }); thinkingRow.head.click(); }
@@ -497,12 +500,12 @@ function onEvent(event) {
       break;
     }
     case "compaction": $("compaction-state").textContent=response.status==="running"?"正在压缩上下文…":response.status==="error"?"压缩失败："+response.message:response.status==="skipped"?response.message:"上下文已压缩";$("compact-now").disabled=response.status==="running";break;
-    case "started": submitted = null; turnErrorShown = false; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
+    case "started": recoveryStatus = ""; submitted = null; turnErrorShown = false; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
     case "message_outcome":
       finishThinking(response.outcome);
       assistantRow = null; thinkingRow = null; break;
     case "recovery":
-      setRunning(true); status(response.message || "正在恢复模型回复…");
+      setRunning(true); recoveryStatus = response.message || "正在恢复模型回复…"; status(recoveryStatus);
       break;
     case "visual_review":
       status(response.message || "正在视觉验收…");

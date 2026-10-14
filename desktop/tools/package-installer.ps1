@@ -1,8 +1,8 @@
-param([string]$Output = "")
+﻿param([string]$Output = "")
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'executable-integrity.ps1')
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
-$appVersion = (Get-Content -LiteralPath (Join-Path $root 'desktop/src-tauri/tauri.conf.json') -Raw | ConvertFrom-Json).version
+$appVersion = (Get-Content -LiteralPath (Join-Path $root 'desktop/src-tauri/tauri.conf.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
 if ($appVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'A numeric major.minor.patch application version is required.' }
 $tauri = Join-Path $root 'node_modules/.bin/tauri.cmd'
 if (-not (Test-Path -LiteralPath $tauri)) { throw 'Run npm ci in the repository first.' }

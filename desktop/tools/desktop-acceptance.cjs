@@ -15,7 +15,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
   let receivedImage=false;
   const recoveryCalls = new Map(), recoveryRequests = [], releaseRecovery = new Map();
   const server = createServer(async (req, res) => {
-    if (req.url === '/v1/models') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: [{ id: 'isolated-learning-model', context_length: 65536, supports_reasoning: true, reasoning_efforts: ['off','low','high'] }] })); return; }
+    if (req.url === '/v1/models') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: [{ id: 'isolated-learning-model', context_length: 65536, supports_reasoning: true, reasoning_efforts: ['off','low','medium'] }] })); return; }
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString()); apiCalls++;
     if(body.messages.some(m=>Array.isArray(m.content)&&m.content.some(b=>b.type==='image_url'&&b.image_url?.url?.startsWith('data:image/'))))receivedImage=true;
@@ -136,16 +136,16 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     assert.ok((await settings.locator('.model-info').textContent()).includes('65,536')); checks.push('提供商卡片配置、模型发现及能力展示');
     const actionAlignment=await settings.locator('.model-info button').first().evaluate(e=>({align:getComputedStyle(e).alignItems,justify:getComputedStyle(e).justifyContent,padding:getComputedStyle(e).paddingTop}));assert.equal(actionAlignment.align,'center');assert.equal(actionAlignment.justify,'center');assert.equal(actionAlignment.padding,'7px');checks.push('供应商表单间距及模型配置按钮居中');
     await settings.screenshot({path:path.join(artifacts,'settings-models.png')});
-    await settings.locator('.model-info').getByRole('button',{name:'获取配置',exact:true}).click();
+    await settings.locator('#providers .configured').click();await settings.locator('.model-info').getByRole('button',{name:'获取配置',exact:true}).click();
     await settings.locator('#manual-model').filter({hasText:''}).waitFor({state:'visible'});
     assert.equal(await settings.locator('#manual-model').inputValue(),'isolated-learning-model');
-    assert.equal(await settings.locator('#manual-context').inputValue(),'65536');assert.equal(await settings.locator('#manual-levels').inputValue(),'low, high');checks.push('获取配置展示上下文与档位，保持当前模型不变');
+    assert.equal(await settings.locator('#manual-context').inputValue(),'65536');assert.equal(await settings.locator('#manual-levels').inputValue(),'low, medium');checks.push('获取配置展示上下文与档位，保持当前模型不变');
     const beforeModel=await main.locator('#model-label').innerText();
     await main.locator('#model-button').click();await main.locator('.model-option').first().click();await main.locator('#thinking-step').waitFor({state:'visible'});await main.keyboard.press('Escape');assert.equal(await main.locator('#model-label').innerText(),beforeModel);
     await main.locator('#model-button').click();await main.locator('.model-option').first().click();
-    await main.locator('#thinking-level').selectOption('high');await main.locator('#model-apply').click();
-    await main.waitForFunction(()=>document.getElementById('model-thinking').textContent.includes('高'));checks.push('模型与思考分步选择，取消不切换，确认后组合展示');
-    await main.locator('#status-model').filter({hasText:'isolated-learning-model · high'}).waitFor();
+    await main.locator('#thinking-level').selectOption('medium');await main.locator('#model-apply').click();
+    await main.waitForFunction(()=>document.getElementById('model-thinking').textContent.includes('中'));checks.push('模型与思考分步选择，取消不切换，确认后组合展示');
+    await main.locator('#status-model').filter({hasText:'isolated-learning-model · medium'}).waitFor();
     assert.equal(await main.locator('.compact-button-label').allTextContents().then(a=>a.join(',')),'Model,Role');assert.equal(await main.locator('#model-label').isVisible(),false);
     for (const id of ['model-button','role-button']) { const style=await main.locator('#'+id).evaluate(e=>({border:getComputedStyle(e).borderTopWidth,background:getComputedStyle(e).backgroundColor}));assert.equal(style.border,'0px');assert.equal(style.background,'rgba(0, 0, 0, 0)'); }
     assert.ok((await main.locator('.status-line').evaluate(e=>getComputedStyle(e,'::before').backdropFilter)).includes('blur'));checks.push('窄窗仅模型角色按钮、项目旁布局与就绪行内渐变模糊');
@@ -288,13 +288,13 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     await settings.locator('button[data-section="mcp"]').click();assert.equal(await settings.locator('#mcp-stdio-fields').isVisible(),false);await settings.locator('#mcp-transport').selectOption('stdio');assert.equal(await settings.locator('#mcp-http-fields').isVisible(),false);await settings.locator('#mcp-transport').selectOption('http');await settings.locator('#mcp-name').fill('按需隔离服务器');await settings.locator('#mcp-url').fill('http://127.0.0.1:1/mcp');await settings.locator('#mcp-form button[type="submit"]').click();
     await settings.locator('#mcp-list').filter({hasText:'按需隔离服务器'}).waitFor();assert.ok((await settings.locator('#mcp-list').innerText()).includes('按需连接'));await settings.screenshot({path:path.join(artifacts,'settings-mcp.png')});checks.push('MCP 设置保存后保持未连接，避免启动时加载');
     await settings.locator('button[data-section="models"]').click();
-    await settings.locator('.model-info').getByRole('button',{name:'编辑',exact:true}).click();await settings.locator('#manual-vision').check();await settings.locator('#manual-save').click();await settings.locator('#notice').filter({hasText:'模型信息已保存'}).waitFor();
+    await settings.locator('#providers .configured').click();await settings.locator('.model-info').getByRole('button',{name:'编辑',exact:true}).click();await settings.locator('#manual-vision').check();await settings.locator('#manual-save').click();await settings.locator('#notice').filter({hasText:'信息已保存'}).waitFor();
     await main.locator('#prompt').fill('IMAGE_TEST');await main.evaluate(data=>{const transfer=new DataTransfer();transfer.items.add(new File([Uint8Array.from(atob(data),c=>c.charCodeAt(0))],'clipboard.png',{type:'image/png'}));document.getElementById('prompt').dispatchEvent(new ClipboardEvent('paste',{clipboardData:transfer,bubbles:true,cancelable:true}));},(await fs.readFile(path.resolve(__dirname,'../src-tauri/icons/icon.png'))).toString('base64'));await main.locator('#attachment-strip img').waitFor();await main.locator('#send-button').click();await main.waitForFunction(()=>document.getElementById('status').textContent==='就绪');assert.ok(receivedImage);
     await main.getByRole('button',{name:'查看图片',exact:true}).click();await main.locator('#image-dialog').waitFor({state:'visible'});assert.ok((await main.locator('#image-preview').getAttribute('src')).startsWith('data:image/png;base64,'));await main.keyboard.press('Escape');await main.locator('#image-dialog').waitFor({state:'hidden'});checks.push('视觉能力保存立即生效，剪贴板图片发送与点击预览');
-    await settings.locator('.model-info').getByRole('button',{name:'编辑',exact:true}).click();
-    await settings.locator('#manual-output').fill('32768');await settings.locator('#manual-save').click();
+    await settings.locator('#providers .configured').click();await settings.locator('.model-info').getByRole('button',{name:'编辑',exact:true}).click();
+    await settings.locator('#manual-output').fill('32768');await settings.locator('#manual-save').click();await settings.locator('#notice').filter({hasText:'信息已保存'}).waitFor();await settings.locator('#providers .configured').click();
     await settings.locator('.model-info').filter({hasText:'32,768 最大输出'}).waitFor();
-    await settings.locator('.model-info').getByRole('button',{name:'编辑',exact:true}).click();
+    await settings.locator('#providers .configured').click();await settings.locator('.model-info').getByRole('button',{name:'编辑',exact:true}).click();
     assert.equal(await settings.locator('#manual-output').inputValue(),'32768');
     checks.push('最大输出长度保存、卡片展示和编辑回显');
     await main.evaluate(async()=>{window._recoveryEvents=[];await window.__TAURI__.event.listen('agent-event',e=>window._recoveryEvents.push(e.payload));});
