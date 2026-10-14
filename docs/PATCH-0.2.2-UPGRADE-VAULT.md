@@ -25,7 +25,9 @@
 | Reed-0.2.2-setup.exe | 50,583,021 | a3cbfeef0b38ba0b9218a6dc67eb555b4552a12e9d0cbb42bf67f99740e2c7a1 |
 | Reed-0.2.2-portable.zip | 81,182,866 | 3e0cdab476c6106e5613705ad81bb4fc72e8ad2b8d31d9c56aa5334f1ed66d0d |
 
-独立重新计算产物哈希与SHA256SUMS.txt一致。安装器嵌入清单覆盖15061个依赖文件。最新卡片五行截图已人工查看，继续浏览按钮和内容截断正常。源码推送和草稿替换核对另记。
+独立重新计算产物哈希与SHA256SUMS.txt一致。安装器嵌入清单覆盖15061个依赖文件。最新卡片五行和恢复桌面后的宽窗截图已人工查看，继续浏览按钮和内容截断正常。验收进程无遗留。
+
+验收提交737a503f17db2efad73d9f31254eff2efb2878bf已推送origin/0.2.2；草稿ID412479090目标同步为该提交，三个附件全部uploaded，远端大小及SHA256均与上表一致；校验文件179字节，digest=7cd22f6e5a7f80ef1c029f8d726eaef014aded7fdbf7c84ea7687d732b5eeb1b。仍draft=true，未公开发布。当前草稿链接：https://github.com/RynOrca/Reed/releases/tag/untagged-132d42b1f1d6f4c08063 。本条之后的收尾提交只记录完成状态。
 
 补充NSIS变体窗口验收前两次停在“Pointer is outside owned test window”，系统截图全黑，未绕过保护。用户恢复可交互桌面后，本次新包10项真实拖拽/缩放、隐藏/重启恢复、主题/图标恢复全部通过；位置大小最终均为x220/y150/1080×860。证据native-window-restored-desktop.log及native-window-final.json。当前原生13+39+10项通过，安装器另4项通过，不重复引用旧构建结果。
 
