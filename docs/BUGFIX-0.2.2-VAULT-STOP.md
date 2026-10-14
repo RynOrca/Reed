@@ -153,7 +153,21 @@
 
 验证：全量 Agent **199/199**；浏览器验收新增断言（按钮与输入框同行居右、检索中 spinner、成功计数、浏览隐藏/恢复、空结果文案、进度条 42% 宽度与右下角间距、完成后隐藏）全部通过。
 
-## 7. 统一验证与构建
+## 7. 追加三：模型实测汇报的三条检索问题（`6a53df7` / `c296cb2` / `2d5379d`）
+
+| 汇报 | 定位 | 修复 |
+|---|---|---|
+| 读了 spaced-review 技能文件，第一次 `recall_memory(area=review)` 仍被拒，第二次才返回 `[]` | 门控只在 `tool_result`（读取完成后）置位，而同一轮多个工具**默认可并行**，同批 `read`+`recall_memory` 会让 recall 先跑；另外 `prepareSkills()` 在引导/排队消息里也会清空门控 | 新增 `review-gate.mjs`：`tool_call` 阶段即置位（失败回退），键从「会话+用户原文」改为「会话+轮次 id」——同轮引导消息不关闭、新一轮仍须重读；未通过时给出可执行提示（`read` 技能 SKILL.md 绝对路径后重试） |
+| 复习队列返回 `[]`，但画像有 3 条 `needs_review`，两边矛盾、模型拿不到系统日期 | `learner.recall()` 对 `area=review` 也套查询词过滤（`similarTopic(subject,query) || detail.includes(query)`）+ `slice(-6)`，查询词与主题不匹配即返回空；自动注入的画像还过滤掉 `needs_review` 且不带 `nextReview` | 新增 `reviewQueue()`：返回全部 `needs_review` 条目，按 `nextReview` 升序（逾期优先、未排程 `null` 排最后），带 `lastReviewResult`；查询词只在**同一天内**调整相关性顺序；`context()` 的 `brief` 增加 `nextReview`（仍只在加载复习技能后列出，不泄露给默认上下文） |
+| `search_notes` 排序噪声：`------` 分隔线 36.8 分排第一，真正含 `kwargs.get('temperature', 0.7)` 的片段 17.2 分排第 6 | 索引文本是「文件名 + 继承标题 + 片段正文」单列 bm25 排序，bm25 对短文档强加权，3~4 token 的标题行/分隔线靠标题里的词拿到虚高分 | **索引期** `indexableChunk()` 剔除分隔线/围栏/权重不足（<6，CJK 记 2）的片段；**排序期** `rankHits()` 按命中层级分组（正文命中 > 仅标题/路径命中 > 只有标题的片段），组内按查询词覆盖率 + 短语命中 − 长度惩罚打分；对外 `score` 归一化 0~1，原始 bm25 保留在 `bm25` 字段 |
+
+本机复现（合成笔记，查询 `kwargs 默认值 temperature`）：修复前第 1 名是标题行 2.07、第 2 名是 `------` 2.07、真正含答案的代码片段 0.38 排最后；修复后正文命中优先，只有标题的片段降级保留作导航，分隔线不再入库。
+
+验证：全量 Agent **212/212**（新增 rank-quality 5、review-queue 4、review-gate 4）；构建 `dist/Reed-0.2.2-retrieval-quality`（产品源 `2d5379d`，setup.exe 50,599,387 字节 SHA256 `36b3aa01…`，portable.zip SHA256 `60883a4a…`，38 个 Agent 模块含新增 `review-gate.mjs`）；原生完整桌面验收 **41/41、页面错误 0**（停止 70ms 回空闲）。
+
+未做（等评估后决定）：模型 rerank、向量/混合检索——两者都不解决本轮这三类问题（时序、口径、排序函数），需要单独讨论成本与授权。
+
+## 8. 统一验证与构建
 
 | 验证 | 结果 |
 |---|---|
@@ -187,7 +201,7 @@
 3. **Rust 测试进程无法写系统临时目录**：`profile::tests` 在 `%TEMP%` 建目录报 `Os { code: 5, PermissionDenied }`（同一路径用 pwsh/Node 可以写）。把 `TEMP`/`TMP` 指向工作区内目录后 4/4 通过。产品代码本身用 `%TEMP%` 的行为未受影响。
 4. Playwright npm 模块不在本仓库，验收脚本通过 `SUMMON_PLAYWRIGHT_PATH` 指向本机 `playwright-core`，浏览器用 `SUMMON_EDGE_PATH` 指向本机 Chromium。
 
-## 8. 明确未验证 / 未做
+## 9. 明确未验证 / 未做
 
 - 真实用户笔记库：未读取、未覆盖、未做 DELETE/PUT 演练；真实 DeepSeek 只用于第 5 节的合成笔记库并行验证（隔离 profile、3 次请求、测后删除配置副本），**未发送任何真实笔记**。
 - 官方接口上的停止、medium 档位总览、真实笔记检索延迟：本轮未复验（medium 与真实库需要另行授权）。
@@ -196,12 +210,13 @@
 - 推送 origin/0.2.2、更新 Release Draft（ID 412479090，保持 Draft）：本轮未做，等待用户指示。
 - 应用内更新签名产物：无私钥，未生成。
 
-## 9. 剩余计划
+## 10. 剩余计划
 
 1. 用户在真实笔记库与官方 DeepSeek 上复验：停止（正文停滞/思考中/排队）、medium 总览（可用本轮的并行并发数缩短总时长）、检索首字延迟。需要用户明确授权付费调用与真实笔记访问。
 2. 若真实总览仍在某批次超时，按本轮新增的 `done/batches/failed` 计数与 `request-diagnostics.jsonl` 阶段日志定位到具体批次与阶段，再决定是否调整批次大小、思考预算或并发数。
 3. 并行数是“所选总览模型所在提供商”的设置（当前 DeepSeek 为 5）：批次多于并发时会排队；调高并发会同时占用更多服务额度，可按实际限流调整 `maxConcurrentRequests`。
 4. 大库（>2000 篇）FTS 排序仍是单次约 150ms 同步块；如需更低延迟，下一步是把索引与检索移入 worker 线程（本轮未做，避免在 Windows 上引入 SQLite 多进程写入风险）。
 5. 推送源码、按用户指示更新同一个 Release Draft 附件（保持 Draft）。
+
 
 

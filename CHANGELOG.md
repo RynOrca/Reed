@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 2026-10-15 — 检索排序重排、复习队列口径与技能加载门控（模型实测汇报）
+
+- `6a53df7` 排序噪声：本机复现模型报告的场景（查 `kwargs 默认值 temperature`：`------` 2.07、标题行 2.07、真正含 `kwargs.get('temperature', 0.7)` 的片段 0.38 排最后）。根因是索引文本「文件名+继承标题+片段正文」单列 bm25 排序对短片段强加权。修复：索引期 `indexableChunk()` 剔除分隔线/围栏/权重不足的片段；排序期 `rankHits()` 按命中层级（正文命中 > 仅标题/路径命中 > 只有标题的片段）分组，组内按查询词覆盖率 + 短语命中 − 长度惩罚打分；对外 `score` 归一化 0~1，原始 bm25 存入 `bm25` 字段。
+- `c296cb2` 复习队列：`learner.recall()` 对 `area=review` 也套查询词过滤 + `slice(-6)`，查询词不匹配就返回 `[]`，于是“队列空、画像有 3 条 needs_review”同时出现。修复：新增 `reviewQueue()` 返回全部待复习条目，按 `nextReview` 升序（逾期优先、未排程排最后）并带 `nextReview/lastReviewResult`；查询词只在同一天内调整相关性顺序；`context()` 增加 `nextReview`（仅加载复习技能后列出）。
+- `2d5379d` 技能加载门控：原来只在 `tool_result` 置位，而同一轮多个工具默认可并行，同批 `read`+`recall_memory` 会让 recall 先跑；`prepareSkills()` 在引导/排队消息里还会清空门控。修复：新增 `review-gate.mjs`（`tool_call` 即置位、失败回退、键为「会话+轮次 id」），同一轮引导消息不再关闭门控、新一轮仍须重读；未通过时提示用 `read` 读取技能 SKILL.md 的绝对路径后重试。
+- 验证：全量 Agent **212/212**（新增 rank-quality 5、review-queue 4、review-gate 4）；构建 `dist/Reed-0.2.2-retrieval-quality` 并重跑原生完整桌面验收。未做：模型 rerank、向量/混合检索（等评估后再定）。
 ## 2026-10-15 — 总览阶段提示不再累积、进度条与检索交互
 
 - `ea4efcb`：修复用户截图里的“阶段提示越来越长”——`complete()` 原来用 `this.status.message` 当阶段名，而那正是上一条完整提示，于是每个阶段事件都再追加一段。改为调用方显式传入阶段名（正在理解笔记第 X/Y 批 / 正在压缩批次摘要 / 正在汇总总览），每次只拼一次后缀。
@@ -67,12 +73,5 @@
 ## 2026-10-14 — 0.2.2迁移前配置保全
 
 - 迁移源版本 `ed16c9d`，用户已确认从远端main 0.2.1重建0.2.2分支。原有更新公钥配置和无私钥打包回退已逐文件备份至dist/migration-0.2.2并记录SHA256。用户已明确授权“独立保存提交”；现将两处配置作为独立提交保存到旧分支，之后迁入0.2.2。不推送或发布。
-
-
-## 2026-10-14 — browser旧端口故障与无效重试修复
-
-- 基线 `c88f58d`。已安装会话11次browser错误中9次fetch failed；确定复现关闭后重启读取旧DevToolsActivePort导致ECONNREFUSED。每次启动使用全新自有profile、退出清理，绑定本次child/轮次，改善连接和网页异常信息，传递AbortSignal并及时取消截图等待。
-- 连续2次或累计3次browser失败后阻止本轮继续调用并保留unverified；一次纠正成功可恢复，新prompt重置，编辑文件不绕过停止。
-- 12项不同定向用例通过，包括真实隔离Edge预览/交互/截图/重启/活动取消及视觉门控；未全量测试/构建/安装，已安装应用仍未更新，用户浏览器/资料未改。报告 docs/BROWSER-RELIABILITY-FIX.md；功能提交 `ec49c3b`。
 
 
