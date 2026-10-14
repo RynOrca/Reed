@@ -69,7 +69,7 @@ export class VaultOverview {
       const runtime=await this.runtime();
       const complete=async(text,system)=>{
         if(!active())throw Error("已取消");
-        const result=await runtime.completeSimple(selected,{systemPrompt:system,messages:[{role:"user",content:[{type:"text",text}],timestamp:Date.now()}]}, {maxTokens:1800,reasoning:"off",signal:AbortSignal.any([controller.signal,AbortSignal.timeout(120000)])});
+        const result=await runtime.completeSimple(selected,{systemPrompt:system,messages:[{role:"user",content:[{type:"text",text}],timestamp:Date.now()}]}, {requestPriority:"background",maxTokens:1800,reasoning:"off",signal:AbortSignal.any([controller.signal,AbortSignal.timeout(120000)])});
         if(result.stopReason==="error"||result.stopReason==="aborted"||result.stopReason==="length")throw Error(result.errorMessage||"模型生成总览失败");
         const output=result.content.filter(b=>b.type==="text").map(b=>b.text).join("").trim();if(!output)throw Error("模型未返回总览正文");return output;
       };

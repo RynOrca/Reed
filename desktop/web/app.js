@@ -467,6 +467,7 @@ function onEvent(event) {
     case "memory_status": if (!running) status(response.status === "organizing" ? "Agent 正在整理记忆…" : "就绪"); break;
     case "sessions": renderSessions(response.sessions || []); break;
     case "history": restoreHistory(response.messages || []); status("就绪"); break;
+    case "model_queue": if (running) status(response.state === "waiting" ? "正在等待模型服务空闲…" : "PI 正在回复…"); break;
     case "delta": {
       if (running) status("PI 正在回复…");
       if (response.kind === "thinking") {

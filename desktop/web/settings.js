@@ -113,6 +113,9 @@ function editProvider(template, provider = null) {
   $("provider-name").value = provider?.name || template.name;
   $("base-url").value = provider?.baseUrl || template.baseUrl || "";
   $("protocol").value = provider?.protocol || template.protocol;
+  $("parallel-requests").checked = provider?.parallelRequests === true;
+  $("parallel-limit").value = provider?.maxConcurrentRequests || 2;
+  syncParallelRequests();
   $("api-key").value = ""; $("api-key").placeholder = provider?.hasKey ? "已保存；留空保留当前 Key" : "无鉴权服务可留空";
   renderProviderModels(provider?.models || []);
   $("provider-form").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -159,9 +162,14 @@ function renderProviderModels(models) {
     const edit=document.createElement("button");edit.type="button";edit.className="secondary";edit.textContent="编辑";edit.onclick=()=>modelEditor(model);const actions=document.createElement("div");actions.className="model-actions";actions.append(edit,use);row.append(info, actions); $("discovered-models").append(row);
   }
 }
+function syncParallelRequests(){
+  const enabled=$("parallel-requests").checked;
+  $("parallel-limit-row").hidden=!enabled;$("parallel-limit").disabled=!enabled;
+}
+$("parallel-requests").onchange=syncParallelRequests;
 async function saveProvider() {
   if (!$("provider-form").reportValidity()) throw new Error("请填写必需信息");
-  const reply = await command("save_provider", { providerId, template: editing.id, name: $("provider-name").value, protocol: $("protocol").value, baseUrl: $("base-url").value, key: $("api-key").value });
+  const reply = await command("save_provider", { providerId, template: editing.id, name: $("provider-name").value, protocol: $("protocol").value, baseUrl: $("base-url").value, parallelRequests:$("parallel-requests").checked, maxConcurrentRequests:Number($("parallel-limit").value), key: $("api-key").value });
   providerId = reply.providerId; $("api-key").value = ""; $("api-key").placeholder = "已保存；留空保留当前 Key";
 }
 $("provider-form").onsubmit = event => { event.preventDefault(); void action(async () => { await saveProvider(); notice("配置已保存，点击获取模型与信息。"); }); };

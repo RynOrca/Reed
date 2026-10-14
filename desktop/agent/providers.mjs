@@ -93,11 +93,15 @@ export class ProviderStore {
     if (!["openai-completions", "anthropic-messages"].includes(input.protocol)) throw new Error("不支持该接口协议");
     const provider = input.providerId ? this.providers.find((item) => item.id === input.providerId) : null;
     if (input.providerId && !provider) throw new Error("找不到该提供商");
+    if (input.parallelRequests !== undefined && typeof input.parallelRequests !== 'boolean') throw new Error('并行请求设置无效');
+    const parallelRequests = input.parallelRequests ?? provider?.parallelRequests ?? false;
+    const maxConcurrentRequests = input.maxConcurrentRequests !== undefined ? input.maxConcurrentRequests : provider?.maxConcurrentRequests ?? 2;
+    if (!Number.isInteger(maxConcurrentRequests) || maxConcurrentRequests < 2 || maxConcurrentRequests > 8) throw new Error('最大并发数须为2到8的整数');
     const record = provider || { id: `summon-${randomUUID()}`, models: [] };
     if (input.key?.trim()) await this.saveKey(record.id, input.key.trim());
     const endpointChanged = record.baseUrl && (record.baseUrl !== url.href.replace(/\/$/, "") || record.protocol !== input.protocol);
     if (endpointChanged) record.models = [];
-    Object.assign(record, { name: String(input.name || template.name).slice(0, 60), template: template.id, protocol: input.protocol, baseUrl: url.href.replace(/\/$/, "") });
+    Object.assign(record, { name: String(input.name || template.name).slice(0, 60), template: template.id, protocol: input.protocol, parallelRequests, maxConcurrentRequests, baseUrl: url.href.replace(/\/$/, "") });
     delete record.credentialError;
     if (!provider) this.providers.push(record);
     await this.persist(); return record;

@@ -20,6 +20,9 @@
 <div class="form-grid"><label>名称<input id="provider-name" required maxlength="60"></label><label>接口协议<select id="protocol"><option value="openai-completions">OpenAI 兼容</option><option value="anthropic-messages">Anthropic 兼容</option></select></label></div>
 <label>Base URL<input id="base-url" type="url" required placeholder="https://api.example.com/v1"></label><label>API Key<input id="api-key" type="password" autocomplete="off" placeholder="无鉴权服务可留空"></label>
 <p class="hint">本地、另一台电脑和云端接口使用同一配置流程。Key 由当前 Windows 用户的凭据保护加密保存。</p>
+<label class="capability-label"><input id="parallel-requests" class="capability-checkbox" type="checkbox">允许并行请求（实验性）</label>
+<label id="parallel-limit-row" hidden>最大并发数<input id="parallel-limit" type="number" min="2" max="8" step="1" value="2" disabled></label>
+<p class="hint">默认串行，适用于一次只能处理一个请求的本地模型。仅在服务支持时开启；并行模式尚未经过真实服务验收。</p>
 <div class="actions"><button type="submit" class="primary">保存配置</button><button type="button" id="discover" class="secondary">获取模型与信息</button></div>
 <div id="discovered-models" class="discovered-models"></div>
 <details class="advanced"><summary>接口未提供信息？手动补充</summary><p class="hint">标准模型列表可能只返回 ID。未知能力不会被猜测；可按服务端配置补充。</p>

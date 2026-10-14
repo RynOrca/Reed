@@ -39,7 +39,7 @@ Copy-Item -LiteralPath (Join-Path $agentDir 'role-skills.mjs') -Destination (Joi
 Copy-Item -LiteralPath (Join-Path $agentDir 'note-retrieval.mjs') -Destination (Join-Path $Output 'agent\note-retrieval.mjs') -Force
 Copy-Item -LiteralPath (Join-Path $agentDir 'local-search.mjs') -Destination (Join-Path $Output 'agent\local-search.mjs') -Force
 Copy-Item -LiteralPath (Join-Path $agentDir 'work-recall.mjs') -Destination (Join-Path $Output 'agent\work-recall.mjs') -Force
-foreach ($module in @('auxiliary-runtime.mjs', 'work-applicability.mjs', 'work-evidence.mjs', 'live-learning.mjs')) {
+foreach ($module in @('model-requests.mjs', 'auxiliary-runtime.mjs', 'work-applicability.mjs', 'work-evidence.mjs', 'live-learning.mjs')) {
     Copy-Item -LiteralPath (Join-Path $agentDir $module) -Destination (Join-Path $Output "agent\$module") -Force
 }
 Copy-Item -LiteralPath (Join-Path $agentDir 'skills') -Destination (Join-Path $Output 'agent\skills') -Recurse -Force

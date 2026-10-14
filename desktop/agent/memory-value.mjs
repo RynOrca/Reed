@@ -8,7 +8,7 @@ supported：原始用户陈述或真实工具证据确实支持候选的全部�
 
 // Diagnostics belong to this invocation, never to shared "last result" state.
 export function createMemoryValueGate({runtime,currentSession,learningEnabled,workEnabled}) {
-  return async(candidates,{work=false,evidence=[],signal}={})=>{
+  return async(candidates,{work=false,evidence=[],signal,requestPriority="foreground"}={})=>{
     const started=Date.now(),selected=currentSession();
     const messages=JSON.stringify(selected?.state?.messages||[]);
     const unavailable=()=>currentSession()!==selected?'session_changed':sessionDisallowsMemory(selected)?'session_no_memory':!(work?workEnabled():learningEnabled())?'memory_disabled':JSON.stringify(selected?.state?.messages||[])!==messages?'context_changed':null;
@@ -29,7 +29,7 @@ export function createMemoryValueGate({runtime,currentSession,learningEnabled,wo
         messages:[{role:'user',timestamp:Date.now(),content:[{type:'text',text:JSON.stringify({area:work?'work':'learning',userStatements:userTexts(selected).join('\n').slice(-10000),toolEvidence:evidence.slice(-8).map(({tool,ok,text})=>({tool,ok,text:text.slice(0,1500)})),candidates:candidates.map((candidate,id)=>({...candidate,id}))})}]}],
       // Some compatible providers count low-effort reasoning in this same budget.
       // 270 tokens can be consumed before any JSON; reserve space for the decision.
-      },{maxTokens:Math.min(2400,1024+candidates.length*160),reasoning:'off',signal:controller.signal});
+      },{requestPriority,maxTokens:Math.min(2400,1024+candidates.length*160),reasoning:'off',signal:controller.signal});
       if(interrupted())return denied(interrupted());
       if(['error','aborted','length'].includes(response.stopReason))return denied(response.stopReason==='length'?'response_truncated':'model_response_error');
       const output=response.content.filter(b=>b.type==='text').map(b=>b.text).join('').trim().replace(/^```(?:json)?\s*|\s*```$/g,'');

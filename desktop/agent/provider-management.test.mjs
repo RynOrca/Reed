@@ -50,3 +50,19 @@ test("refresh one model preserves siblings; provider deletion removes credential
   const reload=new ProviderStore(root,crypto);await reload.load();assert.deepEqual(reload.providers.map(p=>p.id),[other.id]);assert.ok(!(await readFile(store.path,"utf8")).includes("test-secret"));
  } finally {await rm(root,{recursive:true,force:true});}
 });
+
+
+test("parallel requests are opt-in, validated, persisted and preserved by older save callers",async()=>{
+ const root=await mkdtemp(join(tmpdir(),"summon-parallel-config-"));
+ try{
+  const crypto={protect:async key=>key,unprotect:async key=>key};const store=new ProviderStore(root,crypto);
+  const input={template:"custom",baseUrl:"http://127.0.0.1:1234/v1",protocol:"openai-completions"};
+  const provider=await store.save(input);assert.equal(provider.parallelRequests,false);assert.equal(provider.maxConcurrentRequests,2);
+  for(const value of [0,1,9,2.5,"2",null])await assert.rejects(store.save({...input,providerId:provider.id,parallelRequests:true,maxConcurrentRequests:value}),/最大并发数/);
+  await assert.rejects(store.save({...input,providerId:provider.id,parallelRequests:"yes"}),/并行请求设置/);
+  await store.save({...input,providerId:provider.id,parallelRequests:true,maxConcurrentRequests:3});
+  await store.save({...input,providerId:provider.id,name:"legacy caller"});
+  const reload=new ProviderStore(root,crypto);await reload.load();assert.equal(reload.providers[0].parallelRequests,true);assert.equal(reload.providers[0].maxConcurrentRequests,3);
+  await store.save({...input,providerId:provider.id,parallelRequests:false,maxConcurrentRequests:3});assert.equal(store.providers[0].parallelRequests,false);
+ }finally{await rm(root,{recursive:true,force:true});}
+});

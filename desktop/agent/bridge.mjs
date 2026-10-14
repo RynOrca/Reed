@@ -1,5 +1,6 @@
 import { semanticMatcher } from "./memory-match.mjs";
 import { createMemoryValueGate } from './memory-value.mjs';
+import { ModelRequests } from './model-requests.mjs';
 import { createAuxiliaryCompleter } from './auxiliary-runtime.mjs';
 import { workMemoryExtension } from "./work-memory.mjs";
 import {LazyMcp,MCP_TOOLS} from "./mcp.mjs";
@@ -81,6 +82,7 @@ const diagnostic = async entry => {
 };
 const turnRecovery = createTurnRecovery({ send, diagnostic });
 const contextPolicy = createContextPolicy({ dataDir, currentSession: () => session, send, diagnostic });
+const modelRequests = new ModelRequests({providers:()=>providers.providers});
 let runtime;
 let session;
 let busy = false;
@@ -150,7 +152,11 @@ async function getRuntime() {
       send({ type: "credential_error", message: `远程模型凭据无法读取，请重新输入 Key：${error.message}` });
     }
     await providers.install(runtime);
-    runtime.completeSimple = createAuxiliaryCompleter(runtime.completeSimple.bind(runtime));
+    const completeAuxiliary = createAuxiliaryCompleter(runtime.completeSimple.bind(runtime));
+    runtime.completeSimple = (model, context, options={}) => {
+      const {requestPriority='foreground', ...requestOptions}=options;
+      return modelRequests.run(model,{signal:options.signal,priority:requestPriority},()=>completeAuxiliary(model,context,requestOptions));
+    };
   }
   return runtime;
 }
@@ -204,8 +210,13 @@ async function openSession(provider, modelId, sessionManager) {
   session?.dispose();
   session = created.session;
   const streamFunction = session.agent.streamFunction;
-  session.agent.streamFunction = (model, context, options) => streamFunction(model, context, {
-    ...options, fetch: createDiagnosticFetch(options?.fetch || globalThis.fetch, diagnostic),
+  session.agent.streamFunction = (model, context, options) => modelRequests.stream(model, {
+    signal:options?.signal, priority:'foreground', onWait:()=>send({type:'model_queue',state:'waiting'}),
+  },()=>{
+    send({type:'model_queue',state:'running'});
+    return streamFunction(model, context, {
+      ...options, fetch: createDiagnosticFetch(options?.fetch || globalThis.fetch, diagnostic),
+    });
   });
   metadata[session.sessionId] = { ...metadata[session.sessionId], projectPath };
   Object.assign(appState, { activeSessionId: session.sessionId, projectPath, provider: session.model?.provider, modelId: session.model?.id });
@@ -399,6 +410,7 @@ async function handle(command) {
         if (busy) throw new Error("请等待当前回复结束");
         const saved = await providers.save(command);
         await providers.install(await getRuntime());
+        modelRequests.refresh();
         await emitState(); send({ type: "ack", id, providerId: saved.id });
         break;
       }
