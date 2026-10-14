@@ -4,7 +4,7 @@
 
 - 基线 `c88f58d`。已安装会话11次browser错误中9次fetch failed；确定复现关闭后重启读取旧DevToolsActivePort导致ECONNREFUSED。每次启动使用全新自有profile、退出清理，绑定本次child/轮次，改善连接和网页异常信息，传递AbortSignal并及时取消截图等待。
 - 连续2次或累计3次browser失败后阻止本轮继续调用并保留unverified；一次纠正成功可恢复，新prompt重置，编辑文件不绕过停止。
-- 12项不同定向用例通过，包括真实隔离Edge预览/交互/截图/重启/活动取消及视觉门控；未全量测试/构建/安装，已安装应用仍未更新，用户浏览器/资料未改。报告 docs/BROWSER-RELIABILITY-FIX.md；功能版本随后记录。
+- 12项不同定向用例通过，包括真实隔离Edge预览/交互/截图/重启/活动取消及视觉门控；未全量测试/构建/安装，已安装应用仍未更新，用户浏览器/资料未改。报告 docs/BROWSER-RELIABILITY-FIX.md；功能提交 `ec49c3b`。
 
 ## 2026-10-14 — 单槽Qwen真实调度复验
 
