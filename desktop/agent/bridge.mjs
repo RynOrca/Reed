@@ -104,7 +104,7 @@ const scope = new FileScope({ workspace: () => cwd, readOnly: () => [capabilitie
   ...["memory.json","learner.json","local-search.sqlite","local-search.sqlite-wal","local-search.sqlite-shm"].map(name=>({path:join(dataDir,name),denyRead:true})),
 ] });
 capabilities.canRead = async path => {try {await scope.check(path);return true;}catch{return false;}};
-const vaultOverview = new VaultOverview({capabilities,runtime:getRuntime,model:()=>overviewSelection?runtime?.getModel(overviewSelection.providerId,overviewSelection.modelId):session?.model,send,canRead:capabilities.canRead});
+const vaultOverview = new VaultOverview({capabilities,runtime:getRuntime,model:()=>overviewSelection?runtime?.getModel(overviewSelection.providerId,overviewSelection.modelId):session?.model,send,canRead:capabilities.canRead,parallelLimit:model=>modelRequests.limit(model)});
 // Restore persisted navigation on startup; generation requires the user's model
 // and reasoning choice, so no invisible inference job is started here.
 const ensureOverview=()=>vaultOverview.running?Promise.resolve():vaultOverview.restore();

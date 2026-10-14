@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,readdir,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {VaultOverview,OVERVIEW_FILE} from './vault-overview.mjs';
@@ -146,4 +146,54 @@ test('压缩阶段失败仍产出总览并标注未完整覆盖',()=>fixture(asy
   const written=await readFile(join(root,OVERVIEW_FILE),'utf8');
   assert.match(written,/压缩后的总览正文/);
   assert.match(written,/最终汇总只读取了部分摘要/);
+}));
+
+// The provider's parallel setting decides how many batches are understood at the
+// same time; without it the run must stay strictly sequential.
+const overlapFixture=async(root,{limit,notes=6})=>{
+  for(let i=0;i<notes;i++)await writeFile(join(root,`note-${i}.md`),`# 笔记 ${i}\n\n${'矩阵特征值内容'.repeat(300)}`);
+  let active=0,peak=0,calls=0;
+  const runtime=async()=>({completeSimple:async()=>{calls++;active++;peak=Math.max(peak,active);await new Promise(resolve=>setTimeout(resolve,60));active--;return {stopReason:'stop',content:[{type:'text',text:`摘要 ${calls}`}]};}});
+  const task=new VaultOverview({capabilities:{dir:undefined,state:{vaultPath:root}},model,send(){},runtime,parallelLimit:()=>limit});
+  return {task,stats:()=>({active,peak,calls})};
+};
+
+test('提供商开启并行时多个批次重叠请求，未开启时严格串行',()=>fixture(async(dir,root)=>{
+  const parallel=await overlapFixture(root,{limit:3});
+  await parallel.task.ensure();
+  assert.equal(parallel.task.snapshot().state,'ready');
+  assert.equal(parallel.stats().peak,3,'并行设置下的批次必须重叠请求');
+  assert.ok(parallel.task.snapshot().concurrency===undefined||parallel.task.snapshot().concurrency===3);
+  const written=await readFile(join(root,OVERVIEW_FILE),'utf8');
+  assert.match(written,/批次理解并发：3/);
+}));
+
+test('未开启并行（并发 1）时逐批串行且行为不变',()=>fixture(async(dir,root)=>{
+  const serial=await overlapFixture(root,{limit:1});
+  await serial.task.ensure();
+  assert.equal(serial.task.snapshot().state,'ready');
+  assert.equal(serial.stats().peak,1,'未开启并行时同一时刻只能有一个批次请求');
+  const written=await readFile(join(root,OVERVIEW_FILE),'utf8');
+  assert.doesNotMatch(written,/批次理解并发/);
+}));
+
+test('并行下单个批次失败仍只补齐该批次，检查点不被并发写坏',()=>fixture(async(dir,root)=>{
+  for(let i=0;i<6;i++)await writeFile(join(root,`note-${i}.md`),`# 笔记 ${i}\n\n${'矩阵特征值内容'.repeat(300)}`);
+  const texts=[],failures=new Set();
+  let active=0,peak=0;
+  const runtime=async()=>({completeSimple:async(_m,context)=>{const input=context.messages[0].content[0].text;texts.push(input);const order=texts.length;active++;peak=Math.max(peak,active);await new Promise(resolve=>setTimeout(resolve,40));active--;
+    if(order===2&&!failures.has(input)){failures.add(input);return {stopReason:'error',errorMessage:'Request timed out.',content:[]};}
+    return {stopReason:'stop',content:[{type:'text',text:`摘要 ${order}`}]};}});
+  const task=new VaultOverview({capabilities:{dir,state:{vaultPath:root}},model,send(){},runtime,parallelLimit:()=>2});
+  await task.ensure();
+  assert.equal(task.snapshot().state,'ready');assert.equal(task.snapshot().failed,1);assert.ok(peak>1,'并发必须实际发生');
+  await rm(join(root,OVERVIEW_FILE));
+  const saved=JSON.parse(await readFile(join(dir,'vault-progress',(await readdir(join(dir,'vault-progress')))[0]),'utf8'));
+  assert.equal(Object.keys(saved.results).length,2,'并发下两个成功批次都必须写入同一个完整检查点');
+  assert.equal(Object.keys(saved.failed).length,1);
+  const before=texts.length;
+  const retry=new VaultOverview({capabilities:{dir,state:{vaultPath:root}},model,send(){},runtime,parallelLimit:()=>2});
+  await retry.ensure();
+  assert.equal(retry.snapshot().state,'ready');assert.equal(retry.snapshot().failed,0);
+  assert.equal(texts.length-before,2,'重试只请求失败批次和最终汇总');
 }));
