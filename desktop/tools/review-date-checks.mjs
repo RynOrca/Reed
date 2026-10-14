@@ -7,7 +7,7 @@ export function reviewDateChecks(report) {
   const restart=report.cases?.find(c=>c.name==='learning-review-restart');
   const recalled=(restart?.toolResults||[]).filter(t=>!t.isError).flatMap(t=>(t.result?.content||[]).flatMap(block=>{
     if(block.type!=='text')return [];
-    try{const value=JSON.parse(block.text);return Array.isArray(value)?value:[];}catch{return [];}
+    try{const value=JSON.parse(block.text);return Array.isArray(value)?value:Array.isArray(value?.items)?value.items:[];}catch{return [];}
   }));
   return {
     storedDateSevenDays:!!event&&event.result==='independent'&&item?.nextReview===new Date(new Date(event.time).getTime()+7*86400000).toISOString(),

@@ -55,8 +55,29 @@ export class LearnerStore {
     return {saved:true,subject,result:event.result||"unknown",nextReview:nextReviewDate(entry.time,event.result)};
   }
   snapshot(){const {events,...profile}=this.state;return structuredClone({...profile,eventCount:events.length,recentEvents:events.slice(-8).reverse()});}
-  context({review=false,query=''}={}){const {goals,knowledge,misconceptions,preferences}=this.state;const brief=(items,limit)=>{const words=query.toLowerCase().match(/[a-z0-9]+|[\u3400-\u9fff]{2}/g)||[];return items.map((i,index)=>({i,index,score:words.reduce((n,w)=>n+(`${i.subject} ${i.detail}`.toLowerCase().includes(w)?1:0),0)})).sort((a,b)=>b.score-a.score||b.index-a.index).slice(0,limit).map(({i})=>({subject:i.subject,status:i.status,detail:i.detail.slice(0,100),updated:i.updated,source:i.source}));};return JSON.stringify({progress:{studiedTopics:knowledge.length,lastStudied:this.state.updated},goals:brief(goals.filter(g=>g.status==="active"),3),knowledge:brief(knowledge.filter(k=>review||k.status!=="needs_review"),3),misconceptions:brief(misconceptions.filter(m=>m.status!=="resolved"),2),preferences:brief(preferences,3)});}
-  recall({review=false,query=""}={}){return [ ...this.state.goals,...this.state.knowledge,...this.state.misconceptions,...this.state.preferences].filter(i=>(review||i.status!=="needs_review")&&(!query||similarTopic(i.subject,query)||i.detail.includes(query))).slice(-6);}
+  context({review=false,query=''}={}){const {goals,knowledge,misconceptions,preferences}=this.state;const brief=(items,limit)=>{const words=query.toLowerCase().match(/[a-z0-9]+|[\u3400-\u9fff]{2}/g)||[];return items.map((i,index)=>({i,index,score:words.reduce((n,w)=>n+(`${i.subject} ${i.detail}`.toLowerCase().includes(w)?1:0),0)})).sort((a,b)=>b.score-a.score||b.index-a.index).slice(0,limit).map(({i})=>({subject:i.subject,status:i.status,detail:i.detail.slice(0,100),nextReview:i.nextReview||null,updated:i.updated,source:i.source}));};return JSON.stringify({progress:{studiedTopics:knowledge.length,lastStudied:this.state.updated},goals:brief(goals.filter(g=>g.status==="active"),3),knowledge:brief(knowledge.filter(k=>review||k.status!=="needs_review"),3),misconceptions:brief(misconceptions.filter(m=>m.status!=="resolved"),2),preferences:brief(preferences,3)});}
+  /**
+   * 复习队列：画像里 status=needs_review 的知识条目，按排程日期升序（逾期优先，
+   * 未排程排最后）。**不按查询词过滤** —— 之前用查询词过滤会让“队列空、画像却有
+   * 待复习条目”同时出现；查询只用于把相关条目排到同日期前面。
+   */
+  reviewQueue({query="",limit=30}={}){
+    const related=item=>!query||similarTopic(item.subject,query)||String(item.detail||"").includes(query);
+    const scheduled=item=>{const value=Date.parse(item.nextReview||"");return Number.isFinite(value)?value:Number.POSITIVE_INFINITY;};
+    // 排程日期是天粒度的（+1/+3/+7 天），同一天内按查询相关性再排，毫秒差不能压过相关性。
+    const bucket=item=>{const value=scheduled(item);return Number.isFinite(value)?Math.floor(value/86400000):Number.POSITIVE_INFINITY;};
+    return this.state.knowledge
+      .filter(item=>item.status==="needs_review")
+      .map((item,index)=>({item,index}))
+      .sort((a,b)=>bucket(a.item)-bucket(b.item)||(related(b.item)?1:0)-(related(a.item)?1:0)||scheduled(a.item)-scheduled(b.item)||a.index-b.index)
+      .slice(0,limit)
+      .map(({item},index)=>({order:index+1,subject:item.subject,status:item.status,detail:String(item.detail||"").slice(0,120),nextReview:item.nextReview||null,lastReviewResult:item.lastReviewResult??null,updated:item.updated,source:item.source}));
+  }
+  recall({review=false,query=""}={}){
+    if(review)return this.reviewQueue({query});
+    const {goals,knowledge,misconceptions,preferences}=this.state;
+    return [ ...goals,...knowledge,...misconceptions,...preferences].filter(i=>i.status!=="needs_review"&&(!query||similarTopic(i.subject,query)||i.detail.includes(query))).slice(-6);
+  }
 }
 export function userTexts(session){return (session?.state.messages||[]).filter(m=>m.role==="user").slice(-8).map(m=>typeof m.content==="string"?m.content:(m.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n"));}
 export function learnerExtension({learner,memory,currentSession,send,judgeValue,enabled=()=>true}) {return pi=>{
