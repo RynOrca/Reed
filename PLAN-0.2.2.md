@@ -77,4 +77,4 @@
 
 最终构建源9bca08d9828cba73defbfb0d3f36db2bbc01a9d3（已推送origin/0.2.2），目录dist/Reed-0.2.2-model-final。完整桌面39、关键界面17、最终NSIS变体真实窗口10项通过；窗口前两次真实鼠标输入偏差保留日志，用户授权暂不操作鼠标后第三次全过。工具6、Rust release4项通过。最终包不安装，下一步更新同一草稿。
 
-真实DeepSeek追加验证：用户允许最多2次合成hi、每次最多256输出token，不发送真实笔记。已按用户确认的D:/Tools/Reed核对其启动日志和%APPDATA%/Reed/user-config.json，仅找到Qwen提供商；旧profile及agent/providers.json也无DeepSeek。付费请求实际0次，未读取其他服务Key来试探；官方接口延迟仍未复测，不阻塞软件隔离交付，不宣称真实DeepSeek已通过。
+真实DeepSeek追加验证：用户允许最多2次合成hi、每次最多256输出token，不发送真实笔记。命令工具读取D:/Tools/Reed对应%APPDATA%/Reed配置只见Qwen，但用户截图和原生设置页确认已有DeepSeek两个模型且Key显示已保存；原样保存收到成功反馈。原生资源管理器显示app-state今天更新，命令工具同路径读到旧时间，证明存在文件视图差异，不能据此判定生产配置丢失。尚未安全读到当前加密凭据，付费请求0次；继续核对实时文件访问，官方接口延迟仍未复测。
