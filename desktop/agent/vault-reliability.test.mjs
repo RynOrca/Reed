@@ -177,6 +177,31 @@ test('未开启并行（并发 1）时逐批串行且行为不变',()=>fixture(a
   assert.doesNotMatch(written,/批次理解并发/);
 }));
 
+test('阶段提示不累积，进度单调递增到 100%',()=>fixture(async(dir,root)=>{
+  await batchFixture(root);const capabilities={dir,state:{vaultPath:root}};const events=[];
+  const runtime=async()=>({completeSimple:async(_m,_context,options)=>{
+    for(const phase of ['connecting','headers','first_body','finished'])options.onRequestState({state:'running',phase,elapsedMs:1,queuedMs:0});
+    return {stopReason:'stop',content:[{type:'text',text:'批次摘要'}]};
+  }});
+  const task=new VaultOverview({capabilities,model,send:event=>events.push(event),runtime});
+  await task.ensure();
+  assert.equal(task.snapshot().state,'ready');
+  const progressEvents=events.filter(event=>event.type==='vault_overview');
+  const phases=progressEvents.filter(event=>event.phase&&event.phase!=='running');
+  assert.ok(phases.length>=4,'每个阶段都要有进度事件');
+  for(const event of phases){
+    assert.ok(event.message.length<90,`阶段提示必须简短而不是累积：${event.message}`);
+    assert.equal((event.message.match(/（/g)||[]).length,1,`阶段提示只能有一层括号：${event.message}`);
+    assert.doesNotMatch(event.message,/本次数据接收完成.*本次数据接收完成/);
+  }
+  const values=progressEvents.map(event=>event.progress).filter(Number.isFinite);
+  assert.ok(values.length>=3);
+  for(let i=1;i<values.length;i++)assert.ok(values[i]>=values[i-1],`进度不得回退：${values.join(',')}`);
+  assert.equal(progressEvents.at(-1).state,'ready');
+  assert.equal(progressEvents.at(-1).progress,1);
+  assert.ok(values.includes(0.03),'扫描阶段要有起始进度');
+}));
+
 test('并行下单个批次失败仍只补齐该批次，检查点不被并发写坏',()=>fixture(async(dir,root)=>{
   for(let i=0;i<6;i++)await writeFile(join(root,`note-${i}.md`),`# 笔记 ${i}\n\n${'矩阵特征值内容'.repeat(300)}`);
   const texts=[],failures=new Set();

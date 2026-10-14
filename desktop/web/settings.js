@@ -389,7 +389,18 @@ function renderOverviewReasoning(preferred){const select=$("overview-reasoning")
 $("overview-model").onchange=()=>{renderOverviewReasoning("off");void action(persistOverviewSelection);};
 $("overview-reasoning").onchange=()=>void action(persistOverviewSelection);
 function persistOverviewSelection(){const selected=overviewModelOptions.find(x=>x.value===$("overview-model").value);if(!selected)return Promise.resolve();overviewSavedSelection={providerId:selected.providerId,modelId:selected.model.id,reasoning:$("overview-reasoning").value};return command("save_vault_overview_config",overviewSavedSelection);}
-function renderOverview(info){overviewLastState=info;overviewPath=info.path||null;const stopping=info.state==="stopping",working=stopping||["scanning","generating"].includes(info.state);const parallel=info.concurrency>1?` · 并发 ${info.concurrency}`:"";const status=info.state==="ready"?`${info.existing?"已恢复已有总览":"总览已生成并保存"}${info.model?` · ${info.model}`:" · 历史文件未记录模型"}${parallel}。原文件已保留，不会自动覆盖。\n${overviewPath}`:info.message||"选择模型和思考档位后，点击生成总览。";$("vault-overview-status").textContent=status;$("generate-overview").disabled=working||info.state==="ready"||!overviewModelOptions.length;$("generate-overview").textContent=info.state==="ready"?(info.existing?"已有总览已恢复":"总览已生成"):"生成 / 重试总览";$("overview-model").disabled=working;$("overview-reasoning").disabled=working;$("cancel-overview").hidden=!working;$("cancel-overview").textContent=stopping?"取消切换":"停止生成";$("open-overview").hidden=info.state!=="ready"||!overviewPath;}
+function renderOverviewProgress(info,working){
+  const bar=$("overview-progress"),fill=$("overview-progress-fill"),label=$("overview-progress-label");
+  const percent=Number.isFinite(info.progress)?Math.round(Math.max(0,Math.min(1,info.progress))*100):null;
+  // Finished, idle and error states keep the bar hidden; only a running task shows it.
+  const visible=working&&percent!==null;
+  bar.hidden=!visible;
+  if(!visible)return;
+  fill.style.width=`${percent}%`;
+  label.textContent=Number.isFinite(info.batches)&&info.batches?`${percent}% · ${info.done||0}/${info.batches} 批${info.failed?`，${info.failed} 批待重试`:""}`:`${percent}%`;
+  bar.setAttribute("aria-valuenow",String(percent));
+}
+function renderOverview(info){overviewLastState=info;overviewPath=info.path||null;const stopping=info.state==="stopping",working=stopping||["scanning","generating"].includes(info.state);const parallel=info.concurrency>1?` · 并发 ${info.concurrency}`:"";const status=info.state==="ready"?`${info.existing?"已恢复已有总览":"总览已生成并保存"}${info.model?` · ${info.model}`:" · 历史文件未记录模型"}${parallel}。原文件已保留，不会自动覆盖。\n${overviewPath}`:info.message||"选择模型和思考档位后，点击生成总览。";$("vault-overview-status").textContent=status;renderOverviewProgress(info,working);$("generate-overview").disabled=working||info.state==="ready"||!overviewModelOptions.length;$("generate-overview").textContent=info.state==="ready"?(info.existing?"已有总览已恢复":"总览已生成"):"生成 / 重试总览";$("overview-model").disabled=working;$("overview-reasoning").disabled=working;$("cancel-overview").hidden=!working;$("cancel-overview").textContent=stopping?"取消切换":"停止生成";$("open-overview").hidden=info.state!=="ready"||!overviewPath;}
 $("generate-overview").onclick=()=>action(()=>{const selected=overviewModelOptions.find(x=>x.value===$("overview-model").value);if(!selected)throw new Error("请先在模型设置中配置可用模型");return command("generate_vault_overview",{providerId:selected.providerId,modelId:selected.model.id,reasoning:$("overview-reasoning").value});});
 $("cancel-overview").onclick=()=>action(()=>command("cancel_vault_overview"));
 $("open-overview").onclick=()=>action(async()=>{if(overviewPath){const r=await command("resolve_file",{path:overviewPath});await tauri.core.invoke("open_local_file",{path:r.path});}});
