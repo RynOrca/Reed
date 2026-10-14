@@ -1,6 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createSseObserver, createDiagnosticFetch } from "./stream-diagnostics.mjs";
+import { createSseObserver, createDiagnosticFetch, createRequestFetch } from "./stream-diagnostics.mjs";
+
+test('request fetch bounds headers and stalled bodies, and honors cancellation', async()=>{
+  const never=(_input,{signal})=>new Promise((_,reject)=>{signal.addEventListener('abort',()=>reject(signal.reason),{once:true});});
+  await assert.rejects(createRequestFetch(never,{idleMs:15,totalMs:100})('http://fixture'),/长时间/);
+  const phases=[];
+  const response=await createRequestFetch(async()=>new Response(new ReadableStream({start(){}})),{idleMs:15,totalMs:100,diagnostic:e=>phases.push(e)})('http://fixture');
+  await assert.rejects(response.text(),/长时间/);
+  assert.ok(phases.some(e=>e.phase==='headers'));assert.ok(phases.some(e=>e.phase==='timeout'));
+  const controller=new AbortController();
+  const waiting=createRequestFetch(never,{signal:controller.signal})('http://fixture');
+  controller.abort(new DOMException('已停止','AbortError'));await assert.rejects(waiting,/已停止/);
+});
 
 test("SSE observer accepts split UTF-8, CRLF, comments and multiline JSON", () => {
   const events = [], observer = createSseObserver(event => events.push(event));

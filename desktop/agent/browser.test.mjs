@@ -59,3 +59,30 @@ test("Owned lazy Edge can read, fill, click and screenshot an isolated page",{ti
     assert.equal(navigated.details.sourceHash,null);
   }finally{browser.close();await new Promise(r=>server.close(r));await new Promise(r=>setTimeout(r,600));await rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
 });
+
+
+test("owned browser reopens after idle-style shutdown without consuming stale debug port",{timeout:30000},async()=>{
+ const root=await mkdtemp(join(tmpdir(),"reed-browser-reopen-")),browser=new AgentBrowser(root);
+ try{
+  await browser.run({action:"snapshot"});const child=browser.child;
+  const exited=new Promise(resolve=>child.once("exit",resolve));browser.close();await exited;
+  const reopened=await browser.run({action:"snapshot"});assert.ok(reopened.content[0].text.includes("about:blank"));
+ }finally{const child=browser.child;const exited=child&&child.exitCode===null?new Promise(resolve=>child.once("exit",resolve)):Promise.resolve();browser.close();await exited;await rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
+});
+
+
+test("cancelled queued browser operation never runs",async()=>{
+ const browser=new AgentBrowser("unused-synthetic");let release;browser.operations=new Promise(resolve=>release=resolve);let calls=0;browser.runOne=async()=>{calls++;};
+ const controller=new AbortController();const queued=browser.run({action:"snapshot"},{signal:controller.signal});controller.abort();const rejected=assert.rejects(queued,/取消/);release();await rejected;assert.equal(calls,0);
+});
+
+
+test("active screenshot delay cancels promptly and owned browser can recover",{timeout:15000},async()=>{
+ const root=await mkdtemp(join(tmpdir(),"reed-browser-cancel-")),browser=new AgentBrowser(root);
+ try{
+  await browser.run({action:"snapshot"});const controller=new AbortController();const begin=Date.now();const operation=browser.run({action:"screenshot",waitMs:10000},{signal:controller.signal});
+  const timer=setTimeout(()=>controller.abort(),100);try{await assert.rejects(operation,/取消/);}finally{clearTimeout(timer);}
+  assert.ok(Date.now()-begin<1500,"cancel should not wait for the ten-second capture delay");
+  assert.ok((await browser.run({action:"snapshot"})).content[0].text.includes("about:blank"));
+ }finally{const child=browser.child;const exited=child&&child.exitCode===null?new Promise(resolve=>child.once("exit",resolve)):Promise.resolve();browser.close();await exited;await rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
+});

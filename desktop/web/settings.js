@@ -6,14 +6,84 @@ import { initBrand, saveAppearance, appVersion } from "./brand.js";
 import { checkForUpdate, installUpdate, openReleasePage } from "./update.js";
 const tauri = window.__TAURI__;
 await initBrand(tauri);
-let sequence = 0, templates = [], providers = [], editing = null, providerId = null, recording = false, savedShortcut = "", memory = {}, roleId = null;
+let sequence = 0, templates = [], providers = [], editing = null, providerId = null, providerDraftId = null, recording = false, savedShortcut = "", memory = {}, roleId = null;
+const commandPrefix=`settings-${crypto.randomUUID()}-`;
 const pending = new Map();
+const thinkingHint=document.createElement('p');thinkingHint.className='hint';thinkingHint.id='thinking-protocol-hint';$("manual-levels").parentElement.after(thinkingHint);
+function explainThinkingProtocol(){const binary=["qwen","qwen-chat-template"].includes($("thinking-format").value);$("manual-levels").disabled=binary;thinkingHint.textContent=binary?"Qwen enable_thinking 仅控制开启/关闭，不区分 low、medium 等深度。仅在服务支持 reasoning_effort 时切换该协议。":"档位必须由模型服务支持；reasoning_effort 可配置 off、low、medium、high、xhigh。";}
+$("thinking-format").onchange=()=>{const format=$("thinking-format").value;if(format)$("manual-reasoning").value="yes";if(format==="openai"&&["","medium"].includes($("manual-levels").value.trim()))$("manual-levels").value="low, medium, high, xhigh";explainThinkingProtocol();};
+let browseRoot=null,browseNext=0,browseVersion=0,browseBusy=false;
+const browseList=element("div"),browseMore=element("button","继续浏览","secondary"),browseStatus=element("p","","hint");
+browseList.id="vault-browse";browseMore.id="vault-browse-more";browseMore.type="button";browseMore.hidden=true;
+$("vault-results").after(browseList,browseMore,browseStatus);
+browseMore.onclick=()=>action(()=>browseNotes());
+// Cards follow the width actually available next to the sidebar, not the window
+// width, so a three-column window never squeezes its cards.
+function applyCardColumns(){
+  for(const grid of [browseList,$("vault-results")]){
+    if(!grid)continue;
+    const width=grid.clientWidth;
+    grid.style.setProperty("--vault-columns",String(width>=840?3:width>=560?2:1));
+  }
+}
+// The preview shows note body text only: leading YAML frontmatter is metadata,
+// and whitespace is collapsed so the five-line clamp matches real lines.
+function excerpt(hit){const text=String(hit?.display??hit?.content??"").replace(/\s+/g," ").trim();return text.length>600?`${text.slice(0,600)}…`:text;}
+async function browseNotes(reset=false){
+  if(reset){browseVersion++;browseBusy=false;browseNext=0;browseList.replaceChildren();browseMore.hidden=true;browseStatus.textContent="";}
+  if(!browseRoot||browseBusy||browseNext===null)return;
+  const version=browseVersion,offset=browseNext;browseBusy=true;browseMore.disabled=true;
+  try{const reply=await command("browse_notes",{offset});if(version!==browseVersion)return;
+    for(const hit of reply.results||[]){const row=element("div",undefined,"card"),link=element("button",hit.title,"note-link");link.onclick=()=>action(async()=>{const file=await command("resolve_file",{path:hit.url});await tauri.core.invoke("open_local_file",{path:file.path});});row.append(link,element("p",excerpt(hit),"note-excerpt"));browseList.append(row);}
+    applyCardColumns();
+    browseNext=reply.next;browseMore.hidden=browseNext===null;browseStatus.textContent=reply.total?`已展示 ${offset+reply.results.length} / ${reply.total} 篇${browseNext===null?"，已全部展示。":""}`:"笔记库暂无可浏览的 Markdown 笔记。";
+  }catch(error){if(version===browseVersion){browseMore.hidden=false;browseStatus.textContent=`浏览失败：${error.message}，点击继续浏览重试。`;}}
+  finally{if(version===browseVersion){browseBusy=false;browseMore.disabled=false;}}
+}
 function notice(text, error = false) { $("notice").hidden = !text; $("notice").textContent = text; $("notice").classList.toggle("error", error); }
 async function action(work) { try { await work(); } catch (error) { notice(String(error.message || error), true); } }
+
+// 浏览区与检索结果互斥：检索后只显示结果，清空输入框回到浏览。
+function setBrowseVisible(visible){browseList.hidden=!visible;browseMore.hidden=!visible||browseNext===null;browseStatus.hidden=!visible;}
+function setSearchStatus(state,text){
+  const node=$("vault-search-status");node.hidden=!text;node.textContent=text||"";
+  node.classList.toggle("is-running",state==="running");node.classList.toggle("is-done",state==="done");
+  node.replaceChildren();
+  if(!text)return;
+  if(state==="running"){const spin=element("span",undefined,"search-spinner");spin.setAttribute("aria-hidden","true");node.append(spin);}
+  node.append(element("span",text));
+}
+let searching=false;
+function searchNotes(){
+  if(searching)return;
+  const query=$("vault-query").value.trim();
+  if(!query)return;
+  searching=true;
+  const results=$("vault-results"),button=$("vault-search-button");
+  results.replaceChildren();setBrowseVisible(false);
+  setSearchStatus("running","正在检索…");button.disabled=true;
+  void action(async()=>{
+    try{
+      const reply=await command("search_notes",{query});
+      const hits=reply.results||[];
+      for(const hit of hits){
+        const row=element("div",undefined,"card"),link=element("button",`${hit.title} · 第 ${hit.startLine}–${hit.endLine} 行`,"note-link");
+        link.onclick=()=>action(async()=>{const file=await command("resolve_file",{path:hit.url});await tauri.core.invoke("open_local_file",{path:file.path});});
+        row.append(link,element("p",excerpt(hit),"note-excerpt"));results.append(row);
+      }
+      applyCardColumns();
+      setSearchStatus("done",hits.length?`成功检索 ${hits.length} 条`:"没有匹配段落");
+      if(!hits.length)results.append(element("p","没有匹配段落。可以尝试笔记标题或更具体的关键词。清空输入框可回到浏览。","hint"));
+    }catch(error){setSearchStatus("","");setBrowseVisible(true);throw error;}
+    finally{searching=false;button.disabled=false;}
+  });
+}
+if(typeof ResizeObserver==="function")new ResizeObserver(()=>applyCardColumns()).observe(document.querySelector("main"));
+window.addEventListener("resize",applyCardColumns);
 function command(type, args = {}) {
-  const id = `settings-${++sequence}`;
+  const id = `${commandPrefix}${++sequence}`;
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error("操作超时，请检查 Agent 连接")); }, 30000);
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error(["save_provider","discover_models","refresh_model","update_model"].includes(type)?"模型设置操作超过 30 秒未完成，草稿已保留；请重试或检查模型服务。":"操作超过 30 秒未完成，请重试；若仍无响应，请检查 Agent 状态。")); }, 30000);
     pending.set(id, { resolve, reject, timer });
     tauri.core.invoke("agent_command", { command: { type, id, ...args } }).catch(error => { clearTimeout(timer); pending.delete(id); reject(error); });
   });
@@ -39,6 +109,7 @@ $("file-access").onchange = () => action(async()=>{try { await command("set_file
 let capabilities = {};
 function element(tag, text, className) { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (className) e.className = className; return e; }
 function renderCapabilities(state) {
+  if(browseRoot!==(state.vaultPath||null)){browseRoot=state.vaultPath||null;void browseNotes(true);}
   capabilities = state;
   roleSkills.update(state.skills || []);
   $("vault-path").textContent = state.vaultPath || "未选择笔记库";
@@ -64,11 +135,12 @@ $("choose-vault").onclick = () => action(async () => { const vaultPath = await t
 $("disconnect-vault").onclick = () => action(async () => { await command("configure_capabilities", { vaultPath: null }); $("vault-results").replaceChildren(); });
 $("save-tavily").onclick = () => action(async () => { if (!$("tavily-key").value.trim()) throw new Error("请填写 Tavily Key"); await command("configure_capabilities", { key: $("tavily-key").value, webEnabled: true }); $("tavily-key").value = ""; notice("搜索 Key 已保存，联网搜索已开启。"); });
 for (const [id, key] of [["web-enabled", "webEnabled"], ["browser-enabled", "browserEnabled"]]) $(id).onchange = () => action(async () => { try { await command("configure_capabilities", { [key]: $(id).checked }); } catch(e) { $(id).checked = !$(id).checked; throw e; } });
-$("vault-search-form").onsubmit = event => { event.preventDefault(); void action(async () => {
-  const r = await command("search_notes", { query: $("vault-query").value }); $("vault-results").replaceChildren();
-  for (const hit of r.results || []) { const row = element("div", undefined, "card"), link = element("button", `${hit.title} · 第 ${hit.startLine}–${hit.endLine} 行`, "note-link"); link.onclick = () => action(async () => { const file = await command("resolve_file", { path: hit.url }); await tauri.core.invoke("open_local_file", { path: file.path }); }); row.append(link, element("p", hit.content, "note-excerpt")); $("vault-results").append(row); }
-  if (!r.results?.length) $("vault-results").append(element("p", "没有匹配段落。可以尝试笔记标题或更具体的关键词。", "hint"));
-}); };
+$("vault-search-form").onsubmit = event => { event.preventDefault(); searchNotes(); };
+// 清空输入框回到浏览视图，避免检索结果和浏览卡片同时堆在页面上。
+$("vault-query").addEventListener("input", () => {
+  if ($("vault-query").value.trim()) return;
+  $("vault-results").replaceChildren(); setSearchStatus("", ""); setBrowseVisible(true);
+});
 function renderLearner(profile) {
   const groups = [["学习目标", profile.goals || []], ["知识状态", profile.knowledge || []], ["误解记录", profile.misconceptions || []], ["学习偏好", profile.preferences || []]];
   $("learner-overview").replaceChildren(); $("learner-profile").replaceChildren();
@@ -92,11 +164,14 @@ function showSection(section) {
   document.querySelector("main").scrollTop = 0;
 }
 function editProvider(template, provider = null) {
-  editing = template; providerId = provider?.id || null;
+  editing = template; providerId = provider?.id || null; providerDraftId = provider?.clientRequestId || (provider ? null : crypto.randomUUID());
   $("provider-form").hidden = false; $("provider-heading").textContent = template.name;
   $("provider-name").value = provider?.name || template.name;
   $("base-url").value = provider?.baseUrl || template.baseUrl || "";
   $("protocol").value = provider?.protocol || template.protocol;
+  $("parallel-requests").checked = provider?.parallelRequests === true;
+  $("parallel-limit").value = provider?.maxConcurrentRequests || 2;
+  syncParallelRequests();
   $("api-key").value = ""; $("api-key").placeholder = provider?.hasKey ? "已保存；留空保留当前 Key" : "无鉴权服务可留空";
   renderProviderModels(provider?.models || []);
   $("provider-form").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -123,7 +198,7 @@ function renderProviders() {
   }
   if (providerId) renderProviderModels(providers.find(p => p.id === providerId)?.models || []);
 }
-function modelEditor(config){$("manual-model").value=config.id;$("manual-context").value=config.contextWindow||"";$("manual-output").value=config.maxTokens||"";$("manual-reasoning").value=config.reasoning==null?"unknown":config.reasoning?"yes":"no";$("manual-vision").checked=config.input?.includes("image")||false;$("thinking-format").value=config.compat?.thinkingFormat||"";$("manual-levels").value=config.reasoning?config.thinkingLevels?.filter(l=>l!=="off").join(", ")||"":"";document.querySelector(".advanced").open=true;$("manual-model").scrollIntoView({block:"nearest"});}
+function modelEditor(config){$("manual-model").value=config.id;$("manual-context").value=config.contextWindow||"";$("manual-output").value=config.maxTokens||"";$("manual-reasoning").value=config.reasoning==null?"unknown":config.reasoning?"yes":"no";$("manual-vision").checked=config.input?.includes("image")||false;$("thinking-format").value=config.compat?.thinkingFormat||"";$("manual-levels").value=config.reasoning?config.thinkingLevels?.filter(l=>l!=="off").join(", ")||"":"";explainThinkingProtocol();document.querySelector(".advanced").open=true;$("manual-model").scrollIntoView({block:"nearest"});}
 function renderProviderModels(models) {
   $("discovered-models").replaceChildren();
   for (const model of models) {
@@ -140,27 +215,49 @@ function renderProviderModels(models) {
         modelEditor(config);
       } finally {use.disabled=false;use.textContent="获取配置";}
     });
-    const edit=document.createElement("button");edit.type="button";edit.className="secondary";edit.textContent="编辑";edit.onclick=()=>modelEditor(model);const actions=document.createElement("div");actions.className="model-actions";actions.append(edit,use);row.append(info, actions); $("discovered-models").append(row);
+    const enabledLabel = document.createElement("label"); enabledLabel.className = "model-enabled";
+    const enabled = document.createElement("input"); enabled.type = "checkbox"; enabled.className = "model-toggle"; enabled.checked = model.enabled !== false;
+    enabled.setAttribute("aria-label", `将 ${model.name || model.id} 加入模型选择栏`);
+    enabled.onchange = () => action(async () => {
+      enabled.disabled = true;
+      try { await command("update_model", { providerId, model: { id: model.id, enabled: enabled.checked } }); }
+      catch (error) { enabled.checked = !enabled.checked; throw error; }
+      finally { enabled.disabled = false; }
+    });
+    enabledLabel.append(enabled, document.createTextNode("可选"));
+    const edit=document.createElement("button");edit.type="button";edit.className="secondary";edit.textContent="编辑";edit.onclick=()=>modelEditor(model);const actions=document.createElement("div");actions.className="model-actions";actions.append(enabledLabel,edit,use);row.append(info, actions); $("discovered-models").append(row);
   }
 }
+function syncParallelRequests(){
+  const enabled=$("parallel-requests").checked;
+  $("parallel-limit-row").hidden=!enabled;$("parallel-limit").disabled=!enabled;
+}
+$("parallel-requests").onchange=syncParallelRequests;
 async function saveProvider() {
   if (!$("provider-form").reportValidity()) throw new Error("请填写必需信息");
-  const reply = await command("save_provider", { providerId, template: editing.id, name: $("provider-name").value, protocol: $("protocol").value, baseUrl: $("base-url").value, key: $("api-key").value });
+  const reply = await command("save_provider", { providerId, clientRequestId: providerDraftId, template: editing.id, name: $("provider-name").value, protocol: $("protocol").value, baseUrl: $("base-url").value, parallelRequests:$("parallel-requests").checked, maxConcurrentRequests:Number($("parallel-limit").value), key: $("api-key").value });
   providerId = reply.providerId; $("api-key").value = ""; $("api-key").placeholder = "已保存；留空保留当前 Key";
+  return reply;
 }
-$("provider-form").onsubmit = event => { event.preventDefault(); void action(async () => { await saveProvider(); notice("配置已保存，点击获取模型与信息。"); }); };
+$("provider-form").onsubmit = event => { event.preventDefault(); void action(async () => { const reply=await saveProvider(); notice(`${reply.message||"配置已保存"}。可继续获取模型与信息。`); }); };
 $("discover").onclick = () => action(async () => {
   $("discover").disabled = true; notice("正在连接服务并获取模型信息…");
   try { await saveProvider(); await command("discover_models", { providerId }); renderProviderModels(providers.find(p => p.id === providerId)?.models || []); notice("已获取模型列表。接口缺失的能力信息显示为未知。"); }
   finally { $("discover").disabled = false; }
 });
 $("manual-save").onclick = () => action(async () => {
+  const button=$("manual-save");button.disabled=true;button.textContent="保存中…";
+  try{
   await saveProvider(); const value = $("manual-reasoning").value;
   const model = { id: $("manual-model").value.trim(), vision:$("manual-vision").checked, ...($("manual-context").value ? { contextWindow: Number($("manual-context").value) } : {}), ...($("manual-output").value ? { maxTokens: Number($("manual-output").value) } : {}), ...(value !== "unknown" ? { reasoning: value === "yes" } : {}), thinkingFormat: $("thinking-format").value };
   if ($("manual-levels").value.trim()) model.thinkingLevels = $("manual-levels").value.split(/[,，\s]+/).filter(Boolean);
-  await command("update_model", { providerId, model }); notice("模型信息已保存。");
+  const savedModel=await command("update_model", { providerId, model });
+  document.querySelector(".advanced").open=false;$("provider-form").hidden=true;editing=null;providerId=null;providerDraftId=null;
+  notice(`${savedModel.message||`模型 ${model.id} 信息已保存`}。`);$("notice").scrollIntoView({block:"nearest"});
+  }catch(error){notice(`保存失败：${error.message}`,true);$("notice").scrollIntoView({block:"nearest"});}
+  finally{button.disabled=false;button.textContent="保存模型信息";}
 });
-$("cancel-provider").onclick = () => { $("provider-form").hidden = true; editing = null; providerId = null; };
+$("cancel-provider").onclick = () => { $("provider-form").hidden = true; editing = null; providerId = null; providerDraftId = null; };
 function deletionButton(label, work) {
   const button = document.createElement("button"); button.className = "secondary"; button.textContent = label; let timer;
   button.onclick = () => {
@@ -177,7 +274,19 @@ function renderMemory() {
       const content = document.createElement("div"), title = document.createElement("h3"), text = document.createElement("p"), source = document.createElement("small");
       title.textContent = item.title || item.key; text.textContent = item.body || item.content;
       source.textContent = item.updated ? `更新于 ${new Date(item.updated).toLocaleString()}${item.source ? " · 来源会话 " + item.source.slice(0, 8) : ""}` : "已有记忆";
-      content.append(title, text, source); row.append(content, deletionButton("删除", () => command(id === "facts" ? "memory_fact_delete" : id === "working" ? "memory_work_delete" : "memory_note_delete", id === "facts" ? { key: item.key } : id === "working" ? {title:item.title} : { noteId: item.id }))); list.append(row);
+      if(id==="working")source.textContent+=` · ${item.scope?"项目："+item.scope:"全局经验"}`;
+      if(id==="working"){
+        source.textContent+=` · 修订 ${item.revision||1}${item.status==="invalidated"?" · 已失效（不会召回）":""}`;
+        if(item.status!=="invalidated"&&(item.verification||item.evidence)){
+          const draftButton=element("button","生成技能草稿","secondary");draftButton.type="button";
+          draftButton.onclick=()=>action(async()=>{draftButton.disabled=true;try{const {draft}=await command("draft_work_skill",{workId:item.id});
+            const preview=element("details"),summary=element("summary","技能草稿（尚未启用）"),body=element("pre",draft.body,"note-excerpt"),enable=element("button","导入技能库","secondary");preview.open=true;enable.type="button";
+            enable.onclick=()=>action(async()=>{enable.disabled=true;try{await command("import_skill",{path:draft.dir});enable.textContent="已导入，可在角色中绑定";notice("技能已导入，请在角色中绑定后使用。");}catch(error){enable.disabled=false;throw error;}});
+            preview.append(summary,body,enable);content.append(preview);notice("已生成技能草稿，请检查适用条件和验证方法后导入。");
+          }finally{draftButton.disabled=false;}});content.append(draftButton);
+        }
+      }
+      content.prepend(title, text, source); row.append(content, deletionButton("删除", () => command(id === "facts" ? "memory_fact_delete" : id === "working" ? "memory_work_delete" : "memory_note_delete", id === "facts" ? { key: item.key } : id === "working" ? {title:item.title,workId:item.id} : { noteId: item.id }))); list.append(row);
     }
     if (!entries.length) { const p = document.createElement("p"); p.className = "hint"; p.textContent = "尚无内容，Agent 会从对话中整理。"; list.append(p); }
   }
@@ -273,7 +382,9 @@ if (tauri) {
     await tauri.event.listen("agent-event", event => {
       const r = event.payload;
       if (r.id && pending.has(r.id) && ["ack", "error"].includes(r.type)) { const p = pending.get(r.id); clearTimeout(p.timer); pending.delete(r.id); r.type === "error" ? p.reject(new Error(r.message)) : p.resolve(r); }
-      if (r.type === "providers") { templates = r.templates || []; providers = r.providers || []; renderProviders(); }
+      if (r.type === "providers") { templates = r.templates || []; providers = r.providers || []; renderProviders(); renderOverviewModels(); }
+      if (r.type === "session") { overviewSessionModel={provider:r.model?.split("/")[0],id:r.model?.split("/").slice(1).join("/")}; renderOverviewModels(); }
+      if (r.type === "vault_overview_config") { overviewSavedSelection=r.selection||null; renderOverviewModels(overviewSavedSelection?JSON.stringify({providerId:overviewSavedSelection.providerId,modelId:overviewSavedSelection.modelId}):undefined); }
       if (r.type === "memory") { memory = r.state; renderMemory(); }
       if (r.type === "learner") renderLearner(r.state);
       if (r.type === "capabilities") renderCapabilities(r.state);
@@ -282,6 +393,7 @@ if (tauri) {
       if (r.type === "vault_overview") renderOverview(r);
       if (r.type === "roles") renderRoles(r.roles || []);
       if (r.type === "memory_status") $("memory-status").textContent = ({ organizing:" 正在整理…", saved:" 已整理", error:" 整理失败，可稍后重试" })[r.status] || "";
+      if(r.type==="work_memory_status")notice(r.message||"工作经验状态已更新。",r.status==="error");
       if (r.type === "disconnected") { for (const p of pending.values()) { clearTimeout(p.timer); p.reject(new Error("Agent 连接断开")); } pending.clear(); notice("Agent 连接断开，请在主对话窗口恢复连接后重试。", true); }
     });
     const prefs = await tauri.core.invoke("desktop_preferences"); savedShortcut = prefs.activeShortcut || prefs.shortcut || ""; $("shortcut").textContent = savedShortcut || "录入快捷键"; $("autostart").checked = prefs.autostart === true;
@@ -302,8 +414,29 @@ $("mcp-form").onsubmit=e=>{e.preventDefault();void action(async()=>{await comman
 function syncMcpTransport(){const http=$("mcp-transport").value==="http";$("mcp-http-fields").hidden=!http;$("mcp-key-field").hidden=!http;$("mcp-stdio-fields").hidden=http;}
 $("mcp-transport").onchange=syncMcpTransport;syncMcpTransport();
 
-let overviewPath=null;
-function renderOverview(info){overviewPath=info.path||null;const working=["scanning","generating"].includes(info.state);const status=info.state==="ready"?"总览已保存，后续对话将使用科目与目录导航。":info.message||"连接笔记库后自动生成。";$("vault-overview-status").textContent=status;$("generate-overview").disabled=working;$("cancel-overview").hidden=!working;$("open-overview").hidden=info.state!=="ready"||!overviewPath;}
-$("generate-overview").onclick=()=>action(()=>command("generate_vault_overview"));
+let overviewPath=null,overviewSessionModel=null,overviewSavedSelection=null,overviewModelOptions=[],overviewLastState={state:'idle'};
+function renderOverviewModels(preferred){
+  const select=$("overview-model"),previous=preferred||select.value||(overviewSavedSelection?JSON.stringify({providerId:overviewSavedSelection.providerId,modelId:overviewSavedSelection.modelId}):"");overviewModelOptions=[];select.replaceChildren();
+  for(const provider of providers)for(const model of provider.models||[]){if(model.enabled===false)continue;const value=JSON.stringify({providerId:provider.id,modelId:model.id});overviewModelOptions.push({value,providerId:provider.id,model});const option=element("option",`${provider.name||provider.id} · ${model.name||model.id}`);option.value=value;select.append(option);}
+  const fallback=overviewModelOptions.find(x=>x.value===previous)||overviewModelOptions.find(x=>x.providerId===overviewSessionModel?.provider&&x.model.id===overviewSessionModel?.id)||overviewModelOptions[0];
+  if(fallback)select.value=fallback.value;renderOverviewReasoning(overviewSavedSelection?.reasoning);renderOverview(overviewLastState);
+}
+function renderOverviewReasoning(preferred){const select=$("overview-reasoning"),old=preferred||select.value,selected=overviewModelOptions.find(x=>x.value===$("overview-model").value);select.replaceChildren();const levels=["off",...new Set((selected?.model.thinkingLevels||[]).filter(level=>level!=="off"))];for(const level of levels){const option=element("option",({off:"关闭思考",low:"低",medium:"中",high:"高",xhigh:"极高"})[level]||level);option.value=level;select.append(option);}select.value=levels.includes(old)?old:"off";}
+$("overview-model").onchange=()=>{renderOverviewReasoning("off");void action(persistOverviewSelection);};
+$("overview-reasoning").onchange=()=>void action(persistOverviewSelection);
+function persistOverviewSelection(){const selected=overviewModelOptions.find(x=>x.value===$("overview-model").value);if(!selected)return Promise.resolve();overviewSavedSelection={providerId:selected.providerId,modelId:selected.model.id,reasoning:$("overview-reasoning").value};return command("save_vault_overview_config",overviewSavedSelection);}
+function renderOverviewProgress(info,working){
+  const bar=$("overview-progress"),fill=$("overview-progress-fill"),label=$("overview-progress-label");
+  const percent=Number.isFinite(info.progress)?Math.round(Math.max(0,Math.min(1,info.progress))*100):null;
+  // Finished, idle and error states keep the bar hidden; only a running task shows it.
+  const visible=working&&percent!==null;
+  bar.hidden=!visible;
+  if(!visible)return;
+  fill.style.width=`${percent}%`;
+  label.textContent=Number.isFinite(info.batches)&&info.batches?`${percent}% · ${info.done||0}/${info.batches} 批${info.failed?`，${info.failed} 批待重试`:""}`:`${percent}%`;
+  bar.setAttribute("aria-valuenow",String(percent));
+}
+function renderOverview(info){overviewLastState=info;overviewPath=info.path||null;const stopping=info.state==="stopping",working=stopping||["scanning","generating"].includes(info.state);const parallel=info.concurrency>1?` · 并发 ${info.concurrency}`:"";const status=info.state==="ready"?`${info.existing?"已恢复已有总览":"总览已生成并保存"}${info.model?` · ${info.model}`:" · 历史文件未记录模型"}${parallel}。原文件已保留，不会自动覆盖。\n${overviewPath}`:info.message||"选择模型和思考档位后，点击生成总览。";$("vault-overview-status").textContent=status;renderOverviewProgress(info,working);$("generate-overview").disabled=working||info.state==="ready"||!overviewModelOptions.length;$("generate-overview").textContent=info.state==="ready"?(info.existing?"已有总览已恢复":"总览已生成"):"生成 / 重试总览";$("overview-model").disabled=working;$("overview-reasoning").disabled=working;$("cancel-overview").hidden=!working;$("cancel-overview").textContent=stopping?"取消切换":"停止生成";$("open-overview").hidden=info.state!=="ready"||!overviewPath;}
+$("generate-overview").onclick=()=>action(()=>{const selected=overviewModelOptions.find(x=>x.value===$("overview-model").value);if(!selected)throw new Error("请先在模型设置中配置可用模型");return command("generate_vault_overview",{providerId:selected.providerId,modelId:selected.model.id,reasoning:$("overview-reasoning").value});});
 $("cancel-overview").onclick=()=>action(()=>command("cancel_vault_overview"));
 $("open-overview").onclick=()=>action(async()=>{if(overviewPath){const r=await command("resolve_file",{path:overviewPath});await tauri.core.invoke("open_local_file",{path:r.path});}});

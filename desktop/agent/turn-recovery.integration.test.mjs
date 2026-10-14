@@ -95,6 +95,7 @@ async function recoveryFixture(t, secondTruncated, malformed = false) {
   for (const layer of ["l1", "l2", "l3"]) await command("memory_enabled", { layer, enabled: false });
   const provider = await command("save_provider", { template: "custom", name: "隔离恢复测试", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, protocol: "openai-completions" });
   await command("discover_models", { providerId: provider.providerId });
+  await command("update_model", { providerId: provider.providerId, model: { id: "recovery-model", enabled: true } });
   await command("select_model", { provider: provider.providerId, model: "recovery-model", thinkingLevel: "medium" });
   const sessionId = events.filter(event => event.type === "session").at(-1).sessionId;
   const start = events.length;

@@ -10,6 +10,7 @@ use tauri::{
 use tauri_plugin_global_shortcut::{ShortcutState, GlobalShortcutExt};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 use std::{
+    collections::HashSet,
     fs::OpenOptions,
     io::{BufRead, BufReader, Write},
     path::PathBuf,
@@ -109,6 +110,54 @@ impl Drop for AgentProcess {
 struct AgentState(Mutex<Option<AgentProcess>>);
 #[derive(Default)]
 struct ShortcutStateStore(Mutex<String>);
+#[derive(Default)]
+struct ReadyWindows(Mutex<HashSet<String>>);
+
+fn native_window_is_ready(thread_id: u32, owner_pid: u32, property_pid: u32) -> bool {
+    thread_id != 0 && owner_pid != 0 && property_pid == owner_pid
+}
+
+fn ui_window_is_ready(app: &tauri::AppHandle, label: &str) -> bool {
+    app.state::<ReadyWindows>().0.lock().map(|ready| ready.contains(label)).unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn instance_lock_name() -> String {
+    if let Some(directory) = std::env::var_os("SUMMON_TEST_DATA_DIR") {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        directory.hash(&mut hasher);
+        format!("Local\\dev.rynorca.summon.test.{}", hasher.finish())
+    } else {
+        "Local\\dev.rynorca.summon.instance".to_owned()
+    }
+}
+
+#[cfg(windows)]
+fn ready_property_name(lock_name: &str) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    std::ffi::OsStr::new(&format!("Reed.MainWindowReady.{lock_name}"))
+        .encode_wide().chain(Some(0)).collect()
+}
+
+#[cfg(windows)]
+fn mark_native_main_window_ready(window: &tauri::WebviewWindow) -> Result<(), String> {
+    #[link(name = "user32")]
+    extern "system" {
+        fn SetPropW(window: isize, name: *const u16, data: *mut std::ffi::c_void) -> i32;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetCurrentProcessId() -> u32;
+    }
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+    let property = ready_property_name(&instance_lock_name());
+    let pid = unsafe { GetCurrentProcessId() };
+    if unsafe { SetPropW(hwnd.0 as isize, property.as_ptr(), pid as usize as *mut std::ffi::c_void) } == 0 {
+        return Err(format!("Cannot mark main window UI-ready: {}", std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
 
 fn preferences_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(data_directory(app)?.join("user-config.json"))
@@ -169,8 +218,18 @@ fn set_appearance(app: tauri::AppHandle, style: String, theme: String) -> Result
 
 #[tauri::command]
 fn ui_ready(window: tauri::WebviewWindow) -> Result<(), String> {
+    startup_log(&format!("ui_ready received for {} (visible={})", window.label(), window.is_visible().unwrap_or(false)));
+    if window.label() == "main" {
+        #[cfg(windows)]
+        mark_native_main_window_ready(&window)?;
+    }
+    let app = window.app_handle();
+    app.state::<ReadyWindows>().0.lock().map_err(|_| "Ready window lock failed")?.insert(window.label().to_owned());
+    startup_log(&format!("UI ready marked for {}", window.label()));
     if window.label()=="main" && std::env::args().any(|a|a=="--autostart") {return Ok(());}
-    window.show().map_err(|e|e.to_string())
+    window.show().map_err(|e|e.to_string())?;
+    startup_log(&format!("ui_ready showed {} (visible={})", window.label(), window.is_visible().unwrap_or(false)));
+    Ok(())
 }
 
 /// 版本号以构建时的 tauri.conf.json 为准，启动动画与「关于」页共用同一来源。
@@ -353,6 +412,10 @@ fn agent_command(app: tauri::AppHandle, state: tauri::State<'_, AgentState>, com
 #[tauri::command]
 async fn open_settings(app: tauri::AppHandle, section: Option<String>) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("settings") {
+        if !ui_window_is_ready(&app, "settings") {
+            startup_log("Settings activation deferred: UI is not ready");
+            return Ok(());
+        }
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
         let _ = window.emit("settings-section", section.unwrap_or_else(|| "general".into()));
@@ -388,6 +451,10 @@ fn capture_shortcut(app: tauri::AppHandle, state: tauri::State<'_, ShortcutState
 
 fn show_main(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        if !ui_window_is_ready(app, "main") {
+            startup_log("Main activation ignored: UI is not ready");
+            return;
+        }
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
@@ -474,13 +541,15 @@ async fn open_local_file(path: String) -> Result<(), String> {
 }
 
 fn startup_log(message: &str) {
+    let elapsed_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis()).unwrap_or_default();
     let paths = [
         std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join("startup.log"))),
         Some(std::env::temp_dir().join("Reed-startup.log")),
     ];
     for path in paths.into_iter().flatten() {
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-            let _ = writeln!(file, "{message}");
+            let _ = writeln!(file, "[{elapsed_ms}] {message}");
             break;
         }
     }
@@ -529,14 +598,13 @@ fn claim_instance() -> Result<Option<InstanceGuard>, String> {
     #[link(name = "user32")]
     extern "system" {
         fn FindWindowW(class_name: *const u16, window_name: *const u16) -> isize;
+        fn GetPropW(window: isize, name: *const u16) -> isize;
+        fn GetWindowThreadProcessId(window: isize, process_id: *mut u32) -> u32;
         fn ShowWindow(window: isize, command: i32) -> i32;
         fn SetForegroundWindow(window: isize) -> i32;
     }
-    let lock_name = if let Some(directory) = std::env::var_os("SUMMON_TEST_DATA_DIR") {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new(); directory.hash(&mut hasher);
-        format!("Local\\dev.rynorca.summon.test.{}", hasher.finish())
-    } else { "Local\\dev.rynorca.summon.instance".to_owned() };
+    let lock_name = instance_lock_name();
+    let ready_property = ready_property_name(&lock_name);
     let name: Vec<u16> = std::ffi::OsStr::new(&lock_name)
         .encode_wide().chain(Some(0)).collect();
     let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
@@ -554,17 +622,46 @@ fn claim_instance() -> Result<Option<InstanceGuard>, String> {
             window=unsafe {FindWindowW(std::ptr::null(),legacy.as_ptr())};
         }
         if window != 0 {
-            unsafe {
-                ShowWindow(window, 9);
-                SetForegroundWindow(window);
-                CloseHandle(handle);
+            let mut ready = false;
+            for _ in 0..20 {
+                let mut owner_pid = 0u32;
+                let thread_id = unsafe { GetWindowThreadProcessId(window, &mut owner_pid) };
+                let property_pid = unsafe { GetPropW(window, ready_property.as_ptr()) } as usize as u32;
+                if native_window_is_ready(thread_id, owner_pid, property_pid) {
+                    ready = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
             }
+            if ready {
+                unsafe {
+                    ShowWindow(window, 9);
+                    SetForegroundWindow(window);
+                }
+            } else {
+                startup_log("Existing instance window did not become UI-ready within 2 seconds; activation skipped");
+            }
+            unsafe { CloseHandle(handle); }
             return Ok(None);
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     unsafe { CloseHandle(handle); }
     Err("Reed is already running, but its window was not found".into())
+}
+
+#[cfg(test)]
+mod window_readiness_tests {
+    use super::native_window_is_ready;
+
+    #[test]
+    fn native_window_requires_ready_property_from_its_own_process() {
+        assert!(native_window_is_ready(7, 42, 42));
+        assert!(!native_window_is_ready(7, 42, 0));
+        assert!(!native_window_is_ready(7, 42, 99));
+        assert!(!native_window_is_ready(0, 42, 42));
+        assert!(!native_window_is_ready(7, 0, 0));
+    }
 }
 
 fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
@@ -606,6 +703,7 @@ fn run_desktop() -> tauri::Result<()> {
     tauri::Builder::default()
         .manage(AgentState::default())
         .manage(ShortcutStateStore::default())
+        .manage(ReadyWindows::default())
         .manage(BoundsAutosave::default())
         .manage(RoundedBounds::default())
         .plugin(window_state.build())
@@ -619,7 +717,10 @@ fn run_desktop() -> tauri::Result<()> {
             std::fs::create_dir_all(&webview_dir)?;
             startup_log(&format!("WebView2 data directory: {}", webview_dir.display()));
             let config = &app.config().app.windows[0];
-            let mut builder = WebviewWindowBuilder::from_config(app.handle(), config)?.decorations(false).shadow(false).data_directory(webview_dir);
+            // Keep the native window hidden until the branded first frame calls ui_ready.
+            // Set this on the builder as well as in tauri.conf.json so a future config
+            // change cannot expose WebView2's unpainted client area during startup.
+            let mut builder = WebviewWindowBuilder::from_config(app.handle(), config)?.visible(false).decorations(false).shadow(false).data_directory(webview_dir);
             #[cfg(windows)]
             if std::env::var_os("SUMMON_TEST_DATA_DIR").is_some() {
                 if let Ok(port) = std::env::var("SUMMON_TEST_WEBVIEW_PORT") {
@@ -627,6 +728,7 @@ fn run_desktop() -> tauri::Result<()> {
                 }
             }
             let main_window = builder.build()?;
+            startup_log(&format!("Main window built (visible={})", main_window.is_visible().unwrap_or(false)));
             round_window(&main_window);
             if std::env::args().any(|arg| arg == "--autostart") {
                 let _ = main_window.hide();

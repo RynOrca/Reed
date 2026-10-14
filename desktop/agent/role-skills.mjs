@@ -44,7 +44,7 @@ export async function prepareRoleSkills(role,capabilities,prompt) {
     const skill=capabilities.state.skills.find(s=>s.id===binding.skillId);
     if(!skill) throw new Error('角色绑定的技能已不存在，请编辑角色移除该绑定');
     const applies=skillApplies(skill,prompt);
-    if(!skill.enabled) {
+    if(!skill.enabled||(capabilities.canUseSkill&&!capabilities.canUseSkill(skill))) {
       if(binding.required && applies) throw new Error(`必选技能 ${skill.name} 已停用，请在技能仓库启用后重试`);
       continue;
     }

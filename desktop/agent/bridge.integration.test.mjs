@@ -38,11 +38,19 @@ test("bridge selects an OpenAI-compatible remote model without contacting it", {
     await until((message) => message.type === "ready");
     child.stdin.write(`${JSON.stringify({ id: "1", type: "init" })}\n`);
     await until((message) => message.type === "history");
+    await until((message) => message.id === "1" && message.type === "ack");
+    const reconnectStart=seen.length;
+    child.stdin.write(`${JSON.stringify({id:'reconnect',type:'init'})}\n`);
+    await until(message=>message.id==='reconnect'&&message.type==='ack');
+    const reconnect=seen.slice(reconnectStart);
+    assert.ok(reconnect.some(message=>message.type==='history'),'repeat init restores current history');
+    assert.ok(reconnect.some(message=>message.type==='session_sync'&&message.busy===false),'repeat init synchronizes idle state');
     child.stdin.write(`${JSON.stringify({ id: "2", type: "configure_remote", baseUrl: "http://192.168.1.8:8000/v1", modelId: "qwen-local", key: "test-key-only" })}\n`);
     const result = await until((message) => message.id === "2" && ["ack", "error"].includes(message.type));
     assert.equal(result.type, "ack", result.message || stderr);
     assert.ok(seen.some((message) => message.type === "session" && message.model === "summon-remote/qwen-local"));
     assert.ok(seen.some((message) => message.type === "models" && message.models?.some((model) => model.id === "qwen-local")));
+    for(const name of ['remember_work','recall_memory','draft_work_skill','report_work_use'])assert.ok(seen.some(message=>message.type==='agent_capabilities'&&message.tools.some(tool=>tool.name===name&&tool.active)),`missing active experience tool ${name}`);
   } finally {
     child.stdin.end();
     child.kill();

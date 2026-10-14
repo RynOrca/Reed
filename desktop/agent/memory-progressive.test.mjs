@@ -38,7 +38,7 @@ test('画像关闭仍能保存工具经验，无工具证据和禁写会话不�
   workMemoryExtension({judgeValue:async candidates=>candidates.map(()=>true),memory,learner:{},roles:{current:()=>({learnerProfileEnabled:false})},currentSession:()=>session,reviewEnabled:()=>false,send(){}})({registerTool:t=>tools[t.name]=t,on:(n,f)=>events[n]=f});
   const input={kind:'shell',title:'PowerShell 命令',body:'使用分号分隔命令',evidence:'Unexpected token'};
   await assert.rejects(tools.remember_work.execute('1',input),/证据/);events.before_agent_start();events.tool_result({toolName:'mcp_call',content:[{type:'text',text:'Unexpected token'}],isError:true});
-  events.tool_result({toolName:'mcp_call',content:[{type:'text',text:'Command succeeded'}],isError:false});await tools.remember_work.execute('1',input);assert.equal(memory.state.working.length,1);
+  events.tool_result({toolName:'mcp_call',input:{arguments:{command:'Write-Output amber'}},content:[{type:'text',text:JSON.stringify({exitCode:0,stdout:'Command succeeded'})}],isError:false});await assert.rejects(tools.remember_work.execute('1',input),/成功执行/);await tools.remember_work.execute('1',{...input,body:'已执行 Write-Output amber',evidence:'Command succeeded'});assert.equal(memory.state.working.length,1);
   session.state.messages.push({role:'user',content:'不要保存到长期记忆'});await assert.rejects(tools.remember_work.execute('1',input),/关闭/);
 }));
 

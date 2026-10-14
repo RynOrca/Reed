@@ -103,8 +103,10 @@ pub fn migrate(source: &Path, target: &Path) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
     fn fixture() -> PathBuf {
-        let p = std::env::temp_dir().join(format!("reed-profile-test-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let p = std::env::temp_dir().join(format!("reed-profile-test-{}-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),FIXTURE_SEQUENCE.fetch_add(1,Ordering::Relaxed)));
         fs::create_dir_all(&p).unwrap(); p
     }
     #[test]

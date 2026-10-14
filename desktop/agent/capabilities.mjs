@@ -1,7 +1,26 @@
 import { mkdir, readFile, writeFile, rename, readdir, lstat, realpath, copyFile } from "node:fs/promises";
 import { join, resolve, relative, isAbsolute, basename, extname } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { protectKey, unprotectKey } from "./endpoint.mjs";
+import { LocalSearchIndex } from "./local-search.mjs";
+import { setImmediate as yieldLoop } from 'node:timers/promises';
+
+// Strip only a complete leading YAML block; preserve malformed or ordinary Markdown.
+export function noteBody(text) { return String(text).replace(/^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/,'').trimStart(); }
+
+/**
+ * Separators, fences and stray punctuation are not evidence. They used to be
+ * indexed as chunks and, being tiny, inherited their heading and outranked the
+ * paragraph that actually contains the answer.
+ */
+export function indexableChunk(content) {
+  const text = String(content ?? "");
+  const significant = text.replace(/[\s\p{P}\p{S}]/gu, "");
+  // One CJK character carries about as much as two Latin ones for retrieval.
+  const cjk = (significant.match(/[\u3400-\u9fff\uf900-\ufaff]/gu) || []).length;
+  const weight = cjk * 2 + (significant.length - cjk);
+  return weight >= 6 && /[\p{L}\p{N}]/u.test(significant);
+}
 
 export function inside(root, path) { const rel = relative(root, path); return !rel.startsWith("..") && !isAbsolute(rel); }
 export function terms(text) { const s = String(text).toLowerCase(); return [...new Set([...(s.match(/[a-z0-9_]{2,}/g) || []), ...(s.match(/[\u3400-\u9fff]+/g) || []).flatMap(v => Array.from({length: Math.max(1,v.length-1)}, (_,i)=>v.slice(i,i+2)))])]; }
@@ -15,16 +34,16 @@ export async function walk(root, accept, budget = { files:0, bytes:0 }) {
       if(!item.isFile() || !accept(path)) continue;
       const info=await lstat(path); budget.files++; budget.bytes+=info.size;
       if(budget.files>10000 || budget.bytes>100*1024*1024) throw new Error("文件库超过轻量索引上限（1 万文件 / 100 MB），请选择较小的目录");
-      found.push({path,size:info.size,mtime:info.mtimeMs});
+      found.push({path,size:info.size,mtime:info.mtimeMs,ctime:info.ctimeMs});
     }
   }
   await visit(root); return found;
 }
 export class CapabilityStore {
-  constructor(dir,{encrypt=protectKey,decrypt=unprotectKey,config=null}={}) { this.dir=dir; this.config=config; this.path=join(dir,"capabilities.json"); this.encrypt=encrypt; this.decrypt=decrypt; this.state={skills:[],vaultPath:null,webEnabled:false,browserEnabled:true}; this.cache=new Map(); this.key=""; }
+  constructor(dir,{encrypt=protectKey,decrypt=unprotectKey,config=null}={}) { this.dir=dir; this.config=config; this.path=join(dir,"capabilities.json"); this.encrypt=encrypt; this.decrypt=decrypt; this.state={skills:[],vaultPath:null,webEnabled:false,browserEnabled:true}; this.cache=new Map(); this.localSearch=null; this.key=""; this.noteScanStatus={state:"idle",checkedFiles:0,errorCount:0,errors:[]}; }
   async load() { try { Object.assign(this.state,this.config?await this.config.get("capabilities",this.path,this.state):JSON.parse(await readFile(this.path,"utf8"))); } catch(e) { if(e.code!=="ENOENT") throw e; } try { this.key=await this.decrypt(await this.encryptedKey()); } catch(e) { if(e.code!=="ENOENT") this.keyError="搜索凭据无法读取，请重新保存"; } }
   async encryptedKey(){const data=this.config?await this.config.read():{};if(data.credentials?.tavily)return data.credentials.tavily;const old=await readFile(join(this.dir,"tavily-key.dpapi"),"utf8");if(this.config)await this.config.update(d=>{d.credentials||={};d.credentials.tavily=old;});return old;}
-  snapshot() { return {...this.state,hasSearchKey:!!this.key,keyError:this.keyError}; }
+  snapshot() { return {...this.state,hasSearchKey:!!this.key,keyError:this.keyError,noteScanStatus:this.noteScanStatus}; }
   async persist() { if(this.config){await this.config.set("capabilities",this.state);return;} await writeFile(this.path+".tmp",JSON.stringify(this.state,null,2)); await rename(this.path+".tmp",this.path); }
   async configure({vaultPath,webEnabled,browserEnabled,key}) {
     let selectedVault=this.state.vaultPath;
@@ -32,7 +51,7 @@ export class CapabilityStore {
     if(key!==undefined && key.trim()) { if(key.length>4096) throw new Error("Key 过长"); const encrypted=await this.encrypt(key.trim()); if(this.config)await this.config.update(d=>{d.credentials||={};d.credentials.tavily=encrypted;});else await writeFile(join(this.dir,"tavily-key.dpapi"),encrypted); this.key=key.trim(); this.keyError=null; }
     if(webEnabled!==undefined) this.state.webEnabled=!!webEnabled;
     if(browserEnabled!==undefined) this.state.browserEnabled=!!browserEnabled;
-    if(vaultPath!==undefined) { this.state.vaultPath=selectedVault; this.cache.clear(); }
+    if(vaultPath!==undefined) { this.state.vaultPath=selectedVault; this.cache.clear();this.noteScanStatus={state:"idle",checkedFiles:0,errorCount:0,errors:[]}; }
     await this.persist(); return this.snapshot();
   }
   async importSkill(source) {
@@ -47,35 +66,117 @@ export class CapabilityStore {
     if(files.length>500 || files.reduce((n,f)=>n+f.size,0)>10*1024*1024) throw new Error("单个技能最多 500 文件 / 10 MB");
     const id=randomUUID(), target=join(this.dir,"skills",id);
     for(const file of files) { const dest=join(target,relative(root,file.path)); await mkdir(resolve(dest,".."),{recursive:true}); await copyFile(file.path,dest); }
-    this.state.skills.push({id,name,description:description.slice(0,1000),path:target,enabled:true}); await this.persist(); return id;
+    const experienceId=text.match(/^reed_experience_id:\s*([a-z0-9-]+)\s*$/mi)?.[1],experienceRevision=Number(text.match(/^reed_experience_revision:\s*(\d+)\s*$/m)?.[1]);
+    this.state.skills.push({id,name,description:description.slice(0,1000),path:target,enabled:true,...(experienceId&&Number.isSafeInteger(experienceRevision)?{experienceId,experienceRevision}:{})}); await this.persist(); return id;
   }
   async toggleSkill(id,enabled) { const s=this.state.skills.find(s=>s.id===id); if(!s) throw new Error("技能不存在"); s.enabled=!!enabled; await this.persist(); }
-  enabledSkills() { return this.state.skills.filter(s=>s.enabled).map(s=>s.path); }
-  async searchNotes(query,limit=4) {
-    if(!this.state.vaultPath) return [];
-    const root=this.state.vaultPath, files=await walk(root,p=>extname(p).toLowerCase()===".md"), active=new Set(files.map(f=>f.path));
-    for(const p of this.cache.keys()) if(!active.has(p)) this.cache.delete(p);
-    const needles=terms(query); if(!needles.length) return [];
-    const hits=[];
-    for(const file of files) {
-      if(this.canRead && !(await this.canRead(file.path))) continue;
-      if(file.size>1024*1024) continue;
-      let entry=this.cache.get(file.path);
-      if(!entry || entry.mtime!==file.mtime) {
-        const lines=(await readFile(file.path,"utf8")).split(/\r?\n/), chunks=[]; let heading="",start=0;
-        for(let i=0;i<=lines.length;i++) {
-          if(i===lines.length || /^#{1,6}\s/.test(lines[i]) || (i>start && !lines[i].trim()) || i-start>=30) {
-            let first=start,last=i; while(first<last && !lines[first].trim())first++; while(last>first && !lines[last-1].trim())last--;
-            const content=lines.slice(first,last).join("\n").trim(); if(content) chunks.push({heading,startLine:first+1,endLine:last,content:content.slice(0,4000)});
-            if(i<lines.length && /^#{1,6}\s/.test(lines[i])) heading=lines[i].replace(/^#+\s*/,""); start=i;
-          }
-        }
-        entry={mtime:file.mtime,chunks}; this.cache.set(file.path,entry);
+  enabledSkills() { return this.state.skills.filter(s=>s.enabled&&(!this.canUseSkill||this.canUseSkill(s))).map(s=>s.path); }
+  async browseNotes(offset=0) {
+    if(!this.state.vaultPath)return {results:[],next:null,total:0};
+    if(!Number.isSafeInteger(offset)||offset<0)throw Error("浏览位置无效");
+    const root=this.state.vaultPath,files=(await walk(root,p=>extname(p).toLowerCase()===".md"&&basename(p)!=="Reed-笔记库总览.md")).sort((a,b)=>relative(root,a.path).localeCompare(relative(root,b.path),"zh-CN"));
+    const readable=[];for(const file of files)if(file.size<=1024*1024&&(!this.canRead||await this.canRead(file.path)))readable.push(file);
+    const results=[];for(const file of readable.slice(offset,offset+5)){const body=await readFile(file.path,"utf8");results.push({path:file.path,title:relative(root,file.path),content:noteBody(body).slice(0,1200),url:`summon-file:${encodeURIComponent(file.path)}`});}
+    return {results,total:readable.length,next:offset+results.length<readable.length?offset+results.length:null};
+  }
+  async searchNotes(query,limit=4,{signal}={}) {
+    const [results]=await this.searchMany([query],limit,{signal});
+    return results;
+  }
+  // Several queries from one retrieval plan (原问题 + 模型扩词) must not each
+  // rescan the vault: one walk and one index pass, then one FTS query per term.
+  async searchMany(queries,limit=4,{signal}={}) {
+    const list=[...new Set((Array.isArray(queries)?queries:[queries]).map(query=>String(query??"")))];
+    signal?.throwIfAborted();
+    const queued=performance.now();
+    const operation=(this.searchQueue||Promise.resolve()).catch(()=>{}).then(()=>this.searchNotesOnce(list,limit,{signal}));
+    this.searchQueue=operation;const results=await operation;this.noteScanStatus.totalMs=Math.round(performance.now()-queued);return results;
+  }
+  // Every retrieval revalidates the vault, so an edit is never hidden by a cache.
+  async searchNotesOnce(queries,limit=4,{signal}={}) {
+    signal?.throwIfAborted();
+    if(!this.state.vaultPath) { this.noteScanStatus={state:"idle",checkedFiles:0,errorCount:0,errors:[]};return queries.map(()=>[]); }
+    if(!queries.some(query=>terms(query).length))return queries.map(()=>[]);
+    const started=performance.now(),root=this.state.vaultPath;
+    const files=[];
+    const status={state:"complete",checkedFiles:0,errorCount:0,errors:[]};
+    const confirmedIds=new Set();
+    const fail=(path,error)=>{status.state="incomplete";status.errorCount++;if(status.errors.length<20)status.errors.push({path,message:error?.message||String(error)});};
+    const visit=async dir=>{
+      signal?.throwIfAborted();
+      let entries;try{entries=await readdir(dir,{withFileTypes:true});}catch(error){fail(dir,error);return;}
+      for(const item of entries){
+        signal?.throwIfAborted();
+        if(status.budgetStopped)return;
+        if(item.isSymbolicLink()||[".git",".obsidian","node_modules"].includes(item.name))continue;
+        const path=join(dir,item.name);
+        if(item.isDirectory()){await visit(path);if(status.budgetStopped)return;continue;}
+        if(!item.isFile()||extname(path).toLowerCase()!==".md"||basename(path)==="Reed-笔记库总览.md")continue;
+        try{const info=await lstat(path);status.filesSeen=(status.filesSeen||0)+1;status.bytes=(status.bytes||0)+info.size;if(status.filesSeen>10000||status.bytes>100*1024*1024){status.budgetStopped=true;fail(path,new Error("扫描预算中止（1 万文件 / 100 MB）"));return;}files.push({path,size:info.size,mtime:info.mtimeMs,ctime:info.ctimeMs});}
+        catch(error){fail(path,error);}
       }
-      const name=relative(root,file.path);
-      for(const chunk of entry.chunks) { const hay=chunk.content.toLowerCase(),title=(name+" "+chunk.heading).toLowerCase(); const score=needles.reduce((n,t)=>n+(hay.includes(t)?1:0)+(title.includes(t)?3:0),0); if(score) hits.push({...chunk,path:file.path,title:name,score,url:`summon-file:${encodeURIComponent(file.path)}#L${chunk.startLine}`}); }
+    };
+    await visit(root);delete status.bytes;delete status.filesSeen;delete status.budgetStopped;
+    const scanned=performance.now();status.timings={scanMs:Math.round(scanned-started)};
+    const activeIds=[];
+    try{
+    if(!this.localSearch)this.localSearch=new LocalSearchIndex(join(this.dir,"local-search.sqlite"));
+    for(const file of files) {
+      // Give the event loop back regularly so a stop command is read promptly,
+      // without paying a scheduler hop for every single file.
+      if(status.checkedFiles%16===0)await yieldLoop();
+      signal?.throwIfAborted();
+      status.checkedFiles++;
+      if(this.canRead){try{if(!(await this.canRead(file.path))){fail(file.path,new Error("读取权限被拒绝"));continue;}}catch(error){fail(file.path,error);continue;}}
+      if(file.size>1024*1024) continue;
+      const name=relative(root,file.path),prefix=`${createHash("sha256").update(name).digest("hex")}:`;
+      const revision=`${file.size}:${file.mtime}:${file.ctime}`;
+      // One indexed range lookup per file instead of materialising every chunk of
+      // the whole vault: on a large library that table read blocked the loop.
+      const previous=this.localSearch.list("notes",root,prefix);
+      if(previous.length&&previous.every(item=>item.revision===revision)){for(const item of previous){activeIds.push(item.id);confirmedIds.add(item.id);}continue;}
+      let body;try{body=await readFile(file.path,"utf8");}catch(error){fail(file.path,error);continue;}
+      const lines=body.split(/\r?\n/);
+      let heading="",start=0;const pending=[];
+      for(let i=0;i<=lines.length;i++) {
+        if(i===lines.length || /^#{1,6}\s/.test(lines[i]) || (i>start && !lines[i].trim()) || i-start>=30) {
+          let first=start,last=i; while(first<last && !lines[first].trim())first++; while(last>first && !lines[last-1].trim())last--;
+          const content=lines.slice(first,last).join("\n").trim();
+          if(content&&indexableChunk(content)) {
+            const id=`${prefix}${first+1}`;
+            // Frontmatter is metadata: strip it from the card preview, but only for
+            // chunks that really start the file, never for a mid-note "---" rule.
+            const shown=first===0?noteBody(content):content;
+            const payload={heading,startLine:first+1,endLine:last,content:content.slice(0,4000),...(shown!==content?{display:shown.slice(0,4000)}:{}),path:file.path,title:name,url:`summon-file:${encodeURIComponent(file.path)}#L${first+1}`};
+            pending.push({id,area:"notes",scope:root,text:`${name}\n${heading}\n${content.slice(0,4000)}`,payload,revision});
+            activeIds.push(id);confirmedIds.add(id);
+          }
+          if(i<lines.length && /^#{1,6}\s/.test(lines[i])) heading=lines[i].replace(/^#+\s*/,""); start=i;
+        }
+      }
+      for(let offset=0;offset<pending.length;offset+=32){await yieldLoop();signal?.throwIfAborted();this.localSearch.transaction(()=>{for(const record of pending.slice(offset,offset+32))this.localSearch.put(record);});}
     }
-    return hits.sort((a,b)=>b.score-a.score).slice(0,Math.min(8,Math.max(1,limit)));
+    signal?.throwIfAborted();
+    if(status.state==="complete")await this.localSearch.retainPaged("notes",root,activeIds);
+    const indexed=performance.now();status.timings.indexMs=Math.round(indexed-scanned);
+    this.noteScanStatus=status;
+    return this.#queryIndex(queries,limit,root,indexed,confirmedIds);
+    }catch(error){if(signal?.aborted)throw signal.reason;fail(root,error);this.noteScanStatus=status;return queries.map(()=>[]);}
+  }
+  #queryIndex(queries,limit,root,indexed,confirmedIds){
+    if(!this.localSearch)this.localSearch=new LocalSearchIndex(join(this.dir,"local-search.sqlite"));
+    const hits=queries.map(query=>{
+      if(!terms(query).length)return [];
+      return this.localSearch.search("notes",root,query,Math.min(100,Math.max(1,limit*4))).filter(hit=>confirmedIds.has(hit.id)).slice(0,Math.min(8,Math.max(1,limit))).map(hit=>({...hit.payload,score:hit.score}));
+    });
+    this.noteScanStatus.timings={...this.noteScanStatus.timings,ftsMs:Math.round(performance.now()-indexed)};
+    return hits;
+  }
+  // The index stays open between searches: reopening it re-ran the migration and
+  // consistency check on every query, which dominated warm searches on large vaults.
+  close() {
+    this.localSearch?.close();
+    this.localSearch=null;
   }
   async resolveFile(input,workspace) {
     let raw=String(input); if(raw.startsWith("summon-file:")) raw=decodeURIComponent(raw.slice(12).split("#")[0]); else if(raw.startsWith("file:")) raw=decodeURIComponent(new URL(raw).pathname).replace(/^\/(?=[A-Za-z]:)/,""); else raw=decodeURIComponent(raw.split("#")[0]);

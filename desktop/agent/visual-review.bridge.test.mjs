@@ -76,6 +76,7 @@ test("真实 bridge 保存未验收结论，切换并重开会话不会把 stop 
   for (const layer of ["l1", "l2", "l3"]) await command("memory_enabled", { layer, enabled: false });
   const provider = await command("save_provider", { template: "custom", name: "隔离验收历史测试", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, protocol: "openai-completions" });
   await command("discover_models", { providerId: provider.providerId });
+  await command("update_model", { providerId: provider.providerId, model: { id: "isolated-text-model", enabled: true } });
   await command("select_model", { provider: provider.providerId, model: "isolated-text-model" });
   const sessionId = events.filter(e => e.type === "session").at(-1).sessionId;
   const done = await command("prompt", { text: "创建一个HTML网页，本测试不写入长期记忆。" });

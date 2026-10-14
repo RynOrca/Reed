@@ -29,16 +29,16 @@ export function createMemoryAgent({ memory, learner, send, currentSession, runti
   function extension(pi) {
     pi.registerTool(defineTool({
       name: "remember", label: "整理记忆", description: "保存用户明确表达的长期学习背景、偏好或可复用知识。只保存明确事实，纠正时使用相同 key/title 更新。不要存凭据、一次性任务或推测。",
-      parameters: Type.Object({ layer: Type.Union([Type.Literal("profile"), Type.Literal("knowledge")]), key: Type.String(), content: Type.String() }),
+      parameters: Type.Object({ layer: Type.Union([Type.Literal("profile"), Type.Literal("knowledge")]), key: Type.String(), content: Type.String(),operation:Type.Optional(Type.Union([Type.Literal('supplement'),Type.Literal('replace')])) }),
       async execute(_id, input, signal) {
         if (!enabled()) return { content: [{ type: "text", text: "当前角色的学习者画像与记忆功能已关闭，未保存" }], details: { skipped: true } };
         if (sessionDisallowsMemory(currentSession())) return { content: [{ type: "text", text: "用户已要求本会话不写入长期记忆，未保存" }], details: { skipped: true, reason: "session_no_memory" } };
         const layer = input.layer === "profile" ? "l1" : "l2";
         if (!memory.state.enabled[layer]) return { content: [{ type: "text", text: "此层记忆已关闭，未保存" }], details: {} };
         const selected = currentSession();
-        const verdict = await judgeValue?.([{ area: input.layer, key: input.key, content: input.content }], { signal });
-        if (!verdict?.[0] || signal?.aborted || currentSession() !== selected || !enabled() || sessionDisallowsMemory(selected) || !memory.state.enabled[layer]) return skippedMemory();
-        await memory.applyAgentUpdate(input.layer === "profile" ? { facts: [{ key: input.key, content: input.content }] } : { notes: [{ title: input.key, body: input.content }] }, currentSession()?.sessionId || "agent");
+        const verdict = await judgeValue?.([{ area: input.layer, key: input.key, content: input.content,operation:input.operation }], { signal });
+        if (!verdict?.[0] || signal?.aborted || currentSession() !== selected || !enabled() || sessionDisallowsMemory(selected) || !memory.state.enabled[layer]) return skippedMemory(verdict?.diagnostics?.[0]);
+        await memory.applyAgentUpdate(input.layer === "profile" ? { facts: [{ key: input.key, content: input.content,operation:input.operation }] } : { notes: [{ title: input.key, body: input.content,operation:input.operation }] }, currentSession()?.sessionId || "agent");
         send({ type: "memory", state: memory.snapshot() });
         return { content: [{ type: "text", text: "记忆已整理保存" }], details: { layer } };
       },
@@ -68,7 +68,7 @@ export function createMemoryAgent({ memory, learner, send, currentSession, runti
       const response = await model.completeSimple(selected.model, {
         systemPrompt: "你是本地学习助手的记忆整理器。根据对话和已有记忆，提取用户明确表达的长期学习背景/目标/偏好（facts），有复用价值且可信的知识笔记（notes），和结构化学习事件（learningEvents）。不要把问题本身当成用户属性，不保存密钥和个人敏感标识，不猜测掌握分数。同一主题不同说法也必须补充既有 key/title/subject，不新增重复项；合并已有内容和新增信息，纠正时明确最新状态。不把待复习清单混入 facts 或 notes，复习仅作为 learningEvents 保存。严格只返回 JSON：{\"facts\":[{\"key\":\"主题\",\"content\":\"明确事实\"}],\"notes\":[{\"title\":\"标题\",\"body\":\"简短整理\"}],\"learningEvents\":[{\"kind\":\"goal|preference|concept|misconception|review\",\"subject\":\"主题\",\"detail\":\"明确记录\",\"evidence\":\"用户原话的连续片段\",\"status\":\"active|completed|needs_review|resolved\"}]}。kind 必须选择一种。只有用户明确陈述目标/偏好/已学概念/存在误解/完成复习才记录，evidence 必须逐字引用用户消息，不能引用助手自己的解释。不需新增则数组为空。最多 5 条画像、2 条知识和 5 条事件。",
         messages: [{ role: "user", content: [{ type: "text", text: `已有记忆：${JSON.stringify({facts:memory.snapshot().facts,notes:memory.snapshot().notes?.map(n=>({title:n.title,body:n.body.slice(0,200)})),learner:learner?.snapshot?.()}).slice(0, 7000)}\n本轮相关对话：\n${text}` }], timestamp: Date.now() }],
-      }, { maxTokens: 1200, reasoning: "off", signal: controller.signal });
+      }, { requestPriority:"background", maxTokens: 1200, reasoning: "off", signal: controller.signal });
       const output = response.content.filter((block) => block.type === "text").map((block) => block.text).join("");
       const match = output.match(/\{[\s\S]*\}/);
       if (!match) throw new Error("模型未返回有效整理结果");
@@ -79,7 +79,7 @@ export function createMemoryAgent({ memory, learner, send, currentSession, runti
         ...(memory.state.enabled.l2 && Array.isArray(update.notes) ? update.notes.slice(0,3).map(value=>({area:'notes',value})) : []),
         ...(memory.state.enabled.l1 && Array.isArray(update.learningEvents) ? update.learningEvents.slice(0,8).map(value=>({area:'learningEvents',value})) : []),
       ];
-      const verdict = await judgeValue?.(candidates, { signal: controller.signal });
+      const verdict = await judgeValue?.(candidates, { signal: controller.signal, requestPriority:"background" });
       update = {facts:[],notes:[],learningEvents:[]};
       candidates.forEach((candidate,index)=>{if(verdict?.[index])update[candidate.area].push(candidate.value);});
       if (!enabled() || ticket !== generation || sessionDisallowsMemory(selected)) return;

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+let requestSequence=0;
 
 // Observe the wire framing without modifying bytes or retaining response text.
 export function createSseObserver(report) {
@@ -69,5 +70,44 @@ export function createDiagnosticFetch(fetchImpl, diagnostic) {
       flush() { try { observer.finish(); } catch {} },
     }));
     return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+  };
+}
+
+// Bound both connection/headers and a stalled response body. Retain no payloads,
+// credentials, query strings or user text in diagnostics.
+export function createRequestFetch(fetchImpl, { signal, diagnostic=()=>{}, onPhase=()=>{}, idleMs=90000, totalMs=300000 }={}) {
+  return async (input, init={}) => {
+    const controller=new AbortController(), started=Date.now(),requestId=++requestSequence;
+    const combined=AbortSignal.any([controller.signal, ...[signal,init.signal].filter(Boolean)]);
+    let idle, total, reader, output, closed=false, first=true;
+    const record=(phase,extra={})=>{try{Promise.resolve(diagnostic({type:'request_phase',requestId,phase,elapsedMs:Date.now()-started,...extra})).catch(()=>{});onPhase(phase);}catch{}};
+    const timeout=()=>controller.abort(new Error('模型服务长时间未返回数据，请停止后重试，或检查服务与网络。'));
+    const touch=()=>{clearTimeout(idle);idle=setTimeout(timeout,idleMs);};
+    const cleanup=()=>{if(closed)return;closed=true;clearTimeout(idle);clearTimeout(total);combined.removeEventListener('abort',aborted);};
+    // Error the consumer immediately; an upstream cancel/read promise may never settle.
+    const aborted=()=>{record(controller.signal.aborted?'timeout':'cancelled');try{output?.error(combined.reason);}catch{}void reader?.cancel(combined.reason).catch(()=>{});cleanup();};
+    combined.addEventListener('abort',aborted,{once:true});touch();total=setTimeout(timeout,totalMs);
+    record('connecting');
+    try {
+      combined.throwIfAborted();
+      let rejectAbort;
+      const abortPromise=new Promise((_,reject)=>{rejectAbort=()=>reject(combined.reason);combined.addEventListener('abort',rejectAbort,{once:true});if(combined.aborted)rejectAbort();});
+      let response;
+      try{response=await Promise.race([fetchImpl(input,{...init,signal:combined}),abortPromise]);}
+      finally{combined.removeEventListener('abort',rejectAbort);}
+      combined.throwIfAborted();
+      record('headers',{status:response.status});touch();
+      if(!response.body){cleanup();return response;}
+      reader=response.body.getReader();
+      const body=new ReadableStream({
+        start(out){output=out;},
+        async pull(out){
+          try{combined.throwIfAborted();const chunk=await reader.read();combined.throwIfAborted();if(chunk.done){record('finished');cleanup();out.close();return;}touch();if(first){first=false;record('first_body');}out.enqueue(chunk.value);}
+          catch(error){cleanup();out.error(combined.aborted?combined.reason:error);}
+        },
+        cancel(reason){cleanup();void reader.cancel(reason).catch(()=>{});},
+      });
+      return new Response(body,{status:response.status,statusText:response.statusText,headers:response.headers});
+    }catch(error){cleanup();record(combined.aborted?(controller.signal.aborted?'timeout':'cancelled'):'failed');throw combined.aborted?combined.reason:error;}
   };
 }

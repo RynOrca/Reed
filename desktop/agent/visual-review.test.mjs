@@ -70,3 +70,17 @@ test("provider errors and user cancellation are not resumed by the visual gate",
   assert.equal(await f.settle(), undefined);
   assert.equal(f.review.outcome({ status: "error" }).status, "error");
 });
+
+
+test("two consecutive browser failures stop further attempts and do not claim verified completion",async t=>{
+ const f=await fixture(t);const failed=()=>f.handlers.tool_result({toolName:"browser",input:{action:"preview"},content:[{type:"text",text:"fetch failed"}],isError:true});
+ await failed();assert.equal(f.handlers.tool_call({toolName:"browser"}),undefined);
+ await failed();const stop=f.handlers.tool_call({toolName:"browser"});assert.equal(stop.block,true);assert.equal(stop.terminate,true);assert.match(stop.reason,/停止重试/);
+ await f.changed();assert.match(f.handlers.tool_call({toolName:"browser"}).reason,/停止重试/);assert.equal(await f.settle(),undefined);assert.equal(f.review.outcome({status:"complete"}).status,"unverified");
+ f.review.begin("用户新任务");assert.equal(f.handlers.tool_call({toolName:"browser"}),undefined);
+});
+test("one corrected failure can recover but accumulated failures cannot be bypassed with snapshots",async t=>{
+ const f=await fixture(t);const failure=()=>f.handlers.tool_result({toolName:"browser",input:{action:"snapshot"},content:[],isError:true});const success=()=>f.handlers.tool_result({toolName:"browser",input:{action:"snapshot"},content:[],isError:false});
+ await failure();await success();assert.equal(f.review.snapshot().reason,null);assert.equal(f.handlers.tool_call({toolName:"browser"}),undefined);
+ await failure();await success();await failure();assert.equal(f.handlers.tool_call({toolName:"browser"}).terminate,true);
+});

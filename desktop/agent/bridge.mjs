@@ -1,5 +1,7 @@
 import { semanticMatcher } from "./memory-match.mjs";
 import { createMemoryValueGate } from './memory-value.mjs';
+import { ModelRequests } from './model-requests.mjs';
+import { createAuxiliaryCompleter } from './auxiliary-runtime.mjs';
 import { workMemoryExtension } from "./work-memory.mjs";
 import {LazyMcp,MCP_TOOLS} from "./mcp.mjs";
 import {UserConfig} from "./user-config.mjs";
@@ -7,12 +9,15 @@ import { createInterface } from "node:readline";
 import { mkdir, stat, readFile, writeFile, appendFile, rename, realpath, unlink } from "node:fs/promises";
 import { classifyAssistantOutcome } from "./turn-outcome.mjs";
 import { createTurnRecovery } from "./turn-recovery.mjs";
-import { createDiagnosticFetch } from "./stream-diagnostics.mjs";
+import { createAbortWatchdog } from "./turn-watchdog.mjs";
+import { createReviewGate } from "./review-gate.mjs";
+import { createDiagnosticFetch, createRequestFetch } from "./stream-diagnostics.mjs";
 import { createVisualReview, VISUAL_TOOLS } from "./visual-review.mjs";
 import { createContextPolicy } from "./context-policy.mjs";
 import { GoalStore } from "./goals.mjs";
 import { roleFeatureExtension } from "./role-features.mjs";
 import { VaultOverview } from "./vault-overview.mjs";
+import { createWorkRecaller } from './work-recall.mjs';
 import { join, resolve } from "node:path";
 import { createApprovalGate } from "./approval.mjs";
 import { RoleStore } from "./roles.mjs";
@@ -64,8 +69,10 @@ await memory.load();
 const savedMemory=(await userConfig.read()).memoryEnabled;if(savedMemory)Object.assign(memory.state.enabled,savedMemory);
 const providers = new ProviderStore(agentDir,{config:userConfig});
 await providers.load();
+let overviewSelection=(await userConfig.read()).vaultOverviewSelection||null;
 const capabilities = new CapabilityStore(dataDir,{config:userConfig});
 await capabilities.load();
+capabilities.canUseSkill=skill=>!skill.experienceId||memory.workItems(cwd).some(item=>item.id===skill.experienceId&&(item.revision||1)===skill.experienceRevision);
 await installLearningSkills(capabilities);
 const learner = new LearnerStore(dataDir);
 await learner.load();
@@ -78,7 +85,15 @@ const diagnostic = async entry => {
 };
 const turnRecovery = createTurnRecovery({ send, diagnostic });
 const contextPolicy = createContextPolicy({ dataDir, currentSession: () => session, send, diagnostic });
+const modelRequests = new ModelRequests({providers:()=>providers.providers});
 let runtime;
+let runtimePending;
+let turnController;
+let activeTurnId = null;
+let providersPending = false;
+let activePrompt;
+let applyingProviders=false;
+let providerRevision=0;
 let session;
 let busy = false;
 let queue = Promise.resolve();
@@ -86,10 +101,15 @@ const securityPath = join(dataDir, "security.json");
 const security = await userConfig.get("security",securityPath,{approval:"manual"});
 const scope = new FileScope({ workspace: () => cwd, readOnly: () => [capabilities.state.vaultPath, join(dataDir,"skills"), join(dataDir, "attachments"), join(dataDir,"artifacts","screenshots"), contextPolicy.artifactsDir, ...(security.readOnly || [])].filter(Boolean), fullAccess: () => security.access === "full", protectedPaths: () => [
   {path:goals.dir,denyRead:!roles.current().learningGoalsEnabled},
-  ...["memory.json","learner.json"].map(name=>({path:join(dataDir,name),denyRead:true})),
+  ...capabilities.state.skills.filter(skill=>skill.experienceId&&!capabilities.canUseSkill(skill)).map(skill=>({path:skill.path,denyRead:true})),
+  ...["memory.json","learner.json","local-search.sqlite","local-search.sqlite-wal","local-search.sqlite-shm"].map(name=>({path:join(dataDir,name),denyRead:true})),
 ] });
 capabilities.canRead = async path => {try {await scope.check(path);return true;}catch{return false;}};
-const vaultOverview = new VaultOverview({capabilities,runtime:getRuntime,model:()=>session?.model,send,canRead:capabilities.canRead});
+const vaultOverview = new VaultOverview({capabilities,runtime:getRuntime,model:()=>overviewSelection?runtime?.getModel(overviewSelection.providerId,overviewSelection.modelId):session?.model,send,canRead:capabilities.canRead,parallelLimit:model=>modelRequests.limit(model)});
+// Restore persisted navigation on startup; generation requires the user's model
+// and reasoning choice, so no invisible inference job is started here.
+const ensureOverview=()=>vaultOverview.running?Promise.resolve():vaultOverview.restore();
+await vaultOverview.restore();
 const visualReview = createVisualReview({ scope, send, enabled: () => capabilities.state.browserEnabled });
 const mcp=new LazyMcp({config:userConfig,scope,send});await mcp.load();
 const approvalGate = createApprovalGate(send, undefined, () => security.approval);
@@ -98,28 +118,34 @@ const memoryAgent = createMemoryAgent({ memory, learner, send, judgeValue, curre
 memory.agentAllowed=learner.agentAllowed=source=>roles.current().learnerProfileEnabled===true&&!sessionDisallowsMemory(session)&&source===session?.sessionId;
 memory.matchTopic=learner.matchTopic=semanticMatcher({runtime:getRuntime,model:()=>session?.model?.provider!=="unknown"?session?.model:null,allowed:()=>roles.current().learnerProfileEnabled===true&&!sessionDisallowsMemory(session)});
 memory.workAllowed=source=>memory.state.enabled.work&&!sessionDisallowsMemory(session)&&source===session?.sessionId;
+memory.recallWork=createWorkRecaller({memory,runtime:getRuntime,model:()=>session?.model});
 memory.matchWorkTopic=semanticMatcher({runtime:getRuntime,model:()=>session?.model?.provider!=="unknown"?session?.model:null,allowed:()=>memory.state.enabled.work&&!sessionDisallowsMemory(session)});
 const preparedSkills=new Map(),preparedReviews=new Set();
-let reviewReadKey=null;
 const lastUserPrompt=()=>{const u=session?.state.messages.findLast(m=>m.role==="user");return typeof u?.content==="string"?u.content:(u?.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");};
-const reviewEnabled=(prompt=lastUserPrompt())=>reviewReadKey===session?.sessionId+"\n"+prompt||preparedReviews.has(roles.activeId+"\n"+prompt);
-const workingTools=workMemoryExtension({memory,learner,roles,currentSession:()=>session,reviewEnabled,send,judgeValue});
-const reviewGate=pi=>pi.on("tool_result",event=>{
-  if(event.toolName!=="read"||event.isError||!roles.current().learnerProfileEnabled)return;
-  const skill=capabilities.state.skills.find(s=>s.name==="spaced-review"&&s.enabled&&roles.current().skills.some(b=>b.skillId===s.id));
-  if(skill&&event.input?.path&&resolve(cwd,event.input.path)===resolve(skill.path,"SKILL.md"))reviewReadKey=session.sessionId+"\n"+lastUserPrompt();
+const spacedReviewSkill=()=>capabilities.state.skills.find(s=>s.name==="spaced-review"&&s.enabled&&roles.current().skills.some(b=>b.skillId===s.id));
+const reviewSkillPath=()=>{const skill=spacedReviewSkill();return skill?join(skill.path,"SKILL.md"):null;};
+// 门控按“轮次”而不是用户原文：同一轮的引导/排队消息不会关闭它，新一轮仍要重读技能。
+const reviewGateState=createReviewGate({
+  match:event=>{if(event?.toolName!=="read"||!roles.current().learnerProfileEnabled)return false;const skill=spacedReviewSkill();return Boolean(skill&&typeof event.input?.path==="string"&&resolve(cwd,event.input.path)===resolve(skill.path,"SKILL.md"));},
+  turnKey:()=>`${session?.sessionId||""}\u0000${activeTurnId||"idle"}`,
 });
+const reviewEnabled=(prompt=lastUserPrompt())=>reviewGateState.isLoaded()||preparedReviews.has(roles.activeId+"\n"+prompt);
+const workingTools=workMemoryExtension({memory,learner,roles,currentSession:()=>session,reviewEnabled,reviewHint:reviewSkillPath,send,judgeValue,runtime:getRuntime,currentWorkspace:()=>cwd});
+const reviewGate=pi=>{
+  // tool_call 在工具执行前触发：同一批并行发出的 read+recall_memory 也能看到已加载状态。
+  pi.on("tool_call",event=>reviewGateState.mark(event));
+  pi.on("tool_result",event=>reviewGateState.mark(event,!event.isError));
+};
 async function prepareSkills(text) {
-  reviewReadKey=null;
   const key=roles.activeId+'\n'+text;
   preparedSkills.set(key,await prepareRoleSkills(roles.current(),capabilities,text));
   preparedReviews.delete(key);
   if(hasRequiredReview(roles.current(),capabilities,text))preparedReviews.add(key);
   if(preparedSkills.size>100){const oldest=preparedSkills.keys().next().value;preparedSkills.delete(oldest);preparedReviews.delete(oldest);}
 }
-const learningTools = createLearningTools({ capabilities, currentWorkspace: () => cwd, roles, send, scope, vaultOverview, roleSkillInstructions: prompt=>preparedSkills.get(roles.activeId+'\n'+prompt)||'' });
+const learningTools = createLearningTools({ capabilities, currentWorkspace: () => cwd, roles, send, scope, vaultOverview,runtime:getRuntime,model:()=>session?.model, turnSignal:()=>turnController?.signal,roleSkillInstructions: prompt=>prepareRoleSkills(roles.current(),capabilities,prompt) });
 const learnerTools = learnerExtension({ learner, memory, judgeValue, currentSession: () => session, send, enabled:()=>roles.current().learnerProfileEnabled === true });
-const roleFeatures = roleFeatureExtension({roles,goals,project:()=>projectPath,learner,memory,currentSession:()=>session,reviewEnabled});
+const roleFeatures = roleFeatureExtension({roles,goals,project:()=>projectPath,workspace:()=>cwd,learner,memory,currentSession:()=>session,reviewEnabled});
 let generationStart = null, firstDelta = null, outputTokens = 0, generationMs = 0, missingUsage = false;
 function emitTelemetry() {
   const model = session?.model;
@@ -131,25 +157,82 @@ function emitTelemetry() {
 }
 
 async function getRuntime() {
-  if (!runtime) {
-    runtime = await ModelRuntime.create({
+  if (runtime) return runtime;
+  if (!runtimePending) runtimePending = (async () => {
+    const created = await ModelRuntime.create({
       authPath: join(agentDir, "auth.json"),
       modelsPath: join(agentDir, "models.json"),
       refreshOnCreate: false,
     });
     try {
       const savedKey = await endpoint.loadKey();
-      if (savedKey) await runtime.setRuntimeApiKey(REMOTE_PROVIDER, savedKey);
+      if (savedKey) await created.setRuntimeApiKey(REMOTE_PROVIDER, savedKey);
     } catch (error) {
       send({ type: "credential_error", message: `远程模型凭据无法读取，请重新输入 Key：${error.message}` });
     }
-    await providers.install(runtime);
-  }
-  return runtime;
+    await providers.install(created);
+    const completeAuxiliary = createAuxiliaryCompleter(created.completeSimple.bind(created));
+    created.completeSimple = (model, context, options={}) => {
+      const {requestPriority='foreground',requestTimeoutMs,idleTimeoutMs,queueTimeoutMs,onRequestState,...requestOptions}=options;
+      // A silent stream must not hold the shared endpoint slot for the whole total
+      // bound: the idle bound is separate and callers may shorten it.
+      const totalMs=requestTimeoutMs||300000, idleMs=Math.min(idleTimeoutMs??totalMs,totalMs);
+      requestOptions.fetch = createRequestFetch(options.fetch || globalThis.fetch, {signal:options.signal, totalMs, idleMs, diagnostic:entry=>{onRequestState?.({state:'running',phase:entry.phase,elapsedMs:entry.elapsedMs});return diagnostic({...entry,provider:model.provider,model:model.id,requestGroup:'auxiliary'});}});
+      if(requestTimeoutMs!==undefined)return modelRequests.complete(model,{signal:options.signal,priority:requestPriority,requestTimeoutMs,queueTimeoutMs,onState:onRequestState},signal=>completeAuxiliary(model,context,{...requestOptions,signal}));
+      return modelRequests.run(model,{signal:options.signal,priority:requestPriority},()=>completeAuxiliary(model,context,requestOptions));
+    };
+    runtime = created;
+    return created;
+  })().catch(error=>{runtimePending=null;throw error;});
+  return runtimePending;
+}
+
+// Persist settings immediately, but never mutate credentials/catalog of a running
+// foreground turn. The next turn gets the new configuration after settlement.
+async function providerRuntime() {
+  const current = await getRuntime();
+  if (!busy&&!vaultOverview.running) return current;
+  return { getModels:()=>current.getModels(),getModel:(...args)=>current.getModel(...args),
+    refresh:async()=>{providersPending=true;providerRevision++;},setRuntimeApiKey:async()=>{providersPending=true;providerRevision++;} };
+}
+async function applyProviders() {
+  if(!providersPending||vaultOverview.running)return;
+  const revision=providerRevision;
+  await providers.install(await getRuntime());providersPending=revision!==providerRevision;modelRequests.refresh();
+  if(session?.model){const updated=runtime.getModel(session.model.provider,session.model.id);if(updated)await session.setModel(updated);else if(session.model.provider!=='unknown')await openSession();}
+}
+async function flushProviders(){if(!busy&&providersPending&&!applyingProviders){applyingProviders=true;try{await applyProviders();await emitState();}catch(error){send({type:'credential_error',message:`配置已保存但暂未应用：${error.message}`});}finally{applyingProviders=false;}}}
+
+function abortWatchdogMs(name,fallback){const value=Number(process.env[name]);return Number.isFinite(value)&&value>0?value:fallback;}
+// Cancelling must always reach a terminal state. The watchdog only recovers the
+// local session; it never claims the remote service already stopped.
+const abortWatchdog = createAbortWatchdog({
+  escalateMs:abortWatchdogMs('SUMMON_ABORT_ESCALATE_MS',15000),
+  forceMs:abortWatchdogMs('SUMMON_ABORT_FORCE_MS',30000),
+  escalate: turnId => send({type:'stopping',turnId,escalated:true,message:'模型服务仍在结束上一条请求，继续等待；长时间无响应时只会恢复本地输入。'}),
+  force: turnId => { void forceLocalTurnEnd(turnId); },
+});
+// The upstream may ignore cancellation; recovery rebuilds the session locally
+// instead of pretending the remote request ended.
+async function forceLocalTurnEnd(turnId) {
+  const controller = turnController;
+  if (!turnId || controller?.promptId !== turnId) return;
+  const previousModel = session?.model, previousManager = session?.sessionManager;
+  turnController = null; activeTurnId = null; busy = false;
+  try { session?.dispose(); } catch {}
+  session = undefined;
+  send({type:'session_sync',busy:false,turnId,forced:true});
+  send({type:'done',id:turnId,turnId,outcome:{status:'aborted',message:'已停止（本地）',forced:true}});
+  send({type:'turn_forced_end',turnId,message:'模型服务未在预期时间内结束上一条请求，已恢复本地输入；服务端可能仍在处理，下一条消息会重建会话。'});
+  try {
+    await openSession(previousModel?.provider==='unknown'?undefined:previousModel?.provider,previousModel?.provider==='unknown'?undefined:previousModel?.id,previousManager);
+    await emitState();
+  } catch (error) { send({type:'error',message:`停止后重建会话失败：${error.message}，请重新选择模型或新建会话`}); }
 }
 
 async function openSession(provider, modelId, sessionManager) {
   memoryAgent.cancel();
+  workingTools.cancel();
   if (!sessionManager) {
     if (session) sessionManager = session.sessionManager;
     else {
@@ -159,8 +242,9 @@ async function openSession(provider, modelId, sessionManager) {
   }
   approvalGate.cancel("会话已切换，工具操作未执行");
   const models = await getRuntime();
-  const model = provider && modelId ? models.getModel(provider, modelId) : undefined;
-  if (provider && modelId && !model) throw new Error(`Unknown model: ${provider}/${modelId}`);
+  const disabled=providers.providers.find(p=>p.id===provider)?.models.find(m=>m.id===modelId)?.enabled===false;
+  const model = provider && modelId && !disabled ? models.getModel(provider, modelId) : undefined;
+  if (provider && modelId && !model && !disabled) throw new Error(`Unknown model: ${provider}/${modelId}`);
   const settingsManager = SettingsManager.create(cwd, agentDir);
   contextPolicy.bindSettings(settingsManager, model);
   const resourceLoader = new DefaultResourceLoader({
@@ -187,7 +271,7 @@ async function openSession(provider, modelId, sessionManager) {
     agentDir,
     modelRuntime: models,
     model,
-    tools: roles.activeId==="planner" ? ["read","ls","find","grep","current_time","web_search","fetch_url","search_notes"] : [...FILE_TOOLS, "remember_work", "recall_memory", ...(roles.current().learnerProfileEnabled ? ["remember", "record_learning_event"] : []), ...LEARNING_TOOLS,...MCP_TOOLS,...VISUAL_TOOLS],
+    tools: roles.activeId==="planner" ? ["read","ls","find","grep","current_time","web_search","fetch_url","search_notes"] : [...FILE_TOOLS, "remember_work", "recall_memory", "draft_work_skill", "report_work_use", ...(roles.current().learnerProfileEnabled ? ["remember", "record_learning_event"] : []), ...LEARNING_TOOLS,...MCP_TOOLS,...VISUAL_TOOLS],
     customTools: sandboxTools(scope),
     sessionManager,
     settingsManager,
@@ -196,13 +280,25 @@ async function openSession(provider, modelId, sessionManager) {
   session?.dispose();
   session = created.session;
   const streamFunction = session.agent.streamFunction;
-  session.agent.streamFunction = (model, context, options) => streamFunction(model, context, {
-    ...options, fetch: createDiagnosticFetch(options?.fetch || globalThis.fetch, diagnostic),
+  session.agent.streamFunction = (model, context, options) => {
+    const signal=AbortSignal.any([options?.signal,turnController?.signal].filter(Boolean));
+    return modelRequests.stream(model, {
+    signal, priority:'foreground', onWait:()=>send({type:'model_queue',state:'waiting'}),
+  },()=>{
+    send({type:'model_queue',state:'running'});
+    return streamFunction(model, context, {
+      ...options, signal, maxRetries:0,
+      fetch: createDiagnosticFetch(createRequestFetch(options?.fetch || globalThis.fetch, {signal,diagnostic:entry=>diagnostic({...entry,provider:model.provider,model:model.id,requestGroup:'foreground'}),
+        onPhase:phase=>{if(busy&&!signal.aborted)send({type:'request_phase',phase});}}), diagnostic),
+    });
   });
+  };
   metadata[session.sessionId] = { ...metadata[session.sessionId], projectPath };
   Object.assign(appState, { activeSessionId: session.sessionId, projectPath, provider: session.model?.provider, modelId: session.model?.id });
   await saveJson(metadataPath, metadata); await saveJson(appStatePath, appState);
   session.subscribe((event) => {
+    // A cancelled turn must not paint late provider output while its SDK unwinds.
+    if(turnController?.signal.aborted&&['message_update','tool_execution_start'].includes(event.type))return;
     if(event.type==="compaction_start" || event.type==="compaction_end") send({type:"compaction",status:event.type.endsWith("start")?"running":event.errorMessage?"error":event.aborted?"skipped":"done",message:event.errorMessage||(event.aborted?"压缩未完成，原上下文已保留":""),enabled:session.autoCompactionEnabled});
     if (event.type === "queue_update") send({ type: "queue", steering: event.steering, followUp: event.followUp });
     if (event.type === "message_start" && event.message.role === "user" && busy) send({ type: "user_delivered", text: typeof event.message.content === "string" ? event.message.content : event.message.content?.filter(b => b.type === "text").map(b => b.text).join("\n") });
@@ -232,6 +328,10 @@ async function openSession(provider, modelId, sessionManager) {
   });
   emitSession();
   outputTokens = 0; generationMs = 0; missingUsage = false; emitTelemetry();
+  emitHistory();
+}
+
+function emitHistory() {
   const historyBranch = session.sessionManager.getBranch();
   const visualOutcomes = new Map(historyBranch.filter(entry => entry.type === "custom" && entry.customType === "reed_turn_verification").map(entry => [entry.data?.messageEntryId, entry.data?.outcome]));
   send({
@@ -263,8 +363,8 @@ function emitSession() {
 async function emitState() {
   const models = await getRuntime();
   const available = await models.getAvailable();
-  send({ type: "models", models: available.map((model) => ({ ...providers.modelInfo(model.provider, model.id, models), provider: model.provider, id: model.id, name: model.name })) });
-  send({ type: "providers", providers: providers.snapshot(), templates: providers.templates(models) });
+  send({ type: "models", models: available.filter(model=>providers.providers.find(p=>p.id===model.provider)?.models.find(m=>m.id===model.id)?.enabled!==false).map((model) => ({ ...providers.modelInfo(model.provider, model.id, models), provider: model.provider, id: model.id, name: model.name })) });
+  send({ type: "providers", providers: providers.snapshot().map(provider=>({...provider,models:provider.models.map(model=>model.enabled===false?model:{...model,thinkingLevels:providers.modelInfo(provider.id,model.id,models).thinkingLevels})})), templates: providers.templates(models),pending:providersPending });
   send({ type: "roles", ...roles.list() });
   send({ type: "memory", state: memory.snapshot() });
   send({ type: "learner", state: learner.snapshot() });
@@ -272,6 +372,7 @@ async function emitState() {
   const active = new Set(session?.getActiveToolNames() || []);
   send({ type: "agent_capabilities", approval: security.approval, access: security.access === "full" ? "full" : "workspace", workspace: cwd, readOnly: scope.readOnly(), customReadOnly: security.readOnly || [], tools: (session?.getAllTools() || []).map(t => ({ name: t.name, description: t.description, active: active.has(t.name) && !(["web_search", "fetch_url"].includes(t.name) && (!capabilities.state.webEnabled || !capabilities.key)) && !(t.name === "browser" && !capabilities.state.browserEnabled), scope: ["write", "edit", "file_manage"].includes(t.name) ? (security.access === "full" ? "完全文件权限" : "当前工作区") : FILE_TOOLS.includes(t.name) ? "任意可读取目录" : "按工具配置" })), extensions: ["文件范围限制", "权限审批", "分层记忆", "学习画像", "联网与笔记工具"], mcp: mcp.snapshot(), terminal: "disabled" });
   send({type:"vault_overview",...vaultOverview.snapshot()});
+  send({type:'vault_overview_config',selection:overviewSelection});
   emitSession();
 }
 
@@ -280,12 +381,15 @@ async function handle(command) {
   try {
     switch (command.type) {
       case "init": {
+        const reusingSession=!!session;
         const remoteConfig = await endpoint.config();
         send({ type: "endpoint", config: remoteConfig, hasKey: await endpoint.loadKey().then(Boolean).catch(() => false) });
         if (!session) await openSession(command.provider || appState.provider || (remoteConfig ? REMOTE_PROVIDER : undefined), command.model || appState.modelId || remoteConfig?.modelId);
         await emitState();
+        if(reusingSession)emitHistory();
+        send({type:"session_sync",busy});
         send({ type: "ack", id });
-        if(capabilities.state.vaultPath)void vaultOverview.ensure();
+        if(capabilities.state.vaultPath)void ensureOverview();
         break;
       }
       case "save_mcp":
@@ -347,9 +451,23 @@ async function handle(command) {
         send({type:"goals",id,goal,enabled:roles.current().learningGoalsEnabled});break;
       }
       case "generate_vault_overview":
-        if(busy)throw new Error("请等待当前回复结束");
         if(!capabilities.state.vaultPath)throw new Error("请先连接笔记库");
-        void vaultOverview.start();send({type:"ack",id});break;
+        { const current=await getRuntime();
+          const selected=command.providerId&&command.modelId?current.getModel(command.providerId,command.modelId):session?.model;
+          if(providersPending)throw Error('模型配置已保存，等待当前模型任务结束后即可生成总览');
+          if(!selected||selected.provider==='unknown')throw Error('请先选择总览生成模型');
+          if(providers.providers.find(p=>p.id===selected.provider)?.models.find(m=>m.id===selected.id)?.enabled===false)throw Error('请勾选启用总览生成模型');
+          const reasoning=command.reasoning||'off';
+          if(!providers.modelInfo(selected.provider,selected.id,current).thinkingLevels.includes(reasoning))throw Error('此模型不支持选择的思考档位');
+          void vaultOverview.start({model:selected,reasoning}).finally(flushProviders);send({type:'ack',id});break;
+        }
+      case "save_vault_overview_config": {
+        const current=await getRuntime(),selected=current.getModel(command.providerId,command.modelId);
+        if(!selected||providers.providers.find(p=>p.id===command.providerId)?.models.find(m=>m.id===command.modelId)?.enabled===false)throw Error('请选择已启用的总览模型');
+        if(!providers.modelInfo(selected.provider,selected.id,current).thinkingLevels.includes(command.reasoning))throw Error('模型不支持此思考档位');
+        const selection={providerId:command.providerId,modelId:command.modelId,reasoning:command.reasoning};
+        await userConfig.set('vaultOverviewSelection',selection);overviewSelection=selection;send({type:'vault_overview_config',selection});send({type:'ack',id});break;
+      }
       case "cancel_vault_overview":
         vaultOverview.cancel();vaultOverview.emit("idle",{message:"已停止生成，可以重新开始"});send({type:"ack",id});break;
       case "configure_capabilities":
@@ -366,11 +484,13 @@ async function handle(command) {
         const model = session?.model;
         if (session) await openSession(model?.provider === "unknown" ? undefined : model?.provider, model?.provider === "unknown" ? undefined : model?.id);
         await emitState(); send({ type: "ack", id });
-        if(command.type==="configure_capabilities" && command.vaultPath)void vaultOverview.ensure();
+        if(command.type==="configure_capabilities" && command.vaultPath)void ensureOverview();
         break;
       }
       case "search_notes":
         send({ type: "ack", id, results: await capabilities.searchNotes(command.query || "", 8) }); break;
+      case "browse_notes":
+        send({type:"ack",id,...await capabilities.browseNotes(command.offset)});break;
       case "skill_detail": {
         const skill = capabilities.state.skills.find(s => s.id === command.skillId);
         if (!skill) throw new Error("技能不存在");
@@ -379,21 +499,19 @@ async function handle(command) {
       case "resolve_file":
         send({ type: "ack", id, path: await capabilities.resolveFile(command.path, cwd) }); break;
       case "save_provider": {
-        if (busy) throw new Error("请等待当前回复结束");
         const saved = await providers.save(command);
-        await providers.install(await getRuntime());
-        await emitState(); send({ type: "ack", id, providerId: saved.id });
+        await providers.install(await providerRuntime());
+        modelRequests.refresh();
+        await emitState(); send({ type: "ack", id, providerId: saved.id, message:providersPending?'已保存，当前模型任务结束后生效':'提供商已保存' });
         break;
       }
       case "discover_models": {
-        if (busy) throw new Error("请等待当前回复结束");
-        await providers.discover(command.providerId, await getRuntime());
+        await providers.discover(command.providerId, await providerRuntime());
         await emitState(); send({ type: "ack", id });
         break;
       }
       case "refresh_model": {
-        if(busy)throw new Error("请等待当前回复结束");
-        const info=await providers.refreshModel(command.providerId,command.modelId,await getRuntime());
+        const info=await providers.refreshModel(command.providerId,command.modelId,await providerRuntime());
         await emitState();send({type:"ack",id,modelInfo:info});break;
       }
       case "delete_provider":
@@ -402,10 +520,9 @@ async function handle(command) {
         if(session?.model?.provider===command.providerId){delete appState.provider;delete appState.modelId;await openSession();}
         await emitState();send({type:"ack",id});break;
       case "update_model": {
-        if (busy) throw new Error("请等待当前回复结束");
-        await providers.updateModel(command.providerId, command.model, await getRuntime());
-        if(session?.model?.provider===command.providerId && session.model.id===command.model.id)await session.setModel((await getRuntime()).getModel(command.providerId,command.model.id));
-        await emitState(); send({ type: "ack", id });
+        await providers.updateModel(command.providerId, command.model, await providerRuntime());
+        if(!busy&&session?.model?.provider===command.providerId && session.model.id===command.model.id){const selected=(await getRuntime()).getModel(command.providerId,command.model.id);if(selected)await session.setModel(selected);else await openSession();}
+        await emitState(); send({ type: "ack", id, message:providersPending?'模型信息已保存，当前模型任务结束后生效':'模型信息已保存' });
         break;
       }
       case "configure_remote": {
@@ -447,7 +564,9 @@ async function handle(command) {
         send({ type: "ack", id });
         break;
       case "memory_work_delete":
-        await memory.deleteWork(command.title);send({type:"memory",state:memory.snapshot()});send({type:"ack",id});break;
+        workingTools.cancel();await memory.deleteWork(command.title,command.workId);send({type:"memory",state:memory.snapshot()});send({type:"ack",id});break;
+      case "draft_work_skill":
+        send({type:'ack',id,draft:await memory.createWorkSkillDraft(command.workId,cwd)});break;
       case "memory_fact_delete":
         memoryAgent.cancel(); await memory.deleteFact(command.key);
         send({ type: "memory", state: memory.snapshot() }); send({ type: "ack", id }); break;
@@ -504,6 +623,7 @@ async function handle(command) {
       }
       case "select_model": {
         if (busy) throw new Error("Wait for the current response to finish");
+        if(providers.providers.find(p=>p.id===command.provider)?.models.find(m=>m.id===command.model)?.enabled===false)throw Error('该模型尚未勾选启用');
         const info=providers.modelInfo(command.provider,command.model,await getRuntime());
         if(command.thinkingLevel!==undefined && !info.thinkingLevels.includes(command.thinkingLevel))throw new Error("该模型不支持此思考选项");
         await openSession(command.provider, command.model);
@@ -511,7 +631,7 @@ async function handle(command) {
         send({ type: "ack", id });
         // 笔记库已连接但总览还没生成时，模型一旦就绪就补上。
         // 总览文件已存在时 ensure() 会直接返回，不会重复调用模型。
-        if(capabilities.state.vaultPath)void vaultOverview.ensure();
+        if(capabilities.state.vaultPath)void ensureOverview();
         break;
       }
       case "set_thinking_level": {
@@ -587,7 +707,7 @@ async function handle(command) {
         if(busy || !session) throw new Error("请等待当前任务完成");
         busy=true;send({type:"compaction",status:"running",enabled:session.autoCompactionEnabled});
         try { await session.compact(); emitTelemetry();send({type:"compaction",status:"done",enabled:session.autoCompactionEnabled});send({type:"ack",id}); }
-        catch(e){if(e.message?.includes("Nothing to compact")){send({type:"compaction",status:"skipped",message:"当前会话较短，无需压缩；自动压缩仍保持开启",enabled:session.autoCompactionEnabled});send({type:"ack",id,skipped:true});}else{send({type:"compaction",status:"error",message:e.message,enabled:session.autoCompactionEnabled});throw e;}}
+        catch(e){if(e.message?.includes("Nothing to compact")){send({type:"compaction",status:"skipped",message:"当前会话较短，无需压缩；自动压缩仍保持开启",enabled:session?.autoCompactionEnabled});send({type:"ack",id,skipped:true});}else if(/Compaction cancelled/i.test(e.message||"")){send({type:"compaction",status:"skipped",message:"压缩已停止，原上下文保留",enabled:session?.autoCompactionEnabled});send({type:"ack",id,stopped:true});}else{send({type:"compaction",status:"error",message:e.message,enabled:session?.autoCompactionEnabled});throw e;}}
         finally{busy=false;}break;
       }
       case "archive_session":
@@ -626,38 +746,67 @@ async function handle(command) {
         if (busy) throw new Error("A response is already running");
         if (!session) await openSession();
         if (!session.model || session.model.provider === "unknown") throw new Error("Configure an API key and select a model first");
+        if(providers.providers.find(p=>p.id===session.model.provider)?.models.find(m=>m.id===session.model.id)?.enabled===false)throw Error('当前模型已取消勾选，请选择一个已启用模型');
         if (typeof command.text !== "string") throw new Error("消息文字无效");
         const images = normalizeImages(command.images);
         if(images.length && !session.model.input?.includes("image"))throw new Error("当前模型未启用视觉能力。请在设置 → 模型中启用支持图片，再重新发送。");
         if (!command.text.trim() && !images.length) throw new Error("请输入消息或添加图片");
-        await prepareSkills(command.text);
         busy = true;
+        const controller = new AbortController();turnController=controller;
+        controller.promptId=id;activeTurnId=id;
         turnRecovery.begin();
         visualReview.begin(command.text);
         outputTokens = 0; generationMs = 0; missingUsage = false;
         memoryAgent.cancel();
-        send({ type: "started", id });
+        send({ type: "started", id, turnId:id });
+        let completedOutcome;
         try {
+          await applyProviders();
+          await prepareSkills(command.text);controller.signal.throwIfAborted();
           await contextPolicy.preparePrompt(command.text, images);
+          controller.signal.throwIfAborted();
           await session.prompt(command.text, { images });
           emitTelemetry();
-          const outcome = visualReview.outcome(turnRecovery.outcome());
+          const outcome = controller.signal.aborted?{status:'aborted',message:'用户已停止回复'}:visualReview.outcome(turnRecovery.outcome());
           if (visualReview.snapshot().required) {
             const lastAssistant = session.sessionManager.getBranch().findLast(entry => entry.type === "message" && entry.message.role === "assistant");
             if (lastAssistant) session.sessionManager.appendCustomEntry("reed_turn_verification", { messageEntryId: lastAssistant.id, outcome, review: visualReview.snapshot() });
           }
-          send({ type: "done", id, outcome });
-          if (outcome.status === "complete") memoryAgent.schedule();
+          completedOutcome=outcome;
+        } catch(error) {
+          // A turn replaced by a forced local stop is aborted, not a new failure.
+          if(controller.signal.aborted||turnController!==controller)completedOutcome={status:'aborted',message:'用户已停止回复'};
+          else throw error;
         } finally {
           turnRecovery.end();
-          busy = false;
+          abortWatchdog.disarm(id);
+          // Only the turn that still owns the lifecycle may publish terminal events,
+          // so a late settlement can never close a newer turn's UI.
+          if(turnController===controller){
+            turnController=null;activeTurnId=null;
+            try{while(providersPending&&!vaultOverview.running)await applyProviders();if(providersPending===false)await emitState();}
+            finally{busy=false;}
+            send({type:'session_sync',busy:false,turnId:id});
+            send({type:'done',id,turnId:id,outcome:completedOutcome});
+          }
         }
+        if(completedOutcome?.status==='complete'){memoryAgent.schedule();void workingTools.consolidate();}
         break;
-      case "abort":
+      case "abort": {
+        const turn=turnController;
+        const stale=Boolean(command.promptId&&turn?.promptId!==command.promptId);
+        // Acknowledge before invoking synchronous abort listeners.
+        send({ type: "ack", id, stale:stale||undefined });
+        if(stale){send({type:'session_sync',busy,turnId:activeTurnId});break;}
+        send({type:'stopping',turnId:activeTurnId,message:busy?'正在停止，等待请求结束…':'已停止'});
+        turnRecovery.end();
         approvalGate.cancel("用户停止了当前操作");
-        if (session) await session.abort();
-        send({ type: "ack", id });
+        if(!turn&&!busy){send({type:'session_sync',busy:false,turnId:null});break;}
+        turn?.abort(new DOMException('用户已停止回复','AbortError'));
+        abortWatchdog.arm(turn?.promptId||activeTurnId);
+        if (session) void session.abort().catch(error=>send({type:'error',message:error.message}));
         break;
+      }
       case "tool_decision": {
         approvalGate.decide(command.requestId, command.decision, command.reason);
         send({ type: "ack", id });
@@ -667,7 +816,7 @@ async function handle(command) {
         throw new Error(`Unknown command: ${command.type}`);
     }
   } catch (error) {
-    send({ type: "error", id, message: error instanceof Error ? error.message : String(error) });
+    send({ type: "error", id, commandType:command.type, message: error instanceof Error ? error.message : String(error) });
   }
 }
 
@@ -680,14 +829,19 @@ for await (const line of createInterface({ input: process.stdin })) {
     send({ type: "error", message: "Invalid JSON command" });
     continue;
   }
-  if (["get_goals", "save_goals", "cancel_vault_overview", "abort", "tool_decision", "queue_message", "promote_queue", "clear_queue", "set_approval"].includes(command.type)) {
+  if ((command.type === "init" && session) || ["get_goals", "save_goals", "cancel_vault_overview", "abort", "tool_decision", "queue_message", "promote_queue", "clear_queue", "set_approval"].includes(command.type)) {
     void handle(command);
+  } else if(command.type==='prompt') {
+    // Do not hold the settings/read command queue for an entire agent turn.
+    queue = queue.then(()=>{if(busy||applyingProviders){send({type:'error',id:command.id,message:'当前任务或配置仍在结束，请稍后重试。'});return;}activePrompt=handle(command);});
   } else {
     queue = queue.then(() => handle(command));
   }
 }
-await queue;vaultOverview.cancel();await mcp.closeAll();
+await queue;turnController?.abort();if(session)void session.abort();await activePrompt;vaultOverview.cancel();await mcp.closeAll();
 memoryAgent.cancel();
+workingTools.cancel();
+capabilities.close();
 learningTools.close();
 session?.dispose();
 approvalGate.cancel("Agent 进程已退出");

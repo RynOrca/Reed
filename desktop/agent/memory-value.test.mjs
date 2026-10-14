@@ -14,7 +14,7 @@ function fixture() {
   const session={sessionId:'isolated',model:{provider:'test'},state:{messages:[{role:'user',content:'记住我的长期目标：学习操作系统'}]}};
   let current=session, learning=true, work=true, output, stopReason='stop', calls=0;
   const gate=createMemoryValueGate({currentSession:()=>current,learningEnabled:()=>learning,workEnabled:()=>work,runtime:async()=>({completeSimple:async (_model,context,options)=>{
-    calls++;assert.equal(options.reasoning,'off');assert.match(context.systemPrompt,/一次提问不表示不会/);
+    calls++;assert.equal(options.reasoning,'off');assert.ok(options.maxTokens>=1024,'兼容服务可能将低档思考也计入输出预算');assert.match(context.systemPrompt,/一次提问不表示不会/);
     const data=JSON.parse(context.messages[0].content[0].text);
     return {stopReason,content:[{type:'text',text:typeof output==='function'?await output(data):output??JSON.stringify({decisions:data.candidates.map(c=>decision(c.id))})}]};
   }})});
@@ -36,6 +36,18 @@ test('无效响应、重复索引、截断、模型失败和未配置模型都�
   f.setOutput(undefined);f.setStop('length');assert.deepEqual(await f.gate([{content:'x'}]),[false]);
   f.setStop('stop');f.setOutput(()=>{throw Error('offline');});assert.deepEqual(await f.gate([{content:'x'}]),[false]);
   f.session.model.provider='unknown';assert.deepEqual(await f.gate([{content:'x'}]),[false]);
+});
+
+test('拒绝原因属于本次调用且不包含候选原文，区分模型拒绝、格式、截断和会话变化',async()=>{
+  const f=fixture(),candidate={content:'PRIVATE_TEST_SENTINEL'};
+  f.setOutput(JSON.stringify({decisions:[decision(0,{supported:false})]}));
+  const rejected=await f.gate([candidate]);assert.equal(rejected.diagnostics[0].reason,'unsupported');
+  f.setOutput('bad json');const malformed=await f.gate([candidate]);assert.equal(malformed.diagnostics[0].reason,'invalid_json');
+  assert.equal(rejected.diagnostics[0].reason,'unsupported','后一个审查不能覆盖前一次诊断');
+  assert.doesNotMatch(JSON.stringify(rejected.diagnostics),/PRIVATE_TEST_SENTINEL/);
+  f.setStop('length');assert.equal((await f.gate([candidate])).diagnostics[0].reason,'response_truncated');
+  f.setStop('stop');f.setOutput(()=>{f.session.state.messages.push({role:'user',content:'新一轮'});return '{}';});
+  assert.equal((await f.gate([candidate])).diagnostics[0].reason,'context_changed');
 });
 
 test('画像关闭仍能审查工作经验，禁写、新轮次、会话切换与取消使批准失效',async()=>{
