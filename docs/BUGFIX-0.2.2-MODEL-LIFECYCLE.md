@@ -32,3 +32,17 @@
 证据：dist/bugfix-0.2.2-models。focused-first/second/third.log保留失败与旧恢复夹具死锁记录；focused-fourth.log 44项通过；full-agent-first.log、full-agent-final.log保留175项全套结果；provider-final.log最终相关16项通过。
 
 原生阶段：首包57a5e60关键17项通过（native-usability-third.log）；完整桌面在恢复提示检查发现request_phase覆盖recoveryStatus，实际SDK恢复逻辑未丢失，但提示不可持续。已修UI保护，独立提交后重新构建；首包不作为最终交付。两次原生脚本初始化/焦点时序失败日志也保留。
+
+## 最终包验收
+
+最终构建源9bca08d9828cba73defbfb0d3f36db2bbc01a9d3，源码已推送origin/0.2.2；最终目录dist/Reed-0.2.2-model-final，VERSION.json记录相同源提交。最终完整桌面39/39（native-desktop-9bca08d.log）、关键界面17/17（native-usability-9bca08d.log）、NSIS变体窗口10/10（native-window-third-9bca08d.log）通过。窗口前两次输入偏差记录为native-window-9bca08d.log、native-window-retry-9bca08d.log；用户暂不操作鼠标后第三次全过。未绕过窗口归属或落点保护。工具检查6/6、Rust release4/4通过。
+
+| 产物 | 字节 | SHA256 |
+|---|---:|---|
+| Reed-0.2.2-setup.exe | 50583661 | 625d5a1dc7c47faff5841e8faf526cfe06d9d645dbc0e9f573434f4e69f970f1 |
+| Reed-0.2.2-portable.zip | 81190245 | 30b67b9846b97cd1439aca5a03665f837075eb320a673552900b64a564f4af21 |
+| SHA256SUMS.txt | 179 | 87a6b694a45a95e8ef32b392f0ac35af368a540651adb711ffaa05cc5dbff180 |
+
+用户最后允许最多2次合成hi、每次256输出token的真实DeepSeek验证。用户确认安装目录D:/Tools/Reed，其启动日志数据目录为%APPDATA%/Reed；只读核对当前和旧profile以及legacy providers.json，仅有Qwen，没有保存的DeepSeek提供商，因此实际付费请求0次。未试用其他服务凭据，未发送真实笔记。官方服务首字延迟仍是未验证项，模拟通过不等于DeepSeek实测通过。
+
+最终产物用于手动安装/便携运行；没有签名私钥，不生成应用内签名更新产物。本轮不安装、不修改main、不公开Release，只替换既有v0.2.2草稿。
