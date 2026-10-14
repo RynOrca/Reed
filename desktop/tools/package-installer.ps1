@@ -55,6 +55,16 @@ try {
         # The first run may have downloaded NSIS after the preflight repair.
         & $tauri build --bundles nsis --config $configPath
     }
+    if ($LASTEXITCODE -ne 0 -and -not $env:TAURI_SIGNING_PRIVATE_KEY) {
+        # 已配置更新公钥时，tauri 会因为缺少私钥而拒绝构建。
+        # 这里退一步只构建应用（不产出更新包），让本地开发/验收无需持有私钥。
+        # 发布产物仍然必须带私钥构建，否则没有签名，应用内一键更新不可用。
+        Write-Warning '搭建应用本体：无签名私钥，跳过更新产物（发布产物必须带私钥构建）。'
+        $noArtifacts = @{ bundle = @{ createUpdaterArtifacts = $false } }
+        $noArtifactsPath = Join-Path $Output 'installer-no-artifacts.json'
+        [IO.File]::WriteAllText($noArtifactsPath, ($noArtifacts | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+        & $tauri build --bundles nsis --config $configPath --config $noArtifactsPath
+    }
     if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
 }
 finally { Pop-Location }
