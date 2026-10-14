@@ -141,3 +141,12 @@ WIP保全提交：c8e35a7553991c90b6546caba5269581c14147b2。四项问题仍待�
 - [x] 全量 Agent 212/212 通过（新增 rank-quality 5、review-queue 4、review-gate 4）。
 - [x] 构建 dist/Reed-0.2.2-retrieval-quality 并重跑原生完整桌面验收。
 - [ ] 未做（等评估）：模型 rerank（需额外调用或本地小模型）、向量/混合检索。
+
+## 2026-10-15 推送 0.2.2 与更新 Release Draft（用户指示）
+
+用户要求提交到 0.2.2 分支并更新 Release Draft、补全说明。
+
+- [x] `git push origin 0.2.2`：`092388c..aaed743` 快进推送，无强推；origin/main 仍为 `9fb92bb`，未改动。
+- [x] Release Draft ID 412479090（tag_name 恢复为 `v0.2.2`，draft=true，prerelease=false）target 更新为推送后的提交；说明改写为完整版本（本轮全部修复、构建源、附件 SHA256、验证结果、真实 DeepSeek 实测、未验证项与安装说明）。
+- [x] 附件替换为本轮构建：setup.exe 50,599,387 字节 SHA256 `36b3aa01…`、portable.zip 81,203,641 字节 SHA256 `60883a4a…`、SHA256SUMS.txt；远端 digest 与本地一致，state=uploaded，仍为 Draft 未公开发布。
+- [ ] 未做：公开发布、移动既有 tag、生成签名更新产物（无私钥）。
