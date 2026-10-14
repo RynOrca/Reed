@@ -1,6 +1,6 @@
 [package]
 name = "summon-desktop"
-version = "0.2.1"
+version = "0.2.2"
 description = "Reed 一苇 — lightweight learning agent"
 edition = "2021"
 
