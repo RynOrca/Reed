@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,readFile,access} from 'node:fs/promises';
+import {mkdtemp,rm,readFile,access,mkdir,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {ConversationCanvasStore,ConversationCanvasWorkflow,conversationPairs,canvasSource} from './conversation-canvas.mjs';
@@ -55,14 +55,20 @@ test('手动收录/隐藏持久化，恢复合并卡片原文且自动整理不�
   const store=new ConversationCanvasStore(root),entries=[...pair(1),...pair(2,'补充说明')];await store.sync('s',entries);
   await store.analyze('s',[analysis('u1'),{...analysis('u2'),action:'merge',targetId:'u1'}],['u1','u2']);await store.edit('s',{nodes:[{id:'u1',x:120,y:140,title:'手工标题'}]});await store.hide('s','u1');
   await store.sync('s',[...entries,...pair(3)]);let graph=await new ConversationCanvasStore(root).get('s');assert.equal(graph.nodes[0].hidden,true);assert.equal(graph.records.u2.manualHidden,true);assert.throws(()=>canvasSource(graph,entries,'u1'),/不存在/);
-  graph=await store.include('s',conversationPairs(entries)[1]);assert.equal(graph.nodes.length,1);assert.equal(graph.nodes[0].hidden,false);assert.equal(graph.nodes[0].x,120);assert.equal(graph.nodes[0].title,'手工标题');assert.equal(canvasSource(graph,entries,'u1').userMessageIds.length,2);
+  graph=await store.include('s',conversationPairs(entries)[1]);assert.equal(graph.nodes.length,1);assert.equal(graph.nodes[0].hidden,false);assert.equal(graph.nodes[0].x,120);assert.equal(graph.nodes[0].title,'手工标题');assert.equal(canvasSource(graph,entries,'u1').userMessageIds.length,2);assert.equal(canvasSource(graph,entries,'u1').turns.length,2);
   await store.hide('s','u1');await assert.rejects(store.analyze('s',[analysis('u1')],['u1']),/错误节点/);assert.equal((await store.get('s')).nodes[0].hidden,true);
 }));
 
-test('非法合并/收录结果不能部分写入，旧画布升级保留已有手工卡片',()=>fixture(async root=>{
+test('非法合并/收录结果不能部分写入',()=>fixture(async root=>{
   const store=new ConversationCanvasStore(root),entries=[...pair(1),...pair(2)];await store.sync('s',entries);
   const before=await store.get('s');await assert.rejects(store.analyze('s',[analysis('u1'),{...analysis('u2'),action:'merge',targetId:'missing'}],['u1','u2']),/合并/);assert.deepEqual(await store.get('s'),before);
   await store.include('s',conversationPairs(entries)[0]);await assert.rejects(store.analyze('s',[{id:'u1',action:'ignore'}],['u1']),/手工节点/);
+}));
+
+test('旧版画布升级保留已有卡片、手工位置标题与关联，不回溯删除',()=>fixture(async root=>{
+  await mkdir(join(root,'canvases'));const old={version:1,sessionId:'s',revision:3,nodes:[{id:'u1',userMessageIds:['u1'],answerMessageId:'a1',title:'我的旧标题',summary:'旧摘要',state:'ready',x:80,y:90,manualTitle:true,manualPosition:true}],edges:[],view:{scale:1,x:0,y:0}};
+  await writeFile(join(root,'canvases','s.json'),JSON.stringify(old));const store=new ConversationCanvasStore(root);let graph=await store.sync('s',[...pair(1),...pair(2)]);assert.equal(graph.nodes.length,1);assert.equal(graph.records.u1.status,'included');
+  graph=await store.analyze('s',[{id:'u2',action:'ignore'}],['u2']);assert.equal(graph.nodes[0].title,'我的旧标题');assert.equal(graph.nodes[0].x,80);assert.equal(graph.nodes[0].summary,'旧摘要');assert.equal(graph.nodes.length,1);
 }));
 test('取消或删除后，忽略 abort 的迟到模型结果不能改图或复活文件',()=>fixture(async root=>{
   const store=new ConversationCanvasStore(root),session={sessionId:'s',model:{provider:'mock',id:'test'},sessionManager:{getBranch:()=>pair(1)}};let finish,started;

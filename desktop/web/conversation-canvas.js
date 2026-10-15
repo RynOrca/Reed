@@ -69,7 +69,9 @@ export function createConversationCanvas({command,tauri,prompt,isRunning,onJump,
   async function showSource(nodeId){
     if(!available||!opened)return;selected=nodeId;render();const ticket=++sourceEpoch,id=sessionId;
     source.hidden=false;sq('question').textContent='正在读取原文…';sq('answer').replaceChildren();transcript.inert=true;transcript.setAttribute('aria-hidden','true');
-    try{const result=await command('canvas_source',{sessionId:id,nodeId},true);if(ticket!==sourceEpoch||id!==sessionId||!available)return;sourceValue=result.source;sq('question').textContent=result.source.question;renderMarkdown(sq('answer'),result.source.answer);sq('close').focus();}
+    try{const result=await command('canvas_source',{sessionId:id,nodeId},true);if(ticket!==sourceEpoch||id!==sessionId||!available)return;sourceValue=result.source;sq('question').textContent=result.source.question;
+      if(result.source.turns?.length>1){sq('answer').replaceChildren();for(const turn of result.source.turns){const section=document.createElement('section');section.className='canvas-source-turn';const question=document.createElement('h3'),answer=document.createElement('div');question.textContent=turn.question;renderMarkdown(answer,turn.answer);section.append(question,answer);sq('answer').append(section);}}
+      else renderMarkdown(sq('answer'),result.source.answer);sq('close').focus();}
     catch(error){if(ticket===sourceEpoch)sq('question').textContent=error.message;}
   }
   function editTitle(){const node=graph?.nodes.find(n=>n.id===selected);if(!node)return;rename.querySelector('input').value=node.title;rename.showModal();rename.querySelector('input').select();}

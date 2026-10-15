@@ -12,7 +12,7 @@ function nodeFor(graph,record){return {id:record.id,turnIds:[record.id],userMess
 export function canvasSource(graph,entries,nodeId){
   const node=graph.nodes.find(n=>n.id===nodeId&&!n.hidden);if(!node)throw Error('画布节点不存在');
   const ids=new Set(node.turnIds||[node.id]),pairs=conversationPairs(entries).filter(p=>ids.has(p.id));if(!pairs.length)throw Error('原文不在当前会话分支');
-  return {id:node.id,userMessageIds:pairs.flatMap(p=>p.userMessageIds),answerMessageId:pairs.at(-1).answerMessageId,question:pairs.map(p=>p.question).join('\n\n'),answer:pairs.map(p=>p.answer).join('\n\n---\n\n')};
+  return {id:node.id,userMessageIds:pairs.flatMap(p=>p.userMessageIds),answerMessageId:pairs.at(-1).answerMessageId,question:pairs.map(p=>p.question).join('\n\n'),answer:pairs.map(p=>p.answer).join('\n\n---\n\n'),turns:pairs.map(p=>({id:p.id,question:p.question,answer:p.answer}))};
 }
 
 export function conversationPairs(entries){
@@ -137,7 +137,7 @@ export class ConversationCanvasWorkflow{
     const alive=()=>!controller.signal.aborted&&this.epoch===epoch&&this.openSessionId===id&&this.currentSession()===session&&this.enabled();
     try{
       let graph=await this.store.sync(id,session.sessionManager.getBranch());if(!alive())return;this.event(id,{graph,state:'organizing'});
-      const allPairs=conversationPairs(session.sessionManager.getBranch()),pairs=new Map(allPairs.map(pair=>[pair.id,pair]));
+      const allPairs=conversationPairs(session.sessionManager.getBranch());
       const pendingPairs=()=>allPairs.filter(pair=>{const r=graph.records?.[pair.id];return r?.status==='pending'||r?.status==='deferred'&&r.checkedThrough!==graph.latestAnswerMessageId;});
       if(!pendingPairs().length){this.event(id,{graph,state:'ready'});return;}
       const model=session.model;if(!model||model.provider==='unknown')throw Error('请选择对话模型后重试整理');
