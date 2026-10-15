@@ -212,10 +212,8 @@ test("real PI bridge: discover, stream, remember, background memory, projects an
     await command("compact");assert.ok(messages.some(m=>m.type==="compaction" && m.status==="done"));
     await command("archive_session",{sessionId:first});assert.equal((await command("list_sessions")).sessions.find(s=>s.id===first).archived,true);
     await command("archive_session",{sessionId:first,archived:false});assert.equal((await command("list_sessions")).sessions.find(s=>s.id===first).archived,false);
-    await command("select_role",{roleId:"planner"});await command("prompt",{text:"Planner 规划测试"});
-    const plannerTools=requests.at(-1).tools.map(t=>t.function?.name);assert.ok(!plannerTools.includes("write")&&!plannerTools.includes("mcp_call"));assert.ok(plannerTools.includes("read"));
-    assert.match(JSON.stringify(requests.at(-1).messages[0]),/Planner/);
-    const plannerId=messages.filter(m=>m.type==="session").at(-1).sessionId;await command("delete_session",{sessionId:plannerId,confirm:true});assert.ok(!(await command("list_sessions")).sessions.some(s=>s.id===plannerId));
+    await assert.rejects(command("select_role",{roleId:"planner"}),/找不到该角色/);
+    await command('new_session');await command('prompt',{text:'临时会话删除验收'});const temporaryId=messages.filter(m=>m.type==='session').at(-1).sessionId;await command('delete_session',{sessionId:temporaryId,confirm:true});assert.ok(!(await command('list_sessions')).sessions.some(s=>s.id===temporaryId));
     await command("select_role",{roleId});await command("open_session",{sessionId:first});
     assert.equal(messages.filter(m=>m.type==="models").at(-1).models.some(m=>m.id==="unknown-model"),false);
     await command("update_model",{providerId:provider.providerId,model:{id:"unknown-model",enabled:true}});

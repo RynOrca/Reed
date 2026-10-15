@@ -1,3 +1,4 @@
+import { rankHits, searchTokens } from './local-search.mjs';
 // Retrieval planning uses the selected provider; evidence always comes from local files.
 export const NOTE_EXPANSION_MAX_TOKENS = 1024;
 export const NOTE_EXPANSION_TIMEOUT_MS = 5_000;
@@ -44,8 +45,11 @@ export function createNoteRetriever({capabilities,runtime,model,expansionTimeout
     // Every expanded term from this plan shares one vault scan and one index pass.
     const extra=queries.filter(term=>term!==query);
     const lists=[original,...(signal?.aborted||!extra.length?[]:await capabilities.searchMany(extra,8,{signal}))];
-    const hits=new Map();lists.forEach(list=>list.forEach((hit,index)=>{const key=hit.path+':'+hit.startLine;const old=hits.get(key);hits.set(key,{...hit,relevance:(old?.relevance||0)+1/(20+index)});}));
-    const selected=[...hits.values()].sort((a,b)=>b.relevance-a.relevance).slice(0,6);
+    const hits=new Map();lists.forEach(list=>list.forEach((hit,index)=>{const key=hit.path+':'+hit.startLine;const old=hits.get(key);hits.set(key,{...(old||hit),relevance:(old?.relevance||0)+1/(20+index)});}));
+    // Expansion supplies candidates, not a new definition of relevance. Score
+    // the union against the original question before using fusion as a tie-break.
+    const ranked=rankHits([...hits.entries()].map(([id,hit],index)=>({id,payload:JSON.stringify(hit),rank:index,text:hit.content})),searchTokens(query),{query});
+    const selected=ranked.map(item=>({...item.payload,score:item.score,relevance:item.score+Math.min(0.02,item.payload.relevance*0.1)})).sort((a,b)=>b.relevance-a.relevance).slice(0,6);
     progress(needsExpansion&&!queries.length?'fallback':'ready',selected.length);
     return selected;
   };

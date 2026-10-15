@@ -1,10 +1,15 @@
+import { createLearningMode } from './learning-mode.js';
 // Transcript row structure and disclosure behavior adapted from PI-Desktop 0.16.1.
 import { createGoals } from "./goals.js";
+import { createConversationCanvas } from "./conversation-canvas.js";
+import { createProjectPicker } from "./project-picker.js";
 import { createMessageNavigation } from "./message-navigation.js";
 import { renderMarkdown } from "./markdown.js";
 import { icon, windowHandles } from "./icons.js";
+import { retryStarted, retryEnded, turnStillRunning, terminalErrorMessage } from "./turn-state.mjs";
 const $ = (id) => document.getElementById(id);
 import { createSkillBindings } from "./role-skills.js";
+const roleLearningMode=createLearningMode(document.getElementById('role-learning-mode'),{onChange:async(features)=>{if(!editingRoleId)return false;await command('set_role_learning',{roleId:editingRoleId,...features},true);return true;}});
 const roleSkills = createSkillBindings($("role-skills"));
 import { initBrand, finishStartup } from "./brand.js";
 const tauri = window.__TAURI__;
@@ -31,6 +36,7 @@ let activeTurnId=null;
 let running = false;
 let stopping = false;
 let recoveryStatus = "";
+let retrying = false;
 let turnErrorShown = false;
 let assistantRow = null;
 let thinkingRow = null;
@@ -42,6 +48,21 @@ const queuedTexts = new Map();
 let attachments = [];
 let followLatest = true;
 const goalsPanel = createGoals({command});
+const projectPicker=createProjectPicker({button:$('workspace-button'),command,tauri,isRunning:()=>running,onError:errorRow,onSelect:()=>{closeHistory();prompt.focus();}});
+const canvasPanel = createConversationCanvas({command,tauri,prompt,isRunning:()=>running,reportError:errorRow,onUnavailable:()=>{
+  const role=roles.find(item=>item.id===activeRoleId);
+  if(!role){void command('get_state').catch(roleError);return;}
+  openRoleEditor(role);if(!rolesDialog.open)rolesDialog.showModal();
+  roleError('请启用此角色的「对话画布」，保存后即可从左侧展开。');
+  $('role-canvas-enabled').focus();
+},onJump:async(messageId)=>{
+  if(running)throw new Error("请等待当前回复结束后定位原文");
+  await command("get_history",{},true);
+  const row=messages.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+  if(!row)throw new Error("当前会话分支中未找到这条原文");
+  followLatest=false;row.scrollIntoView({block:"center",behavior:"smooth"});
+  row.animate([{backgroundColor:"var(--goal-accent-soft)"},{backgroundColor:"transparent"}],{duration:1600});
+}});
 createMessageNavigation({messages,transcript,onNavigate:()=>{followLatest=false;}});
 transcript.addEventListener("scroll",()=>{followLatest=transcript.scrollHeight-transcript.clientHeight-transcript.scrollTop<65;},{passive:true});
 
@@ -55,7 +76,7 @@ function scrollToLatest() { if(followLatest)transcript.scrollTop = transcript.sc
 function refreshEmpty() { $("empty-state").hidden = messages.childElementCount > 0; }
 function setRunning(value) {
   running = value;
-  if(!value){stopping=false;activeTurnId=null;}
+  if(!value){stopping=false;activeTurnId=null;retrying=false;}
   $("stop-button").disabled=stopping;
   if (!value) recoveryStatus = "";
   updateSendAvailability();
@@ -259,6 +280,7 @@ function restoreHistory(history) {
         updateDisclosure(toolRows.get(block.id), "done");
       }
     }
+    if(content&&message.messageId)content.closest('.message-row').dataset.messageId=message.messageId;
     if (message.role === "user" && content) {
       const marker = "附件文件（可使用 read 工具读取）：\n";
       const index = content.textContent.lastIndexOf(marker);
@@ -307,7 +329,7 @@ function renderSessions(sessions) {
     remove.onclick=()=>{if(remove.classList.contains("danger")){clearTimeout(timer);void change("delete_session",{confirm:true});}else{remove.title="确认删除";remove.setAttribute("aria-label","确认删除");remove.classList.add("danger");timer=setTimeout(()=>{remove.title="删除";remove.setAttribute("aria-label","删除");remove.classList.remove("danger");},3000);}};
     row.append(button,archive,remove);parent.append(row);
   }
-  function section(key,text,parent=list,project=false){const group=document.createElement("details");group.className=project?"history-project history-group":"history-section-group history-group";group.open=historyFoldState.get(key)??true;group.dataset.group=key;group.ontoggle=()=>historyFoldState.set(key,group.open);const title=document.createElement("summary");title.append(icon("chevron"));if(project)title.append(icon("folder"));title.append(document.createTextNode(text));group.append(title);parent.append(group);return group;}
+  function section(key,text,parent=list,project=false){const group=document.createElement("details");group.className=project?"history-project history-group":"history-section-group history-group";group.open=historyFoldState.get(key)??true;group.dataset.group=key;group.ontoggle=()=>historyFoldState.set(key,group.open);const title=document.createElement("summary");title.append(icon("chevron"));if(project)title.append(icon("folder"));const label=document.createElement("span");label.className="history-group-title";label.textContent=text;title.append(label);group.append(title);parent.append(group);return group;}
   const looseGroup=section("sessions","会话");
   const loose = sessions.filter(item => !item.projectPath);
   loose.forEach(item => addConversation(looseGroup, item));
@@ -319,7 +341,7 @@ function renderSessions(sessions) {
     projects.get(item.projectPath).push(item);
   }
   for (const [path, items] of projects) {
-    const group=section(path,path.split(/[\\/]/).filter(Boolean).pop(),projectGroup,true);group.querySelector("summary").title=path;items.forEach(item => addConversation(group, item));
+    const group=section(path,path.split(/[\\/]/).filter(Boolean).pop(),projectGroup,true);const heading=group.querySelector('summary');heading.title=path;const add=document.createElement('button');add.type='button';add.className='history-project-new';add.title='在此项目新建会话';add.setAttribute('aria-label','在此项目新建会话');add.append(icon('new'));add.onclick=async e=>{e.preventDefault();e.stopPropagation();try{await command('change_workspace',{path},true);closeHistory();prompt.focus();}catch(error){$('history-error').textContent=error.message||String(error);$('history-error').hidden=false;}};heading.append(add);items.forEach(item => addConversation(group, item));
   }
 }
 let chosenModel=null,activeModelKey="",activeThinking="off",statusModelResponse={};
@@ -356,6 +378,10 @@ function roleError(error) {
   $("role-error").textContent = String(error);
   $("role-error").hidden = false;
 }
+function openRoleEditor(role){
+  editingRoleId=role.id;$('role-name').value=role.name;$('role-system').value=role.system||'';
+  roleLearningMode.set(role);roleSkills.set(role.skills);$('role-editor').hidden=false;$('role-name').focus();
+}
 function renderRoles() {
   const list = $("roles-list");
   list.replaceChildren();
@@ -374,16 +400,7 @@ function renderRoles() {
     });
     const edit = document.createElement("button");
     edit.type = "button"; edit.textContent = "编辑";
-    edit.addEventListener("click", () => {
-      editingRoleId = role.id;
-      $("role-name").value = role.name;
-      $("role-system").value = role.system || "";
-      $("role-goals-enabled").checked = role.learningGoalsEnabled === true;
-      $("role-profile-enabled").checked = role.learnerProfileEnabled === true;
-      roleSkills.set(role.skills);
-      $("role-editor").hidden = false;
-      $("role-name").focus();
-    });
+    edit.addEventListener("click", () => openRoleEditor(role));
     row.append(use, edit);
     if (!role.builtin) {
       const remove = document.createElement("button");
@@ -404,16 +421,6 @@ function renderRoles() {
     list.append(row);
   }
 }
-async function chooseWorkspace() {
-  try {
-    const path = await tauri.core.invoke("choose_workspace");
-    if (!path) return;
-    await command("change_workspace", { path }, true);
-
-  } catch (error) {
-    errorRow(String(error));
-  }
-}
 async function newSession() {
   try {
     await command("new_session", { noProject: true }, true);
@@ -426,7 +433,7 @@ async function newSession() {
 function onEvent(event) {
   const response = event.payload;
   if (!response || typeof response !== "object") return;
-  const handledReply = Boolean(response.id && pending.has(response.id) && ["ack", "error", "done", "conversation", "file_staged", "goals"].includes(response.type));
+  const handledReply = Boolean(response.id && pending.has(response.id) && ["ack", "error", "done", "conversation", "file_staged", "goals", "sessions"].includes(response.type));
   if (handledReply) {
     const { resolve, reject, timer } = pending.get(response.id); clearTimeout(timer); pending.delete(response.id);
     response.type === "error" ? reject(new Error(response.message)) : resolve(response);
@@ -457,6 +464,7 @@ function onEvent(event) {
       $("model-button").title = response.model || "选择模型";
       activeSessionId = response.sessionId || "";
       activeSessionName = response.sessionName || "";
+      void canvasPanel.session(activeSessionId,response.canvasEnabled===true,response.canvasOpen===true,activeSessionName,response.learningModeEnabled===true||response.learningGoalsEnabled===true);
       updateModelChip(response);$("compaction-state").textContent=response.autoCompaction?"自动压缩已开启":"自动压缩已关闭";
       $("workspace-label").textContent = (response.workspace || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "无项目";
       $("workspace-button").title = response.workspace || "切换工作目录";
@@ -464,6 +472,26 @@ function onEvent(event) {
       void command("list_sessions");
       break;
     case "session_sync": if(turnMatches(response))setRunning(response.busy === true); break;
+    case "retry_start": {
+      // The SDK is reconnecting inside the same turn: the reply is still running, so
+      // the stop button stays available and no terminal error row is shown for it.
+      if(!turnMatches(response))break;
+      const started=retryStarted(response);
+      retrying=true;setRunning(started.running);
+      recoveryStatus=started.status;
+      status(recoveryStatus);
+      break;
+    }
+    case "retry_end": {
+      if(!turnMatches(response))break;
+      const ended=retryEnded(response);
+      retrying=ended.reconnecting;
+      // The reconnect notice must also clear when the recovered reply opens with a
+      // tool call or thinking instead of text.
+      if(ended.recovered){recoveryStatus="";if(running&&!stopping)status("PI 正在回复…");}
+      else if(ended.notice)status(ended.notice);
+      break;
+    }
     case "thinking_level": void command("get_state"); break;
     case "session_name":
       if (response.sessionId === activeSessionId) activeSessionName = response.name || "";
@@ -481,7 +509,8 @@ function onEvent(event) {
       if (running) status(response.phase === "local" ? "正在查找本地笔记…" : response.phase === "expanding" ? "正在扩展笔记检索词（最多等待 5 秒）…" : response.phase === "fallback" ? "已使用本地检索结果，正在生成回复…" : response.count ? `已找到 ${response.count} 段笔记，正在生成回复…` : "正在生成回复…");
       break;
     case "memory_status": if (!running) status(response.status === "organizing" ? "Agent 正在整理记忆…" : "就绪"); break;
-    case "sessions": renderSessions(response.sessions || []); break;
+    case "canvas": canvasPanel.event(response); break;
+    case "sessions": projectPicker.update(response.sessions||[]);renderSessions(response.sessions || []); break;
     case "history": restoreHistory(response.messages || []); status("就绪"); break;
     case "stopping": stopping=true;$("stop-button").disabled=true;if(response.turnId)activeTurnId=response.turnId;status(response.message||"正在停止，等待请求结束…");break;
     case "turn_forced_end":
@@ -521,7 +550,7 @@ function onEvent(event) {
       break;
     }
     case "compaction": $("compaction-state").textContent=response.status==="running"?"正在压缩上下文…":response.status==="error"?"压缩失败："+response.message:response.status==="skipped"?response.message:"上下文已压缩";$("compact-now").disabled=response.status==="running";break;
-    case "started": recoveryStatus = ""; submitted = null; turnErrorShown = false; activeTurnId = response.turnId || response.id || null; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
+    case "started": canvasPanel.foreground(); recoveryStatus = ""; retrying = false; submitted = null; turnErrorShown = false; activeTurnId = response.turnId || response.id || null; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
     case "message_outcome":
       finishThinking(response.outcome);
       assistantRow = null; thinkingRow = null; break;
@@ -538,6 +567,7 @@ function onEvent(event) {
       if (response.final === false) break;
       if (!turnMatches(response)) break;
       setRunning(false); finishThinking(response.outcome);
+      if(response.outcome?.status==='complete')canvasPanel.clearReference();
       if (response.outcome && response.outcome.status !== "complete") {
         status(outcomeLabel(response.outcome));
         if (response.outcome.status !== "aborted" && !turnErrorShown) errorRow(response.outcome.message || outcomeLabel(response.outcome));
@@ -552,6 +582,14 @@ function onEvent(event) {
         if(response.id.startsWith(commandPrefix))errorRow(response.message||"操作失败");
         break;
       }
+      // A failure is only terminal when the Agent itself reports that nothing is
+      // running. An intermediate retry failure, or a send the Agent rejected while
+      // the turn was still in flight, must not paint "就绪" or drop the stop button.
+      if(turnStillRunning(response)){
+        errorRow(response.message||"PI Agent 正在处理上一条消息");
+        if(retrying&&!stopping)status(recoveryStatus||"模型服务连接失败，正在自动重连…");
+        break;
+      }
       finishThinking({ status: "error" });
       if (submitted) {
         submitted.row.remove();
@@ -561,7 +599,7 @@ function onEvent(event) {
         submitted = null;
         refreshEmpty();
       }
-      if (!handledReply) { errorRow(response.message || "PI Agent 出错"); turnErrorShown = true; }
+      if (!handledReply) { errorRow(terminalErrorMessage(response)); turnErrorShown = true; }
       setRunning(false); break;
     case "disconnected":
       setRunning(false); status("PI Agent 已断开，正在恢复连接…");
@@ -588,7 +626,8 @@ document.addEventListener("click", event => {
   const link = event.target.closest?.("a[data-local-file]"); if (!link) return; event.preventDefault();
   void command("resolve_file", { path: link.dataset.localFile }, true).then(r => tauri.core.invoke("open_local_file", { path: r.path })).catch(e => errorRow(String(e.message || e)));
 });
-function command(type, args = {}, awaitReply = false) {
+async function command(type, args = {}, awaitReply = false) {
+  if(['open_session','new_session','select_role','change_workspace','save_role','set_role_learning'].includes(type))await canvasPanel.flush();
   if (!tauri) return Promise.reject(new Error("需要在 Tauri 桌面窗口中运行"));
   const id = `${commandPrefix}${++sequence}`;
   if(type==='prompt')activePromptId=id;
@@ -605,6 +644,7 @@ $("composer").addEventListener("submit", async (event) => {
   const text = prompt.value.trim();
   if ((!text && !attachments.length)) return;
   if (running) {
+    if(canvasPanel.reference()){errorRow("请等待当前回复结束后发送画布追问。");return;}
     if (attachments.length) { errorRow("引导和排队目前支持文本；附件请在当前任务完成后发送。"); return; }
     queuedTexts.set(text,(queuedTexts.get(text)||0)+1);
     try { await command("queue_message", { text, mode: "followUp" }, true); prompt.value = ""; updateSendAvailability(); } catch(e) { queuedTexts.delete(text); errorRow(String(e.message || e)); } return;
@@ -632,7 +672,8 @@ $("composer").addEventListener("submit", async (event) => {
   attachments = []; renderAttachments();
   prompt.value = ""; prompt.style.height = "auto";
   setRunning(true);
-  void command("prompt", { text: outgoing, images: items.filter((item) => item.kind === "image").map(({ data, mimeType }) => ({ type: "image", data, mimeType })) });
+  const reference=canvasPanel.reference();
+  void command("prompt", { text: outgoing, ...(reference?{canvasSessionId:reference.sessionId,canvasNodeId:reference.nodeId}:{}), images: items.filter((item) => item.kind === "image").map(({ data, mimeType }) => ({ type: "image", data, mimeType })) });
 });
 $("add-image").addEventListener("click", () => $("attachment-picker").click());
 $("attachment-picker").addEventListener("change", (event) => {
@@ -700,7 +741,6 @@ $("models-close").addEventListener("click", () => modelsDialog.close());
 $("configure-models").addEventListener("click", () => { modelsDialog.close(); void tauri?.core.invoke("open_settings", { section: "models" }); });
 $("model-back").onclick=()=>{resetModelStep();$("model-search").focus();};
 $("model-apply").onclick=async()=>{if(!chosenModel)return;$("model-apply").disabled=true;$("model-error").hidden=true;try{await command("select_model",{provider:chosenModel.provider,model:chosenModel.id,thinkingLevel:$("thinking-level").value},true);modelsDialog.close();}catch(e){$("model-error").textContent=String(e.message||e);$("model-error").hidden=false;}finally{$("model-apply").disabled=false;}};
-$("workspace-button").addEventListener("click", () => void chooseWorkspace());
 for (const dialog of document.querySelectorAll("dialog")) {
   dialog.addEventListener("click", event => {
     if (event.target !== dialog) return;
@@ -714,7 +754,7 @@ $("roles-new").addEventListener("click", () => {
   editingRoleId = null;
   $("role-name").value = "";
   $("role-system").value = "";
-  $("role-goals-enabled").checked=false;$("role-profile-enabled").checked=false;
+  roleLearningMode.set();
   roleSkills.set();
   $("role-editor").hidden = false;
   $("role-name").focus();
@@ -723,7 +763,7 @@ $("role-cancel").addEventListener("click", () => { $("role-editor").hidden = tru
 $("role-save").addEventListener("click", async () => {
   $("role-error").hidden = true;
   try {
-    await command("save_role", { roleId: editingRoleId, name: $("role-name").value, system: $("role-system").value, skills: roleSkills.get(), learningGoalsEnabled:$("role-goals-enabled").checked, learnerProfileEnabled:$("role-profile-enabled").checked }, true);
+    await command("save_role", { roleId: editingRoleId, name: $("role-name").value, system: $("role-system").value, skills: roleSkills.get(), ...roleLearningMode.get() }, true);
     $("role-editor").hidden = true;
     editingRoleId = null;
   } catch (error) { roleError(error); }

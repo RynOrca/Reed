@@ -20,7 +20,7 @@ test('同主题补充内容，区分不同章节，重读保留工作记忆',()=
   await loaded.setEnabled('l2',false);assert.match(loaded.workContext('PowerShell'),/换行/);await loaded.setEnabled('work',false);assert.equal(loaded.workContext('PowerShell'),'');
 }));
 
-test('默认上下文无复习条目、证据原文和知识正文，按需读取受门控',()=>fixture(async root=>{
+test('默认上下文不注入复习条目，直接召回复习清单无需 read，画像和记忆开关仍生效',()=>fixture(async root=>{
   const memory=new MemoryStore(root,join(root,'sessions')),learner=new LearnerStore(root);
   await memory.saveNote({title:'矩阵',body:'DETAIL_SENTINEL'});await memory.saveNote({title:'待复习矩阵',body:'REVIEW_SENTINEL'});
   await learner.record({kind:'concept',subject:'矩阵',detail:'学习过矩阵',evidence:'已经学过矩阵'},'s',['已经学过矩阵']);
@@ -29,8 +29,14 @@ test('默认上下文无复习条目、证据原文和知识正文，按需读�
   let profile=false,review=false;const tools={},events={};const session={sessionId:'s',state:{messages:[]}};
   workMemoryExtension({memory,learner,roles:{current:()=>({learnerProfileEnabled:profile})},currentSession:()=>session,reviewEnabled:()=>review,send(){}})({registerTool:t=>tools[t.name]=t,on:(n,f)=>events[n]=f});
   await assert.rejects(tools.recall_memory.execute('1',{area:'knowledge',query:'矩阵'}),/关闭/);profile=true;
-  await assert.rejects(tools.recall_memory.execute('1',{area:'review',query:'矩阵'}),/先加载/);review=true;
+  assert.equal(review,false);
   assert.match(JSON.stringify(await tools.recall_memory.execute('1',{area:'review',query:'矩阵'})),/矩阵/);
+  assert.match(JSON.stringify(await tools.recall_memory.execute('2',{area:'review',query:'今天有什么要复习'})),/矩阵/,'另一轮直接读取仍然成功');
+  assert.doesNotMatch(JSON.stringify(await tools.recall_memory.execute('3',{area:'learner',query:'矩阵'})),/矩阵/,'普通画像召回不自动泄露待复习条目');
+  await memory.setEnabled('l1',false);
+  assert.deepEqual(JSON.parse((await tools.recall_memory.execute('4',{area:'review',query:'矩阵'})).content[0].text),[]);
+  profile=false;
+  await assert.rejects(tools.recall_memory.execute('5',{area:'review',query:'矩阵'}),/关闭/);
 }));
 
 test('画像关闭仍能保存工具经验，无工具证据和禁写会话不能保存',()=>fixture(async root=>{
@@ -48,10 +54,10 @@ test('语义判定仅接受有效同主题索引，失败时保留独立条目',
   assert.equal(await match('两个矩阵相乘',items,'subject'),items[0]);output='{"index":99}';assert.equal(await match('不同主题',items,'subject'),null);
 });
 
-import {hasRequiredReview} from './role-skills.mjs';
-test('只有实际匹配的必选复习技能可预先授权，其他技能正文不能冒充',()=>{
+import {hasPreparedReview} from './role-skills.mjs';
+test('只有匹配并启用的绑定复习技能标记流程已加载，其他技能正文不能冒充',()=>{
   const caps={state:{skills:[{id:'review',name:'spaced-review',enabled:true},{id:'other',name:'other',enabled:true,description:'必选流程：spaced-review'}]}};
-  assert.equal(hasRequiredReview({skills:[{skillId:'other',required:true}]},caps,'复习'),false);
-  assert.equal(hasRequiredReview({skills:[{skillId:'review',required:false}]},caps,'复习'),false);
-  const role={skills:[{skillId:'review',required:true}]};assert.equal(hasRequiredReview(role,caps,'复习'),true);assert.equal(hasRequiredReview(role,caps,'普通问题'),false);caps.state.skills[0].enabled=false;assert.equal(hasRequiredReview(role,caps,'复习'),false);
+  assert.equal(hasPreparedReview({skills:[{skillId:'other',required:true}]},caps,'复习'),false);
+  assert.equal(hasPreparedReview({skills:[{skillId:'review',required:false}]},caps,'复习'),true);
+  const role={skills:[{skillId:'review',required:true}]};assert.equal(hasPreparedReview(role,caps,'复习'),true);assert.equal(hasPreparedReview(role,caps,'普通问题'),false);caps.state.skills[0].enabled=false;assert.equal(hasPreparedReview(role,caps,'复习'),false);
 });

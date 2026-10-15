@@ -1,4 +1,4 @@
-# 为「关于 → 检查更新」准备发布产物：签名安装包 + latest.json。
+﻿# 为「关于 → 检查更新」准备发布产物：签名安装包 + latest.json。
 #
 # 为什么需要这一步：Tauri updater 在安装前会用应用内置的公钥校验更新包签名。
 # 没有签名（或签名对不上公钥）时应用会拒绝安装。所以每次发版都要：
@@ -84,7 +84,7 @@ if ($SkipSignature) {
 $url = "https://github.com/$Repository/releases/latest/download/$InstallerName"
 $manifest = [ordered]@{
   version   = $version
-  notes     = "Reed 一苇 $version"
+  notes     = "Reed 苇 $version"
   pub_date  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
   platforms = [ordered]@{
     "windows-x86_64" = [ordered]@{

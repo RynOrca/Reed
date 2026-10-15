@@ -1,4 +1,4 @@
-param([string]$Output = "")
+﻿param([string]$Output = "")
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'executable-integrity.ps1')
 $desktopDir = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -17,6 +17,9 @@ if (-not $Output) { $Output = Join-Path $desktopDir 'dist-portable' }
 $Output = [IO.Path]::GetFullPath($Output)
 if (Test-Path -LiteralPath $Output) { $Output = "$Output-$(Get-Date -Format yyyyMMdd-HHmmss)" }
 New-Item -ItemType Directory -Force -Path $Output | Out-Null
+# Staged files inherit the build directory's mandatory label; a Low-integrity
+# Reed.exe cannot write AppData at all, so repair the output before writing into it.
+Set-ReedOutputIntegrity -Path $Output
 $env:RUSTUP_TOOLCHAIN = 'stable'
 $targetDir = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR) } else { Join-Path $projectDir 'target' }
 Push-Location $projectDir
@@ -43,4 +46,6 @@ foreach ($notice in @('LICENSE','NOTICE.md')) {
 Copy-Item -LiteralPath (Join-Path $desktopDir 'web/vendor/MARKED-LICENSE') -Destination (Join-Path $Output 'MARKED-LICENSE') -Force
 Set-ReedExecutableIntegrity -Path (Join-Path $Output 'Reed.exe')
 Set-ReedExecutableIntegrity -Path (Join-Path $Output 'runtime/node.exe')
+Assert-ReedStandardIntegrity -Path (Join-Path $Output 'Reed.exe')
+Assert-ReedStandardIntegrity -Path (Join-Path $Output 'runtime/node.exe')
 Write-Host "Portable build: $Output"

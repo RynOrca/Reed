@@ -15,3 +15,4 @@
 .binding-remove svg { width:16px; height:16px; }.binding-remove:hover { background:#ffffff0c; color:#ddd; }
 .role-skill-bindings select { width:100%; min-height:34px; padding:7px 10px; border:1px solid #42454c; border-radius:8px; background:#191a1d; color:#c7ceda; font:inherit; font-size:12px; }
 @media(max-width:480px) { .binding-row { flex-wrap:wrap; }.binding-info { flex-basis:100%; }.binding-controls { margin-left:auto; } }
+.learning-mode-child{margin:12px 0 0 18px;padding-left:12px;border-left:1px solid #85947b40}.learning-mode-child:has(input:disabled){opacity:.55}.role-features input:indeterminate{accent-color:#84957b}

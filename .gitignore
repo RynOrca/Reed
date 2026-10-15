@@ -54,6 +54,13 @@ app-state.json
 session-metadata.json
 
 # OS/editor files and logs
+# Local development instructions, plans, and change journals
+AGENTS.md
+CLAUDE.md
+RTK.md
+PLAN.md
+PLAN-*.md
+CHANGELOG.md
 .DS_Store
 Thumbs.db
 desktop.ini

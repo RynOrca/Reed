@@ -3282,7 +3282,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "summon-desktop"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "serde_json",
  "tauri",
@@ -3292,6 +3292,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
  "tauri-runtime",
+ "windows",
 ]
 
 [[package]]

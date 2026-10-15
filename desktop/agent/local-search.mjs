@@ -10,6 +10,12 @@ export function searchTokens(value) {
 }
 
 function tokens(value) { return searchTokens(value); }
+const normalize = value => String(value ?? '').normalize('NFKC').toLowerCase();
+const queryPhrases = query => [...new Set(normalize(query).match(/[a-z0-9]+|[\p{Script=Han}]+/gu) || [])];
+function matcher(value) {
+  const text = normalize(value), english = new Set(text.match(/[a-z0-9]+/g) || []);
+  return word => /^[a-z0-9]+$/.test(word) ? english.has(word) : text.includes(word);
+}
 // "abc:" prefixes every id of one file, so the exclusive upper bound stays inside
 // the same index range without scanning the whole metadata table.
 function prefixBounds(prefix) {
@@ -36,23 +42,29 @@ function headingOnly(payload) {
  * by what they really matched — own content, then labels only, then a chunk that is
  * nothing but its heading — and scored by coverage inside the group.
  */
-export function rankHits(rows, words) {
-  const total = Math.max(1, words.length);
-  const scored = rows.map((row, index) => {
+export function rankHits(rows, words, {query = ''} = {}) {
+  const candidates = rows.map((row, index) => {
     let payload;
     try { payload = JSON.parse(row.payload); } catch { payload = {}; }
-    const content = String(payload?.content ?? "").toLowerCase();
-    const labels = `${payload?.heading ?? ""} ${payload?.title ?? ""}`.toLowerCase();
-    const compact = content.replace(/\s+/g, "");
-    const contentHits = words.filter(word => content.includes(word)).length;
-    const labelHits = words.filter(word => labels.includes(word)).length;
-    const phrase = compact.includes(words.join("")) ? 1 : 0;
+    const content = normalize(payload?.content ?? payload?.body ?? row.text);
+    const labels = normalize(`${payload?.heading ?? ''} ${payload?.title ?? ''}`);
+    return {row, payload, index, content, matchesContent:matcher(content), matchesLabels:matcher(labels)};
+  });
+  // A ubiquitous background term must not outweigh a specific term or phrase.
+  // Estimate frequency inside this bounded candidate pool, without another scan.
+  const weights = words.map(word => 1 + Math.log((candidates.length + 1) / (1 + candidates.filter(item => item.matchesContent(word) || item.matchesLabels(word)).length)));
+  const total = weights.reduce((sum, weight) => sum + weight, 0) || 1;
+  const phrases = queryPhrases(query).filter(phrase => phrase.length >= 2);
+  const scored = candidates.map(({row,payload,index,content,matchesContent,matchesLabels}) => {
+    const contentHits = words.filter(matchesContent).length;
+    const coverage = matches => words.reduce((sum, word, index) => sum + (matches(word) ? weights[index] : 0), 0) / total;
+    const phrase = phrases.length ? phrases.filter(term => /^[a-z0-9]+$/.test(term) ? matchesContent(term) : content.includes(term)).length / phrases.length : 0;
     const onlyHeading = headingOnly(payload);
     // Long chunks are slightly discounted, but the penalty never outweighs coverage.
     const lengthPenalty = Math.min(0.12, content.length / 60000);
-    const score = (contentHits / total) * 0.62 + (labelHits / total) * 0.22 + phrase * 0.16 - lengthPenalty;
+    const score = coverage(matchesContent) * 0.7 + coverage(matchesLabels) * 0.12 + phrase * 0.18 - lengthPenalty;
     const tier = onlyHeading ? 2 : contentHits > 0 ? 0 : 1;
-    return { row, payload, index, contentHits, labelHits, onlyHeading, tier, score: Math.max(0, Math.min(1, score)) };
+    return { row, payload, index, contentHits, onlyHeading, tier, score: Math.max(0, Math.min(1, score)) * (onlyHeading ? 0.35 : 1) };
   });
   return scored
     .sort((a, b) => a.tier - b.tier || b.score - a.score || a.index - b.index)
@@ -215,11 +227,20 @@ export class LocalSearchIndex {
     const words = tokens(query);
     if (!words.length || !Number.isSafeInteger(limit) || limit <= 0) return [];
     const expression = words.map(word => `"${word.replaceAll('"', '""')}"`).join(" OR ");
-    const rows = this.db.prepare(`SELECT id, area, scope, revision, text, payload, bm25(search_documents) AS rank
+    const select = this.db.prepare(`SELECT id, area, scope, revision, text, payload, bm25(search_documents) AS rank
       FROM search_documents
       WHERE search_documents MATCH ? AND area = ? AND scope = ?
-      ORDER BY rank ASC LIMIT ?`).all(expression, area, scope, Math.min(limit, 100));
-    return rankHits(rows, words).map(row => ({
+      ORDER BY rank ASC LIMIT ?`);
+    const candidates = new Map();
+    const collect = (match, count) => { for (const row of select.all(match, area, scope, count)) candidates.set(row.id, row); };
+    collect(expression, Math.min(400, Math.max(80, limit * 8)));
+    // Reserve candidates for each original phrase. Specific evidence can otherwise
+    // disappear behind many short, weak OR matches before reranking even begins.
+    for (const phrase of queryPhrases(query).slice(0, 12)) {
+      const phraseWords = tokens(phrase);
+      if (phraseWords.length) collect(phraseWords.map(word => `"${word}"`).join(' AND '), 24);
+    }
+    return rankHits([...candidates.values()], words, {query}).slice(0,Math.min(limit,100)).map(row => ({
       id: row.id,
       area: row.area,
       scope: row.scope,

@@ -93,7 +93,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     await settings.locator('#shortcut').filter({hasText:'Ctrl+Alt+Shift+F11'}).waitFor();
     const prefs = JSON.parse(await fs.readFile(path.join(data,'user-config.json'),'utf8')).desktop; assert.equal(prefs.shortcut,'Ctrl+Alt+Shift+F11'); checks.push('按键录入和真实全局快捷键注册');
     await main.locator('#startup').waitFor({state:'hidden'});
-    assert.equal(await main.title(),'Reed 一苇');
+    assert.equal(await main.title(),'Reed 苇');
     const brandPrefs=await main.evaluate(()=>window.__TAURI__.core.invoke('desktop_preferences'));
     assert.equal(brandPrefs.trayAvailable,true);
     const transparentIcons=await main.evaluate(async()=>Promise.all(['glass-light','glass-dark','illustrated-light','illustrated-dark'].map(async name=>{
@@ -173,7 +173,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
       await settings.locator('#role-new').click();
       await settings.locator('#role-name').fill(goalRole);
       await settings.locator('#role-system').fill('桌面验收用：启用学习目标的角色。');
-      await settings.locator('#role-goals-enabled').check();
+      await settings.locator('#role-learning-enabled').check();
       await settings.locator('#role-form').getByRole('button',{name:'保存角色',exact:true}).click();
       await settings.locator('#role-list .memory-item').filter({hasText:goalRole}).waitFor({timeout:15000});
     }
@@ -188,7 +188,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     checks.push('学习目标入口随角色开关显隐（切换与关闭都生效）');
 
     await settings.locator('#role-list .memory-item').filter({hasText:'Agent'}).getByRole('button',{name:'编辑',exact:true}).click();
-    await settings.locator('#role-profile-enabled').check();await settings.locator('#role-form').getByRole('button',{name:'保存角色',exact:true}).click();
+    await settings.locator('#role-learning-enabled').check();await settings.locator('#role-form').getByRole('button',{name:'保存角色',exact:true}).click();
     await main.locator('#status').filter({hasText:'就绪'}).waitFor();checks.push('角色显式开启学习者画像与记忆');
     await main.locator('#prompt').fill('我在学习线性代数'); await main.locator('#send-button').click();
     await main.locator('.prose-chat').filter({hasText:'桌面验收'}).first().waitFor({timeout:25000}); checks.push('主窗口选择思考档位并显示真实流式回答');

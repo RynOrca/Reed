@@ -2,7 +2,7 @@
 
 ## Reed 原创代码与品牌素材
 
-仓库原创代码按根目录 LICENSE（MIT）发布。Reed 一苇品牌图由项目维护者提供，两套浅深色原画位于 desktop/design/branding，透明运行资源由轮廓蒙版提取，未重新生成图内画面。
+仓库原创代码按根目录 LICENSE（MIT）发布。Reed 苇品牌图由项目维护者提供，两套浅深色原画位于 desktop/design/branding，透明运行资源由轮廓蒙版提取，未重新生成图内画面。
 
 ## PI-Desktop 界面改编
 

@@ -1,6 +1,8 @@
+import { createLearningMode } from './learning-mode.js';
 const $ = id => document.getElementById(id);
 import { icon, windowHandles } from "./icons.js";
 import { createSkillBindings } from "./role-skills.js";
+const roleLearningMode=createLearningMode(document.getElementById('role-learning-mode'),{onChange:async(features)=>{if(!roleId)return false;await command('set_role_learning',{roleId,...features});return true;}});
 const roleSkills = createSkillBindings($("role-skills"));
 import { initBrand, saveAppearance, appVersion } from "./brand.js";
 import { checkForUpdate, installUpdate, openReleasePage } from "./update.js";
@@ -299,7 +301,7 @@ function renderRoles(roles) {
     const row = document.createElement("div"); row.className = "memory-item";
     const name = document.createElement("strong"); name.textContent = role.name;
     const edit = document.createElement("button"); edit.className = "secondary"; edit.textContent = "编辑";
-    edit.onclick = () => { roleId = role.id; $("role-name").value = role.name; $("role-system").value = role.system || ""; $("role-goals-enabled").checked=role.learningGoalsEnabled===true; $("role-profile-enabled").checked=role.learnerProfileEnabled===true; roleSkills.set(role.skills); $("role-form").scrollIntoView(); };
+    edit.onclick = () => { roleId = role.id; $("role-name").value = role.name; $("role-system").value = role.system || ""; roleLearningMode.set(role); roleSkills.set(role.skills); $("role-form").scrollIntoView(); };
     // 按钮成组放在行尾：内置角色只有一个「编辑」，自定义角色还有「删除」，
     // 不分组的话 space-between 会让前者与后者错位（见 .row-actions 注释）。
     const actions = document.createElement("div"); actions.className = "row-actions";
@@ -309,8 +311,8 @@ function renderRoles(roles) {
     $("role-list").append(row);
   }
 }
-$("role-new").onclick = () => { roleId = null; $("role-form").reset(); roleSkills.set(); $("role-name").focus(); };
-$("role-form").onsubmit = event => { event.preventDefault(); void action(async () => { await command("save_role", { roleId, name: $("role-name").value, system: $("role-system").value, skills: roleSkills.get(), learningGoalsEnabled:$("role-goals-enabled").checked, learnerProfileEnabled:$("role-profile-enabled").checked }); roleId = null; $("role-form").reset(); roleSkills.set(); notice("角色已保存，可在对话窗口选择。"); }); };
+$("role-new").onclick = () => { roleId = null; $("role-form").reset(); roleLearningMode.set(); roleSkills.set(); $("role-name").focus(); };
+$("role-form").onsubmit = event => { event.preventDefault(); void action(async () => { await command("save_role", { roleId, name: $("role-name").value, system: $("role-system").value, skills: roleSkills.get(), ...roleLearningMode.get() }); roleId = null; $("role-form").reset(); roleLearningMode.set(); roleSkills.set(); notice("角色已保存，可在对话窗口选择。"); }); };
 for(const id of ['appearance-theme','appearance-icon']) $(id).onchange=()=>action(()=>saveAppearance($("appearance-icon").value,$("appearance-theme").value));
 
 // 「关于」页：显示版本号，支持检查更新与一键安装。
@@ -399,7 +401,7 @@ if (tauri) {
     const prefs = await tauri.core.invoke("desktop_preferences"); savedShortcut = prefs.activeShortcut || prefs.shortcut || ""; $("shortcut").textContent = savedShortcut || "录入快捷键"; $("autostart").checked = prefs.autostart === true;
     await command("get_state");
   });
-} else notice("请在 Reed 一苇桌面应用中打开设置。", true);
+} else notice("请在 Reed 苇桌面应用中打开设置。", true);
 for (const button of document.querySelectorAll("nav button")) button.prepend(icon(({general:"settings",models:"model",memory:"memory",vault:"book",skills:"skill",tools:"tools",security:"shield",agent:"activity",mcp:"tools",roles:"role",about:"info"})[button.dataset.section]));
 $("close").replaceChildren(icon("close")); windowHandles(tauri);
 
