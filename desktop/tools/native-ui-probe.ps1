@@ -46,7 +46,8 @@ if($Mode -eq 'picker'){
  [ReedNativeProbe]::EnumChildWindows($script:taskHandle,{param($hwnd,$unused) $taskClass=New-Object Text.StringBuilder 100;[ReedNativeProbe]::GetClassName($hwnd,$taskClass,100)|Out-Null;$script:taskNativeClasses.Add($taskClass.ToString())|Out-Null;return $true},[IntPtr]::Zero)|Out-Null
  $taskClasses=@($taskClasses)+@($script:taskNativeClasses)
  if($taskClasses -notcontains 'DirectUIHWND'){throw ('Modern shell view missing: '+($taskClasses -join ', '))}
- if($Capture){$taskRect=New-Object ReedNativeProbe+Rect;[ReedNativeProbe]::GetWindowRect($script:taskHandle,[ref]$taskRect)|Out-Null;$taskBitmap=New-Object Drawing.Bitmap ($taskRect.Right-$taskRect.Left),($taskRect.Bottom-$taskRect.Top);$taskGraphics=[Drawing.Graphics]::FromImage($taskBitmap);try{$taskGraphics.CopyFromScreen($taskRect.Left,$taskRect.Top,0,0,$taskBitmap.Size);$taskBitmap.Save($Capture,[Drawing.Imaging.ImageFormat]::Png)}finally{$taskGraphics.Dispose();$taskBitmap.Dispose()}}
+ # A locked or disconnected session cannot read screen pixels; that must not abort the probe.
+ if($Capture){try{$taskRect=New-Object ReedNativeProbe+Rect;[ReedNativeProbe]::GetWindowRect($script:taskHandle,[ref]$taskRect)|Out-Null;$taskBitmap=New-Object Drawing.Bitmap ($taskRect.Right-$taskRect.Left),($taskRect.Bottom-$taskRect.Top);$taskGraphics=[Drawing.Graphics]::FromImage($taskBitmap);try{$taskGraphics.CopyFromScreen($taskRect.Left,$taskRect.Top,0,0,$taskBitmap.Size);$taskBitmap.Save($Capture,[Drawing.Imaging.ImageFormat]::Png)}finally{$taskGraphics.Dispose();$taskBitmap.Dispose()}}catch{[Console]::Error.WriteLine("pixel capture unavailable: $($_.Exception.Message)")}}
  [ReedNativeProbe]::PostMessage($script:taskHandle,0x10,[IntPtr]::Zero,[IntPtr]::Zero)|Out-Null
  [pscustomobject]@{modern=$true;classes=$taskClasses}|ConvertTo-Json -Compress
 }else{
@@ -57,5 +58,5 @@ if($Mode -eq 'picker'){
 
 if($Mode -eq 'icon' -and $Capture){
  $taskBar=[ReedNativeProbe]::FindWindow('Shell_TrayWnd',$null)
- if($taskBar -ne [IntPtr]::Zero){$taskRect=New-Object ReedNativeProbe+Rect;[ReedNativeProbe]::GetWindowRect($taskBar,[ref]$taskRect)|Out-Null;$taskBitmap=New-Object Drawing.Bitmap ($taskRect.Right-$taskRect.Left),($taskRect.Bottom-$taskRect.Top);$taskGraphics=[Drawing.Graphics]::FromImage($taskBitmap);try{$taskGraphics.CopyFromScreen($taskRect.Left,$taskRect.Top,0,0,$taskBitmap.Size);$taskBitmap.Save($Capture,[Drawing.Imaging.ImageFormat]::Png)}finally{$taskGraphics.Dispose();$taskBitmap.Dispose()}}
+ if($taskBar -ne [IntPtr]::Zero){try{$taskRect=New-Object ReedNativeProbe+Rect;[ReedNativeProbe]::GetWindowRect($taskBar,[ref]$taskRect)|Out-Null;$taskBitmap=New-Object Drawing.Bitmap ($taskRect.Right-$taskRect.Left),($taskRect.Bottom-$taskRect.Top);$taskGraphics=[Drawing.Graphics]::FromImage($taskBitmap);try{$taskGraphics.CopyFromScreen($taskRect.Left,$taskRect.Top,0,0,$taskBitmap.Size);$taskBitmap.Save($Capture,[Drawing.Imaging.ImageFormat]::Png)}finally{$taskGraphics.Dispose();$taskBitmap.Dispose()}}catch{[Console]::Error.WriteLine("taskbar capture unavailable: $($_.Exception.Message)")}}
 }
