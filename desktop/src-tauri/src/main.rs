@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod profile;
+mod canvas_window;
 
 use tauri::{
     menu::{Menu, MenuItem},
@@ -706,11 +707,12 @@ fn run_desktop() -> tauri::Result<()> {
         .manage(ReadyWindows::default())
         .manage(BoundsAutosave::default())
         .manage(RoundedBounds::default())
+        .manage(canvas_window::CanvasWindow::default())
         .plugin(window_state.build())
         .plugin(shortcuts)
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![dismiss, window_pinned, set_window_pinned, agent_command, choose_workspace, open_local_file, desktop_preferences, set_shortcut, set_autostart, open_settings, capture_shortcut, drag_window, resize_window, update_brand_icon, set_appearance, ui_ready, app_version, update_key_configured, open_external_url])
+        .invoke_handler(tauri::generate_handler![canvas_window::set_canvas_window, dismiss, window_pinned, set_window_pinned, agent_command, choose_workspace, open_local_file, desktop_preferences, set_shortcut, set_autostart, open_settings, capture_shortcut, drag_window, resize_window, update_brand_icon, set_appearance, ui_ready, app_version, update_key_configured, open_external_url])
         .setup(|app| {
             startup_log("Creating Tauri window");
             let webview_dir = profile::directory()?.join("webview");
@@ -728,6 +730,7 @@ fn run_desktop() -> tauri::Result<()> {
                 }
             }
             let main_window = builder.build()?;
+            if let Err(error)=canvas_window::restore_collapsed(&main_window){startup_log(&format!("Canvas window recovery failed: {error}"));}
             startup_log(&format!("Main window built (visible={})", main_window.is_visible().unwrap_or(false)));
             round_window(&main_window);
             if std::env::args().any(|arg| arg == "--autostart") {
