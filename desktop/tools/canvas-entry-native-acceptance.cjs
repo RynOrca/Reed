@@ -15,7 +15,12 @@ const {chromium}=require(process.env.SUMMON_PLAYWRIGHT_PATH);
   };
   const stop=async()=>{if(browser){await browser.close();browser=null;}if(child?.exitCode===null){child.kill();await new Promise(r=>child.once('exit',r));}};
   try{
+    if(process.env.SUMMON_TEST_PREVIOUS_EXE){
+      const current=await fs.readFile(path.join(pkg,'Reed.exe'));await fs.copyFile(process.env.SUMMON_TEST_PREVIOUS_EXE,path.join(pkg,'Reed.exe'));await launch();assert.equal(await page.locator('.canvas-candidates').count(),0);await stop();await fs.writeFile(path.join(pkg,'Reed.exe'),current);
+      checks.push('同一隔离profile先启动旧版UI，退出后替换主程序模拟升级');
+    }
     await launch();await page.locator('#canvas-button').waitFor({state:'visible'});
+    assert.equal(await page.locator('.canvas-candidates').count(),1);
     const left=await page.locator('#canvas-button').boundingBox(),right=await page.locator('.goals-handle').boundingBox();assert.ok(Math.abs(left.y-right.y)<2&&Math.abs(left.width-right.width)<2);
     const saved=()=>fs.readFile(path.join(data,'user-config.json'),'utf8').then(JSON.parse);
     assert.equal((await saved()).roles.roles.some(r=>r.id==='planner'),false);assert.equal((await saved()).roles.roles.find(r=>r.id===roleId).canvasEnabled,false);
