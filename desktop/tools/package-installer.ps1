@@ -1,4 +1,4 @@
-param([string]$Output = "")
+﻿param([string]$Output = "")
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'executable-integrity.ps1')
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
