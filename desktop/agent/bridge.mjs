@@ -7,7 +7,7 @@ import {LazyMcp,MCP_TOOLS} from "./mcp.mjs";
 import {UserConfig} from "./user-config.mjs";
 import { createInterface } from "node:readline";
 import { mkdir, stat, readFile, writeFile, appendFile, rename, realpath, unlink } from "node:fs/promises";
-import { classifyAssistantOutcome } from "./turn-outcome.mjs";
+import { classifyAssistantOutcome, isRecoverableFailure } from "./turn-outcome.mjs";
 import { createTurnRecovery } from "./turn-recovery.mjs";
 import { createAbortWatchdog } from "./turn-watchdog.mjs";
 import { createReviewGate } from "./review-gate.mjs";
@@ -98,6 +98,9 @@ let applyingProviders=false;
 let providerRevision=0;
 let session;
 let busy = false;
+// A transient failure that the SDK may still retry: held back until the retry
+// reports back, so the UI never sees an intermediate failure as the turn's end.
+let pendingTurnError = null;
 const canvasAllowed=()=>roles.current().learningModeEnabled===true&&roles.current().canvasEnabled===true;
 const canvasWorkflow=new ConversationCanvasWorkflow({store:canvasStore,runtime:getRuntime,currentSession:()=>session,enabled:canvasAllowed,send});
 const canvasSession=command=>{if(!canvasAllowed())throw Error('当前角色未启用学习模式和对话画布');if(!session||command.sessionId!==session.sessionId)throw Error('会话已切换，请重新打开画布');return session;};
@@ -209,6 +212,48 @@ async function applyProviders() {
 async function flushProviders(){if(!busy&&providersPending&&!applyingProviders){applyingProviders=true;try{await applyProviders();await emitState();}catch(error){send({type:'credential_error',message:`配置已保存但暂未应用：${error.message}`});}finally{applyingProviders=false;}}}
 
 function abortWatchdogMs(name,fallback){const value=Number(process.env[name]);return Number.isFinite(value)&&value>0?value:fallback;}
+// The SDK retries a transient failure on its own with exponential backoff. Until
+// that retry really ends, the turn is still running: the UI must keep its input
+// locked and must not be handed the intermediate failure as a terminal error.
+// The SDK announces the backoff before sleeping, and the retried request takes a
+// bounded time of its own, so the retry's own end event covers the normal path;
+// this bound is only the fallback for a retry that never reports back at all.
+const retrySafetyMs = delayMs => Number.isFinite(delayMs) && delayMs > 0 ? Math.max(20000, delayMs * 5) : 10000;
+function createRetrySync({ send }) {
+  let state = null;
+  const notice = attempt => `模型服务连接失败，正在自动重连（第 ${attempt} 次）…`;
+  const clearTimers = current => { if (current) clearTimeout(current.safetyTimer); };
+  const finish = (current, success) => {
+    clearTimers(current);
+    state = null;
+    send({ type: 'retry_end', turnId: current.turnId, attempt: current.attempt, maxAttempts: current.maxAttempts, success, exhausted: !success, message: success ? '模型服务已恢复连接。' : '自动重连仍未成功，正在结束本轮。' });
+  };
+  return {
+    start({ turnId, attempt, maxAttempts, delayMs, errorMessage }) {
+      clearTimers(state);
+      const current = { turnId, attempt, maxAttempts: Number.isFinite(maxAttempts) ? maxAttempts : null };
+      state = current;
+      send({ type: 'retry_start', turnId, attempt, maxAttempts: current.maxAttempts, delayMs: Number.isFinite(delayMs) ? delayMs : null, message: notice(attempt), reason: errorMessage });
+      // The SDK announces the backoff before sleeping, so a retry that never reports
+      // its own end is released once that wait is over. Cancelling a retry is not
+      // treated as success: its outcome still comes from the turn itself.
+      current.safetyTimer = setTimeout(() => { if (state === current) finish(current, false); }, retrySafetyMs(delayMs));
+      return current;
+    },
+    // `success` is the SDK's own verdict on the retry it just ended.
+    end(success) { if (!state) return false; finish(state, success === true); return true; },
+    cancel() { clearTimers(state); state = null; },
+    get active() { return state ? { turnId: state.turnId, attempt: state.attempt } : null; },
+  };
+}
+const retrySync = createRetrySync({ send });
+// A held failure is published once, and never after the user stopped the turn:
+// an intermediate failure on a cancelled request is not the turn's result.
+function flushTurnError() {
+  const message = pendingTurnError;
+  pendingTurnError = null;
+  if (message && !turnController?.signal.aborted) send({ type: "error", message });
+}
 // Cancelling must always reach a terminal state. The watchdog only recovers the
 // local session; it never claims the remote service already stopped.
 const abortWatchdog = createAbortWatchdog({
@@ -237,6 +282,8 @@ async function forceLocalTurnEnd(turnId) {
 
 async function openSession(provider, modelId, sessionManager) {
   canvasWorkflow.close();
+  retrySync.cancel();
+  pendingTurnError = null;
   memoryAgent.cancel();
   workingTools.cancel();
   if (!sessionManager) {
@@ -302,8 +349,22 @@ async function openSession(provider, modelId, sessionManager) {
     if(turnController?.signal.aborted&&['message_update','tool_execution_start'].includes(event.type))return;
     if(event.type==="compaction_start" || event.type==="compaction_end") send({type:"compaction",status:event.type.endsWith("start")?"running":event.errorMessage?"error":event.aborted?"skipped":"done",message:event.errorMessage||(event.aborted?"压缩未完成，原上下文已保留":""),enabled:session.autoCompactionEnabled});
     if (event.type === "queue_update") send({ type: "queue", steering: event.steering, followUp: event.followUp });
+    // The SDK retries a transient provider failure inside the same turn. Report
+    // that retry so the UI keeps its running state instead of treating the
+    // intermediate failure as the end of the turn.
+    if (event.type === "auto_retry_start") {
+      // The SDK is about to retry the failure it just produced; it is not terminal.
+      pendingTurnError = null;
+      retrySync.start({ turnId: activeTurnId ?? turnController?.promptId ?? null, attempt: event.attempt, maxAttempts: event.maxAttempts, delayMs: event.delayMs, errorMessage: event.errorMessage });
+    }
+    if (event.type === "auto_retry_end") {
+      // The retry the SDK just ended decides whether the failure it hid is still
+      // real. A retry cancelled by the user is not reported as a recovered link.
+      const wasRetrying = retrySync.end(event.success === true);
+      if (wasRetrying && event.success !== true) flushTurnError();
+    }
     if (event.type === "message_start" && event.message.role === "user" && busy) send({ type: "user_delivered", text: typeof event.message.content === "string" ? event.message.content : event.message.content?.filter(b => b.type === "text").map(b => b.text).join("\n") });
-    if (event.type === "message_start" && event.message.role === "assistant") { generationStart = performance.now(); firstDelta = null; }
+    if (event.type === "message_start" && event.message.role === "assistant") { generationStart = performance.now(); firstDelta = null; pendingTurnError = null; }
     if (event.type === "message_end" && event.message.role === "assistant") {
       send({ type: "message_outcome", outcome: classifyAssistantOutcome(event.message) });
       const n = event.message.usage?.output;
@@ -318,12 +379,26 @@ async function openSession(provider, modelId, sessionManager) {
         send({ type: "delta", kind: update.type === "text_delta" ? "text" : "thinking", text: update.delta });
       }
     } else if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "error") {
-      if (!turnRecovery.willRecover(event.message)) send({ type: "error", message: classifyAssistantOutcome(event.message).message || "模型请求失败，请检查服务地址、凭据和模型信息" });
+      const message = classifyAssistantOutcome(event.message).message || "模型请求失败，请检查服务地址、凭据和模型信息";
+      // A failure Reed recovers from, or one the SDK is about to retry, is not the
+      // end of the turn: publish it immediately only when neither recovery applies.
+      // A transient failure is held until the retry reports back, because the SDK
+      // announces that retry after this event.
+      if (turnRecovery.willRecover(event.message)) pendingTurnError = null;
+      else if (retrySync.active) { /* the running retry owns the status line */ }
+      else if (isRecoverableFailure(event.message)) pendingTurnError = message;
+      else send({ type: "error", message });
     } else if (event.type === "tool_execution_start") {
       send({ type: "tool_start", id: event.toolCallId, name: event.toolName, args: event.args });
     } else if (event.type === "tool_execution_end") {
       send({ type: "tool_end", id: event.toolCallId, isError: event.isError, result: event.result });
+    } else if (event.type === "agent_end") {
+      // The SDK reports whether it will retry this turn, so the held failure must
+      // not be published as terminal while that retry is still coming.
+      if (!event.willRetry) flushTurnError();
     } else if (event.type === "agent_settled") {
+      // A retry that never reported its own end must not swallow the failure.
+      flushTurnError();
       if (!busy) send({ type: "settled", outcome: visualReview.outcome(turnRecovery.outcome()) });
     }
   });
@@ -788,6 +863,10 @@ async function handle(command) {
         if (!command.text.trim() && !images.length) throw new Error("请输入消息或添加图片");
         busy = true;
         const controller = new AbortController();turnController=controller;
+        // A new turn owns its own retry lifecycle; a stale notice from the previous
+        // one must not keep describing a retry that this turn never scheduled.
+        retrySync.cancel();
+        pendingTurnError = null;
         canvasWorkflow.cancel();
         const priorUserIds=new Set(session.sessionManager.getBranch().filter(entry=>entry.type==='message'&&entry.message.role==='user').map(entry=>entry.id));
         controller.promptId=id;activeTurnId=id;
@@ -830,6 +909,7 @@ async function handle(command) {
           // so a late settlement can never close a newer turn's UI.
           if(turnController===controller){
             turnController=null;activeTurnId=null;
+            retrySync.cancel();
             try{while(providersPending&&!vaultOverview.running)await applyProviders();if(providersPending===false)await emitState();}
             finally{busy=false;}
             send({type:'session_sync',busy:false,turnId:id});
@@ -843,9 +923,11 @@ async function handle(command) {
         const stale=Boolean(command.promptId&&turn?.promptId!==command.promptId);
         // Acknowledge before invoking synchronous abort listeners.
         send({ type: "ack", id, stale:stale||undefined });
-        if(stale){send({type:'session_sync',busy,turnId:activeTurnId});break;}
+        if(stale){const retry=retrySync.active;send({type:'session_sync',busy,turnId:activeTurnId,retrying:retry?{attempt:retry.attempt}:undefined});break;}
         send({type:'stopping',turnId:activeTurnId,message:busy?'正在停止，等待请求结束…':'已停止'});
         turnRecovery.end();
+        // A retry that is still waiting must not keep reporting itself as running.
+        retrySync.cancel();
         approvalGate.cancel("用户停止了当前操作");
         if(!turn&&!busy){send({type:'session_sync',busy:false,turnId:null});break;}
         turn?.abort(new DOMException('用户已停止回复','AbortError'));
@@ -879,7 +961,13 @@ for await (const line of createInterface({ input: process.stdin })) {
     void handle(command);
   } else if(command.type==='prompt') {
     // Do not hold the settings/read command queue for an entire agent turn.
-    queue = queue.then(()=>{if(busy||applyingProviders){send({type:'error',id:command.id,message:'当前任务或配置仍在结束，请稍后重试。'});return;}activePrompt=handle(command);});
+    queue = queue.then(()=>{
+      // A retry is still part of the running turn; saying so avoids telling the user
+      // that the previous reply already ended while the SDK is reconnecting.
+      if(retrySync.active){send({type:'error',id:command.id,commandType:'prompt',busy:true,retrying:true,message:'上一条回复仍在自动重连，请等这一轮结束（或点击停止）后再发送。'});return;}
+      if(busy||applyingProviders){send({type:'error',id:command.id,commandType:'prompt',busy:true,message:'当前任务或配置仍在结束，请稍后重试。'});return;}
+      activePrompt=handle(command);
+    });
   } else {
     queue = queue.then(() => handle(command));
   }

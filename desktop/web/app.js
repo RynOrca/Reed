@@ -6,6 +6,7 @@ import { createProjectPicker } from "./project-picker.js";
 import { createMessageNavigation } from "./message-navigation.js";
 import { renderMarkdown } from "./markdown.js";
 import { icon, windowHandles } from "./icons.js";
+import { retryStarted, retryEnded, turnStillRunning, terminalErrorMessage } from "./turn-state.mjs";
 const $ = (id) => document.getElementById(id);
 import { createSkillBindings } from "./role-skills.js";
 const roleLearningMode=createLearningMode(document.getElementById('role-learning-mode'),{onChange:async(features)=>{if(!editingRoleId)return false;await command('set_role_learning',{roleId:editingRoleId,...features},true);return true;}});
@@ -35,6 +36,7 @@ let activeTurnId=null;
 let running = false;
 let stopping = false;
 let recoveryStatus = "";
+let retrying = false;
 let turnErrorShown = false;
 let assistantRow = null;
 let thinkingRow = null;
@@ -74,7 +76,7 @@ function scrollToLatest() { if(followLatest)transcript.scrollTop = transcript.sc
 function refreshEmpty() { $("empty-state").hidden = messages.childElementCount > 0; }
 function setRunning(value) {
   running = value;
-  if(!value){stopping=false;activeTurnId=null;}
+  if(!value){stopping=false;activeTurnId=null;retrying=false;}
   $("stop-button").disabled=stopping;
   if (!value) recoveryStatus = "";
   updateSendAvailability();
@@ -470,6 +472,23 @@ function onEvent(event) {
       void command("list_sessions");
       break;
     case "session_sync": if(turnMatches(response))setRunning(response.busy === true); break;
+    case "retry_start": {
+      // The SDK is reconnecting inside the same turn: the reply is still running, so
+      // the stop button stays available and no terminal error row is shown for it.
+      if(!turnMatches(response))break;
+      const started=retryStarted(response);
+      retrying=true;setRunning(started.running);
+      recoveryStatus=started.status;
+      status(recoveryStatus);
+      break;
+    }
+    case "retry_end": {
+      if(!turnMatches(response))break;
+      const ended=retryEnded(response);
+      retrying=ended.reconnecting;
+      if(ended.notice)status(ended.notice);
+      break;
+    }
     case "thinking_level": void command("get_state"); break;
     case "session_name":
       if (response.sessionId === activeSessionId) activeSessionName = response.name || "";
@@ -528,7 +547,7 @@ function onEvent(event) {
       break;
     }
     case "compaction": $("compaction-state").textContent=response.status==="running"?"正在压缩上下文…":response.status==="error"?"压缩失败："+response.message:response.status==="skipped"?response.message:"上下文已压缩";$("compact-now").disabled=response.status==="running";break;
-    case "started": canvasPanel.foreground(); recoveryStatus = ""; submitted = null; turnErrorShown = false; activeTurnId = response.turnId || response.id || null; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
+    case "started": canvasPanel.foreground(); recoveryStatus = ""; retrying = false; submitted = null; turnErrorShown = false; activeTurnId = response.turnId || response.id || null; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
     case "message_outcome":
       finishThinking(response.outcome);
       assistantRow = null; thinkingRow = null; break;
@@ -560,6 +579,14 @@ function onEvent(event) {
         if(response.id.startsWith(commandPrefix))errorRow(response.message||"操作失败");
         break;
       }
+      // A failure is only terminal when the Agent itself reports that nothing is
+      // running. An intermediate retry failure, or a send the Agent rejected while
+      // the turn was still in flight, must not paint "就绪" or drop the stop button.
+      if(turnStillRunning(response)){
+        errorRow(response.message||"PI Agent 正在处理上一条消息");
+        if(retrying&&!stopping)status(recoveryStatus||"模型服务连接失败，正在自动重连…");
+        break;
+      }
       finishThinking({ status: "error" });
       if (submitted) {
         submitted.row.remove();
@@ -569,7 +596,7 @@ function onEvent(event) {
         submitted = null;
         refreshEmpty();
       }
-      if (!handledReply) { errorRow(response.message || "PI Agent 出错"); turnErrorShown = true; }
+      if (!handledReply) { errorRow(terminalErrorMessage(response)); turnErrorShown = true; }
       setRunning(false); break;
     case "disconnected":
       setRunning(false); status("PI Agent 已断开，正在恢复连接…");

@@ -1,6 +1,49 @@
 import { createHash } from "node:crypto";
 let requestSequence=0;
 
+const errorTextLimit = 400;
+// A credential name in any casing, with ordinary separators around it.
+const CREDENTIAL_KEY = "[A-Za-z0-9_.-]*(?:api[-_]?key|apikey|token|secret|password|passwd|credential|signature|sig)[A-Za-z0-9_.-]*";
+const ENV_KEY = "[A-Za-z0-9_.-]*(?:API_?KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)[A-Za-z0-9_.-]*";
+// Each entry captures the credential's name (with its separator) so the surviving
+// text still shows what failed, while the value itself is never retained. Only
+// credential-shaped names are redacted, so codes such as ETIMEDOUT and a status
+// such as "429" survive for diagnosis.
+const credentialPatterns = [
+  // An authorization value is entirely a credential, scheme included.
+  [/\b(authorization|proxy-authorization)(\s*[:=]\s*)\S+[^\n;]*/gi, "header"],
+  // A well-known key shape is masked whole, because a provider error often quotes it
+  // with only part of its middle hidden, as in "sk-abc***xyz".
+  [/\bsk-(?!<)[A-Za-z0-9._*-]{8,}/g, "value"],
+  [new RegExp(`\\b(${CREDENTIAL_KEY})(\\s*[:=]\\s*)("[^"]*"|'[^']*'|\\S+)`, "gi"), "pair"],
+  [new RegExp(`\\b(${ENV_KEY}=)([^\\s,;&]+)`, "g"), "pair"],
+  [/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+/gi, "scheme"],
+];
+// Transport failures must stay diagnosable without retaining what the request
+// carried. Credentials are redacted, then only a short structural summary is kept.
+export function sanitizeErrorText(text) {
+  let value = String(text ?? "");
+  for (const [pattern, kind] of credentialPatterns) {
+    value = value.replace(pattern, (match, name, separator) => (kind === "value" ? "<redacted>" : kind === "scheme" ? `${name} <redacted>` : `${name}${separator}<redacted>`));
+  }
+  value = value.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]*:[^\s/@]*@/gi, (match, scheme) => `${scheme}<redacted>@`);
+  return value.replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim().slice(0, errorTextLimit);
+}
+export function describeNetworkError(error, depth = 0, seen = new Set()) {
+  if (error === null || error === undefined || typeof error !== "object" || seen.has(error) || depth > 3) return null;
+  seen.add(error);
+  const description = {
+    name: typeof error.name === "string" ? error.name.slice(0, 64) : "Error",
+    message: sanitizeErrorText(error.message),
+  };
+  if (typeof error.code === "string") description.code = error.code.slice(0, 64);
+  if (typeof error.errno === "number") description.errno = error.errno;
+  if (typeof error.status === "number") description.status = error.status;
+  const cause = describeNetworkError(error.cause, depth + 1, seen);
+  if (cause) description.cause = cause;
+  return description;
+}
+
 // Observe the wire framing without modifying bytes or retaining response text.
 export function createSseObserver(report) {
   const decoder = new TextDecoder();
@@ -108,6 +151,14 @@ export function createRequestFetch(fetchImpl, { signal, diagnostic=()=>{}, onPha
         cancel(reason){cleanup();void reader.cancel(reason).catch(()=>{});},
       });
       return new Response(body,{status:response.status,statusText:response.statusText,headers:response.headers});
-    }catch(error){cleanup();record(combined.aborted?(controller.signal.aborted?'timeout':'cancelled'):'failed');throw combined.aborted?combined.reason:error;}
+    }catch(error){
+      cleanup();
+      const aborted=combined.aborted, phase=aborted?(controller.signal.aborted?'timeout':'cancelled'):'failed';
+      record(phase);
+      // A connection that never returns response headers is recorded as a
+      // sanitized structural description, so the cause can be told apart later.
+      if(phase==='failed')record('error',{error:describeNetworkError(error)});
+      throw aborted?combined.reason:error;
+    }
   };
 }

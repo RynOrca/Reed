@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createSseObserver, createDiagnosticFetch, createRequestFetch } from "./stream-diagnostics.mjs";
+import { createSseObserver, createDiagnosticFetch, createRequestFetch, describeNetworkError, sanitizeErrorText } from "./stream-diagnostics.mjs";
 
 test('request fetch bounds headers and stalled bodies, and honors cancellation', async()=>{
   const never=(_input,{signal})=>new Promise((_,reject)=>{signal.addEventListener('abort',()=>reject(signal.reason),{once:true});});
@@ -49,4 +49,48 @@ test("diagnostic fetch passes exact wire bytes, status and headers even when dia
   assert.equal(await response.text(), wire);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('x-test'), 'unchanged');
+});
+
+test("a failed connection is diagnosable without retaining credentials", async () => {
+  const described = [];
+  const refusal = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), { code: "ECONNREFUSED", errno: -4078 }) });
+  await assert.rejects(createRequestFetch(async () => { throw refusal; }, { idleMs: 50, totalMs: 100, diagnostic: entry => described.push(entry) })("https://example.invalid/v1/chat/completions?api_key=sk-live-PRIVATEVALUE", { headers: { authorization: "Bearer sk-live-PRIVATEVALUE" } }));
+  const record = described.find(entry => entry.phase === "error");
+  assert.ok(record?.error, "连接失败必须留下脱敏后的底层错误描述");
+  assert.equal(record.error.name, "TypeError");
+  assert.equal(record.error.cause.code, "ECONNREFUSED");
+  assert.equal(record.error.cause.errno, -4078);
+  assert.match(record.error.message, /fetch failed/);
+  assert.match(record.error.cause.message, /127\.0\.0\.1:8080/, "可诊断信息必须保留");
+  assert.ok(!JSON.stringify(described).includes("PRIVATEVALUE"), "诊断不得写入凭据");
+  assert.ok(described.some(entry => entry.phase === "failed"));
+});
+
+test("error sanitizing redacts credentials but keeps the failure shape", () => {
+  const sanitized = sanitizeErrorText(`request to https://x.invalid/v1?api_key=sk-live-abc123 rewrote Authorization: Basic dXNlcjpwYXNz and token="secret-value" for password=hunter2`);
+  assert.ok(!/abc123|dXNlcjpwYXNz|secret-value|hunter2/.test(sanitized), sanitized);
+  assert.match(sanitized, /request to/);
+  // The name of the credential stays, so the failure is still diagnosable.
+  assert.match(sanitized, /api_key/);
+  assert.match(sanitized, /Authorization/);
+  assert.ok(sanitizeErrorText("x".repeat(900)).length <= 400);
+  assert.equal(sanitizeErrorText(undefined), "");
+  assert.equal(describeNetworkError(undefined), null);
+  const circular = new Error("loop"); circular.cause = circular;
+  assert.equal(describeNetworkError(circular).cause, undefined, "循环 cause 不能导致无限展开");
+});
+
+// Ordinary transport failures carry no request content, so their text must survive
+// intact: over-redaction would defeat the purpose of recording them.
+test("error sanitizing keeps the diagnostic text of transport failures", () => {
+  for (const sample of ["fetch failed", "Connection error.", "connect ECONNREFUSED 127.0.0.1:8080", "socket hang up", "429 Too Many Requests", "Request timed out after 90000ms", "UND_ERR_HEADERS_TIMEOUT", "ETIMEDOUT"]) {
+    assert.equal(sanitizeErrorText(sample), sample);
+  }
+});
+
+test("error sanitizing masks a partially hidden key and its environment form", () => {
+  const redacted = sanitizeErrorText("Invalid API key provided: sk-abc***xyz for OPENAI_API_KEY=sk-proj-abcdefghijklmnop");
+  assert.ok(!/sk-abc|sk-proj|abcdefghijklmnop|\*\*\*/.test(redacted), redacted);
+  assert.match(redacted, /Invalid API key provided/);
+  assert.match(redacted, /OPENAI_API_KEY/);
 });

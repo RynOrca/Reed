@@ -3,6 +3,20 @@ export function isMalformedStreamError(message) {
   return message?.stopReason === "error" && /malformed server-sent event JSON/i.test(message.errorMessage || "");
 }
 
+// Transient transport and provider failures: the SDK retries these inside the
+// same turn, so an intermediate failure matching this shape is not terminal.
+// Deterministic failures (bad credentials, a bad request, metadata corruption)
+// must still reach the user right away.
+const RECOVERABLE_FAILURE_PATTERN = /overloaded|server_busy|servers are currently busy|currently experiencing high demand|model is at capacity|rate.?limit|too many requests|\b(?:429|500|502|503|504|520|524)\b|service.?unavailable|server.?error|internal.?error|provider.?returned.?error|exceeded request buffer limit|network.?error|connection.?error|connection.?(?:refused|reset|lost|closed|aborted)|other side closed|fetch failed|getaddrinfo|ENOTFOUND|EAI_AGAIN|ECONN(?:REFUSED|RESET|ABORTED)|EPIPE|ETIMEDOUT|UND_ERR_(?:CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT|SOCKET|CLOSED)|upstream.?connect|reset before headers|socket hang up|timed? out|timeout|terminated|websocket.?(?:closed|error)|ended without|stream ended before message_stop|stream ended before a terminal response event|http2 request did not get a response|pending stream has been canceled|please retry your request|you can retry your request|try your request again|ResourceExhausted/i;
+
+export function isRecoverableFailure(message) {
+  if (message?.stopReason !== "error") return false;
+  const text = String(message.errorMessage || "");
+  // A malformed stream is recovered by Reed's own bounded recovery, not by the SDK.
+  if (isMalformedStreamError(message)) return true;
+  return RECOVERABLE_FAILURE_PATTERN.test(text);
+}
+
 export function classifyAssistantOutcome(message) {
   const content = Array.isArray(message?.content) ? message.content : [];
   const hasText = content.some((block) => block.type === "text" && String(block.text || "").trim());

@@ -1,0 +1,5 @@
+{
+  "//": "Marks the WebView front-end as ES modules so Node can import these files in tests. The embedded asset protocol ignores this file.",
+  "private": true,
+  "type": "module"
+}
