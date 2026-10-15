@@ -1,3 +1,0 @@
-{"label":"cold","count":1200,"hits":6,"ms":5413,"maxEventLoopLagMs":145,"timings":{"scanMs":108,"indexMs":5149,"ftsMs":155}}
-{"label":"warm","count":1200,"hits":6,"ms":631,"maxEventLoopLagMs":148,"timings":{"scanMs":100,"indexMs":374,"ftsMs":157}}
-{"label":"repeat","count":1200,"hits":6,"ms":687,"maxEventLoopLagMs":141,"timings":{"scanMs":118,"indexMs":427,"ftsMs":141}}
