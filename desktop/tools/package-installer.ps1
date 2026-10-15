@@ -10,6 +10,10 @@ if (-not $Output) { $Output = Join-Path $root 'dist/Reed-release' }
 $Output = [IO.Path]::GetFullPath($Output)
 if (Test-Path -LiteralPath $Output) { $Output = "$Output-$(Get-Date -Format yyyyMMdd-HHmmss)" }
 New-Item -ItemType Directory -Path $Output | Out-Null
+# Tauri's bundler writes a fresh portable stage into this directory, and every file
+# it creates inherits the directory's mandatory label. Repair it first, otherwise a
+# Low-integrity installer cannot even write its own temporary files.
+Set-ReedOutputIntegrity -Path $Output
 $portable = Join-Path $Output 'Reed-portable'
 & (Join-Path $PSScriptRoot 'package-portable.ps1') -Output $portable
 if ($LASTEXITCODE -gt 7) { throw 'Portable staging failed' }
@@ -92,9 +96,14 @@ if ($env:TAURI_SIGNING_PRIVATE_KEY) {
 $installerPath = Join-Path $Output "Reed-$appVersion-setup.exe"
 Copy-Item -LiteralPath $installer.FullName -Destination $installerPath
 Set-ReedExecutableIntegrity -Path $installerPath
+Assert-ReedStandardIntegrity -Path $installerPath
+# The staged portable tree is what the ZIP carries and what the user launches.
+Set-ReedOutputIntegrity -Path $portable
 $version = @{ product = 'Reed'; version = $appVersion; sourceCommit = (& git -C $root rev-parse HEAD); dataDirectory = '%APPDATA%\Reed' }
 [IO.File]::WriteAllText((Join-Path $portable 'VERSION.json'), ($version | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 Compress-Archive -Path (Join-Path $portable '*') -DestinationPath (Join-Path $Output "Reed-$appVersion-portable.zip")
+Set-ReedOutputIntegrity -Path (Join-Path $Output "Reed-$appVersion-portable.zip")
+Assert-ReedStandardIntegrity -Path (Join-Path $Output "Reed-$appVersion-portable.zip")
 $checksums = foreach ($file in Get-ChildItem -LiteralPath $Output -File | Where-Object { $_.Extension -in @('.exe','.zip') }) {
     "$((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLower())  $($file.Name)"
 }
