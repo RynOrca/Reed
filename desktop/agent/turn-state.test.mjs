@@ -17,9 +17,10 @@ test("a started retry keeps the turn running and names the reconnect", () => {
 });
 
 test("ending a retry never ends the turn, and reports failure separately", () => {
-  assert.deepEqual(retryEnded({ success: true, exhausted: false }), { running: true, notice: "", reconnecting: false });
+  assert.deepEqual(retryEnded({ success: true, exhausted: false }), { running: true, reconnecting: false, recovered: true, notice: "" });
   const failed = retryEnded({ success: false, exhausted: true, message: "自动重连仍未成功，正在结束本轮。" });
   assert.equal(failed.running, true, "重试结束不等于本轮结束");
+  assert.equal(failed.recovered, false);
   assert.match(failed.notice, /自动重连/);
   assert.equal(retryEnded(undefined).running, true);
 });

@@ -227,8 +227,7 @@ function createRetrySync({ send }) {
     clearTimers(current);
     state = null;
     send({ type: 'retry_end', turnId: current.turnId, attempt: current.attempt, maxAttempts: current.maxAttempts, success, exhausted: !success, message: success ? '模型服务已恢复连接。' : '自动重连仍未成功，正在结束本轮。' });
-  };
-  return {
+  };  return {
     start({ turnId, attempt, maxAttempts, delayMs, errorMessage }) {
       clearTimers(state);
       const current = { turnId, attempt, maxAttempts: Number.isFinite(maxAttempts) ? maxAttempts : null };

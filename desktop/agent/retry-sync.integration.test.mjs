@@ -121,6 +121,7 @@ test("a retried connection failure never closes the turn early", { timeout: 4000
   const ended = terminal.find(event => event.type === "retry_end");
   assert.equal(ended.success, true);
   assert.equal(ended.turnId, prompt);
+  assert.match(ended.message, /已恢复/, "成功的重试要能清掉重连提示");
   assert.ok(!terminal.some(event => event.type === "error"), "整轮结束后也不能留下中间失败的错误提示");
   const doneIndex = terminal.findIndex(event => event.id === prompt && event.type === "done");
   const syncIndex = terminal.findIndex(event => event.type === "session_sync" && event.busy === false && event.turnId === prompt);

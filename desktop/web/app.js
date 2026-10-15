@@ -486,7 +486,10 @@ function onEvent(event) {
       if(!turnMatches(response))break;
       const ended=retryEnded(response);
       retrying=ended.reconnecting;
-      if(ended.notice)status(ended.notice);
+      // The reconnect notice must also clear when the recovered reply opens with a
+      // tool call or thinking instead of text.
+      if(ended.recovered){recoveryStatus="";if(running&&!stopping)status("PI 正在回复…");}
+      else if(ended.notice)status(ended.notice);
       break;
     }
     case "thinking_level": void command("get_state"); break;

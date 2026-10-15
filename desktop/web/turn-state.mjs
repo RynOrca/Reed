@@ -12,7 +12,7 @@ export function retryStarted(response) {
 }
 
 export function retryEnded(response) {
-  return { running: true, notice: response?.success ? "" : response?.message || "", reconnecting: false };
+  return { running: true, reconnecting: false, recovered: response?.success === true, notice: response?.success ? "" : response?.message || "" };
 }
 
 // A failure is terminal only when the Agent reports that nothing is running. An
