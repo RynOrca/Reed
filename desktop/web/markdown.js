@@ -54,9 +54,27 @@ function blocks(tokens = [], options = {}) {
       case "paragraph": node = document.createElement("p"); node.append(inline(token.tokens,options)); break;
       case "text": node = document.createElement("p"); node.append(inline(token.tokens || [{ type: "text", text: token.text }],options)); break;
       case "code": {
-        node = document.createElement("pre"); const code = document.createElement("code"); code.textContent = token.text || "";
+        node = document.createElement("div"); node.className = "markdown-code";
+        const header = document.createElement("div"); header.className = "markdown-code-header";
+        const language = document.createElement("span"); language.className = "markdown-code-language";
+        language.textContent = String(token.lang || "文本").split(/\s+/)[0];
+        const copy = document.createElement("button"); copy.type = "button"; copy.className = "markdown-code-copy";
+        copy.textContent = "复制代码"; copy.setAttribute("aria-label", "复制代码");
+        copy.onclick = async () => {
+          copy.disabled = true;
+          try {
+            await navigator.clipboard.writeText(token.text || "");
+            copy.textContent = "已复制";
+          } catch {
+            copy.textContent = "复制失败，请选择代码复制";
+          } finally {
+            copy.disabled = false;
+          }
+        };
+        header.append(language, copy);
+        const pre = document.createElement("pre"); const code = document.createElement("code"); code.textContent = token.text || "";
         if (token.lang) code.dataset.lang = token.lang;
-        node.append(code); break;
+        pre.append(code); node.append(header, pre); break;
       }
       case "list": {
         node = document.createElement(token.ordered ? "ol" : "ul");
