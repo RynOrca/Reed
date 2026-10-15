@@ -321,7 +321,7 @@ function renderSessions(sessions) {
     remove.onclick=()=>{if(remove.classList.contains("danger")){clearTimeout(timer);void change("delete_session",{confirm:true});}else{remove.title="确认删除";remove.setAttribute("aria-label","确认删除");remove.classList.add("danger");timer=setTimeout(()=>{remove.title="删除";remove.setAttribute("aria-label","删除");remove.classList.remove("danger");},3000);}};
     row.append(button,archive,remove);parent.append(row);
   }
-  function section(key,text,parent=list,project=false){const group=document.createElement("details");group.className=project?"history-project history-group":"history-section-group history-group";group.open=historyFoldState.get(key)??true;group.dataset.group=key;group.ontoggle=()=>historyFoldState.set(key,group.open);const title=document.createElement("summary");title.append(icon("chevron"));if(project)title.append(icon("folder"));title.append(document.createTextNode(text));group.append(title);parent.append(group);return group;}
+  function section(key,text,parent=list,project=false){const group=document.createElement("details");group.className=project?"history-project history-group":"history-section-group history-group";group.open=historyFoldState.get(key)??true;group.dataset.group=key;group.ontoggle=()=>historyFoldState.set(key,group.open);const title=document.createElement("summary");title.append(icon("chevron"));if(project)title.append(icon("folder"));const label=document.createElement("span");label.className="history-group-title";label.textContent=text;title.append(label);group.append(title);parent.append(group);return group;}
   const looseGroup=section("sessions","会话");
   const loose = sessions.filter(item => !item.projectPath);
   loose.forEach(item => addConversation(looseGroup, item));
