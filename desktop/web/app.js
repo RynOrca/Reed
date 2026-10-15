@@ -2,6 +2,7 @@ import { createLearningMode } from './learning-mode.js';
 // Transcript row structure and disclosure behavior adapted from PI-Desktop 0.16.1.
 import { createGoals } from "./goals.js";
 import { createConversationCanvas } from "./conversation-canvas.js";
+import { createProjectPicker } from "./project-picker.js";
 import { createMessageNavigation } from "./message-navigation.js";
 import { renderMarkdown } from "./markdown.js";
 import { icon, windowHandles } from "./icons.js";
@@ -45,6 +46,7 @@ const queuedTexts = new Map();
 let attachments = [];
 let followLatest = true;
 const goalsPanel = createGoals({command});
+const projectPicker=createProjectPicker({button:$('workspace-button'),command,tauri,isRunning:()=>running,onError:errorRow,onSelect:()=>{closeHistory();prompt.focus();}});
 const canvasPanel = createConversationCanvas({command,tauri,prompt,isRunning:()=>running,reportError:errorRow,onJump:async(messageId)=>{
   if(running)throw new Error("请等待当前回复结束后定位原文");
   await command("get_history",{},true);
@@ -331,7 +333,7 @@ function renderSessions(sessions) {
     projects.get(item.projectPath).push(item);
   }
   for (const [path, items] of projects) {
-    const group=section(path,path.split(/[\\/]/).filter(Boolean).pop(),projectGroup,true);group.querySelector("summary").title=path;items.forEach(item => addConversation(group, item));
+    const group=section(path,path.split(/[\\/]/).filter(Boolean).pop(),projectGroup,true);const heading=group.querySelector('summary');heading.title=path;const add=document.createElement('button');add.type='button';add.className='history-project-new';add.title='在此项目新建会话';add.setAttribute('aria-label','在此项目新建会话');add.append(icon('new'));add.onclick=async e=>{e.preventDefault();e.stopPropagation();try{await command('change_workspace',{path},true);closeHistory();prompt.focus();}catch(error){$('history-error').textContent=error.message||String(error);$('history-error').hidden=false;}};heading.append(add);items.forEach(item => addConversation(group, item));
   }
 }
 let chosenModel=null,activeModelKey="",activeThinking="off",statusModelResponse={};
@@ -437,7 +439,7 @@ async function newSession() {
 function onEvent(event) {
   const response = event.payload;
   if (!response || typeof response !== "object") return;
-  const handledReply = Boolean(response.id && pending.has(response.id) && ["ack", "error", "done", "conversation", "file_staged", "goals"].includes(response.type));
+  const handledReply = Boolean(response.id && pending.has(response.id) && ["ack", "error", "done", "conversation", "file_staged", "goals", "sessions"].includes(response.type));
   if (handledReply) {
     const { resolve, reject, timer } = pending.get(response.id); clearTimeout(timer); pending.delete(response.id);
     response.type === "error" ? reject(new Error(response.message)) : resolve(response);
@@ -494,7 +496,7 @@ function onEvent(event) {
       break;
     case "memory_status": if (!running) status(response.status === "organizing" ? "Agent 正在整理记忆…" : "就绪"); break;
     case "canvas": canvasPanel.event(response); break;
-    case "sessions": renderSessions(response.sessions || []); break;
+    case "sessions": projectPicker.update(response.sessions||[]);renderSessions(response.sessions || []); break;
     case "history": restoreHistory(response.messages || []); status("就绪"); break;
     case "stopping": stopping=true;$("stop-button").disabled=true;if(response.turnId)activeTurnId=response.turnId;status(response.message||"正在停止，等待请求结束…");break;
     case "turn_forced_end":
@@ -717,7 +719,6 @@ $("models-close").addEventListener("click", () => modelsDialog.close());
 $("configure-models").addEventListener("click", () => { modelsDialog.close(); void tauri?.core.invoke("open_settings", { section: "models" }); });
 $("model-back").onclick=()=>{resetModelStep();$("model-search").focus();};
 $("model-apply").onclick=async()=>{if(!chosenModel)return;$("model-apply").disabled=true;$("model-error").hidden=true;try{await command("select_model",{provider:chosenModel.provider,model:chosenModel.id,thinkingLevel:$("thinking-level").value},true);modelsDialog.close();}catch(e){$("model-error").textContent=String(e.message||e);$("model-error").hidden=false;}finally{$("model-apply").disabled=false;}};
-$("workspace-button").addEventListener("click", () => void chooseWorkspace());
 for (const dialog of document.querySelectorAll("dialog")) {
   dialog.addEventListener("click", event => {
     if (event.target !== dialog) return;
