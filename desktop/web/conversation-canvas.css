@@ -12,3 +12,6 @@
 .canvas-candidate-list{display:flex;flex-direction:column;gap:10px;max-height:50vh;overflow:auto}.canvas-candidate{display:flex;align-items:center;gap:10px;border:1px solid #85947b33;border-radius:8px;padding:10px}.canvas-candidate>div{flex:1;min-width:0}.canvas-candidate strong{display:block;font-size:12px;line-height:1.6;font-weight:500;overflow-wrap:anywhere}.canvas-candidate small{display:block;font-size:10px;opacity:.65;margin-top:4px}.canvas-candidates button{background:#85947b22;color:inherit;padding:5px 9px;border-radius:5px;flex:none}.canvas-candidates-error{overflow-wrap:anywhere}
 
 .canvas-source-turn+.canvas-source-turn{margin-top:24px;border-top:1px solid #85947b33;padding-top:18px}.canvas-source-turn h3{font-size:12px;font-weight:500;margin:0 0 12px;color:var(--ds-text-secondary)}
+
+/* Focus must pan the graph, never scroll the positioned navigation controls. */
+.canvas-viewport{overflow:clip}
