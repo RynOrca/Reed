@@ -8,6 +8,15 @@ const builtins = [
   { id: "quick", name: "快捷对话", system: "你是一个简洁、直接的中文助手。", builtin: true },
 ];
 
+// Preserve mixed legacy permissions until the user explicitly changes the mode.
+export function learningFeatures(role = {}) {
+  const explicit = typeof role.learningModeEnabled === 'boolean';
+  const goals = explicit ? role.learningModeEnabled : role.learningGoalsEnabled === true;
+  const profile = explicit ? role.learningModeEnabled : role.learnerProfileEnabled === true;
+  return {learningModeEnabled:explicit ? role.learningModeEnabled : goals === profile ? goals : null,
+    learningGoalsEnabled:goals,learnerProfileEnabled:profile,canvasEnabled:role.canvasEnabled === true};
+}
+
 export function normalizeBindings(value) {
   if (!Array.isArray(value) || value.length > 30) throw new Error("每个角色最多绑定 30 个技能");
   const ids = new Set();
@@ -21,7 +30,7 @@ export class RoleStore {
   constructor(directory,config=null) {
     this.config=config;
     this.path = join(directory, "roles.json");
-    this.roles = builtins.map((role) => ({ ...role, skills: [], learningGoalsEnabled: false, learnerProfileEnabled: false }));
+    this.roles = builtins.map((role) => ({ ...role, skills: [], ...learningFeatures() }));
     this.activeId = "agent";
   }
 
@@ -47,6 +56,7 @@ export class RoleStore {
       }
     }
     if (this.roles.some((role) => role.id === saved.activeId)) this.activeId = saved.activeId;
+    for(const role of this.roles){const original=saved.roles.find(item=>item?.id===role.id);Object.assign(role,learningFeatures(original||role));}
   }
 
   list() { return { roles: this.roles.map((role) => ({ ...role, skills: role.skills.map(s=>({...s})) })), activeId: this.activeId }; }
@@ -64,7 +74,7 @@ export class RoleStore {
     const system = typeof input.system === "string" ? input.system.trim() : "";
     if (!name || name.length > 60 || system.length > 20000) throw new Error("角色名称或说明长度不合适");
     const skills = input.skills === undefined ? undefined : normalizeBindings(input.skills);
-    for (const key of ["learningGoalsEnabled", "learnerProfileEnabled"]) if (input[key] !== undefined && typeof input[key] !== "boolean") throw new Error("角色功能开关必须为布尔值");
+    for (const key of ["learningGoalsEnabled", "learnerProfileEnabled", "learningModeEnabled", "canvasEnabled"]) if (input[key] !== undefined && typeof input[key] !== "boolean") throw new Error("角色功能开关必须为布尔值");
     if (input.roleId) {
       const role = this.roles.find((item) => item.id === input.roleId);
       if (!role) throw new Error("找不到该角色");
@@ -72,12 +82,16 @@ export class RoleStore {
       role.system = system;
       if (skills !== undefined) role.skills = skills;
       for (const key of ["learningGoalsEnabled", "learnerProfileEnabled"]) if (input[key] !== undefined) role[key] = input[key];
+      if(input.learningModeEnabled!==undefined)role.learningModeEnabled=input.learningModeEnabled;
+      else if(input.learningGoalsEnabled!==undefined||input.learnerProfileEnabled!==undefined)delete role.learningModeEnabled;
+      if(input.canvasEnabled!==undefined)role.canvasEnabled=input.canvasEnabled;
+      Object.assign(role,learningFeatures(role));
       await this.persist();
       return role.id;
     }
     if (this.roles.length >= 50) throw new Error("角色数量已达到上限");
     const id = `role-${randomUUID()}`;
-    this.roles.push({ id, name, system, builtin: false, skills: skills || [], learningGoalsEnabled: input.learningGoalsEnabled === true, learnerProfileEnabled: input.learnerProfileEnabled === true });
+    this.roles.push({ id, name, system, builtin: false, skills: skills || [], ...learningFeatures(input) });
     await this.persist();
     return id;
   }

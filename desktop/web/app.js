@@ -1,3 +1,4 @@
+import { createLearningMode } from './learning-mode.js';
 // Transcript row structure and disclosure behavior adapted from PI-Desktop 0.16.1.
 import { createGoals } from "./goals.js";
 import { createMessageNavigation } from "./message-navigation.js";
@@ -5,6 +6,7 @@ import { renderMarkdown } from "./markdown.js";
 import { icon, windowHandles } from "./icons.js";
 const $ = (id) => document.getElementById(id);
 import { createSkillBindings } from "./role-skills.js";
+const roleLearningMode=createLearningMode(document.getElementById('role-learning-mode'));
 const roleSkills = createSkillBindings($("role-skills"));
 import { initBrand, finishStartup } from "./brand.js";
 const tauri = window.__TAURI__;
@@ -378,8 +380,7 @@ function renderRoles() {
       editingRoleId = role.id;
       $("role-name").value = role.name;
       $("role-system").value = role.system || "";
-      $("role-goals-enabled").checked = role.learningGoalsEnabled === true;
-      $("role-profile-enabled").checked = role.learnerProfileEnabled === true;
+      roleLearningMode.set(role);
       roleSkills.set(role.skills);
       $("role-editor").hidden = false;
       $("role-name").focus();
@@ -714,7 +715,7 @@ $("roles-new").addEventListener("click", () => {
   editingRoleId = null;
   $("role-name").value = "";
   $("role-system").value = "";
-  $("role-goals-enabled").checked=false;$("role-profile-enabled").checked=false;
+  roleLearningMode.set();
   roleSkills.set();
   $("role-editor").hidden = false;
   $("role-name").focus();
@@ -723,7 +724,7 @@ $("role-cancel").addEventListener("click", () => { $("role-editor").hidden = tru
 $("role-save").addEventListener("click", async () => {
   $("role-error").hidden = true;
   try {
-    await command("save_role", { roleId: editingRoleId, name: $("role-name").value, system: $("role-system").value, skills: roleSkills.get(), learningGoalsEnabled:$("role-goals-enabled").checked, learnerProfileEnabled:$("role-profile-enabled").checked }, true);
+    await command("save_role", { roleId: editingRoleId, name: $("role-name").value, system: $("role-system").value, skills: roleSkills.get(), ...roleLearningMode.get() }, true);
     $("role-editor").hidden = true;
     editingRoleId = null;
   } catch (error) { roleError(error); }
