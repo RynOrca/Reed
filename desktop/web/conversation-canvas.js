@@ -1,5 +1,6 @@
 import {icon} from './icons.js';
 import {renderMarkdown} from './markdown.js';
+import {connectionGeometry} from './canvas-geometry.js';
 
 export function createConversationCanvas({command,tauri,prompt,isRunning,onJump,reportError,onUnavailable}){
   const shell=document.querySelector('.chat-shell'),body=document.querySelector('.chat-body'),transcript=document.getElementById('transcript');
@@ -45,10 +46,9 @@ export function createConversationCanvas({command,tauri,prompt,isRunning,onJump,
   function svg(tag,attributes){const el=document.createElementNS(ns,tag);for(const [key,value]of Object.entries(attributes))el.setAttribute(key,value);return el;}
   function drawMap(){const map=q('map');map.replaceChildren();const b=bounds();map.setAttribute('viewBox',`${b.x} ${b.y} ${b.w} ${b.h}`);for(const n of graph?.nodes||[])map.append(svg('rect',{x:n.x,y:n.y,width:226,height:nodeElements.get(n.id)?.offsetHeight||160,rx:10,class:n.id===selected?'selected':''}));const r=q('viewport').getBoundingClientRect();map.append(svg('rect',{x:-pan.x/scale,y:-pan.y/scale,width:r.width/scale,height:r.height/scale,class:'map-view',rx:8}));}
   function drawEdges(){const root=q('edges');root.replaceChildren();const defs=svg('defs',{});for(const active of [false,true]){const marker=svg('marker',{id:active?'canvas-arrow-active':'canvas-arrow',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:5,markerHeight:5,orient:'auto'});marker.append(svg('path',{d:'M0 1 9 5 0 9',fill:'none',stroke:active?'var(--cv-green)':'var(--cv-wire)','stroke-width':1.4}));defs.append(marker);}root.append(defs);
-    for(const edge of graph?.edges||[]){const a=graph.nodes.find(n=>n.id===edge.from),b=graph.nodes.find(n=>n.id===edge.to);if(!a||!b)continue;const ax=a.x+226,ay=a.y+(nodeElements.get(a.id)?.offsetHeight||160)/2,bx=b.x,by=b.y+(nodeElements.get(b.id)?.offsetHeight||160)/2,active=a.id===selected||b.id===selected,compare=['对比','关联'].includes(edge.type);let d,lx,ly;
-      if(compare||bx<ax){const x=Math.max(a.x,b.x)+252;d=`M ${ax} ${ay} C ${x+24} ${ay},${x+24} ${by},${b.x+226} ${by}`;lx=x+4;ly=(ay+by)/2;}
-      else{const bend=Math.max(28,(bx-ax)*.53);d=`M ${ax} ${ay} C ${ax+bend} ${ay},${bx-bend} ${by},${bx} ${by}`;lx=(ax+bx)/2;ly=(ay+by)/2-7;}
-      root.append(svg('path',{d,class:'canvas-edge'+(active?' active':'')+(compare?' compare':''),'marker-end':`url(#${active?'canvas-arrow-active':'canvas-arrow'})`}));const label=svg('text',{x:lx,y:ly,'text-anchor':'middle',class:'canvas-edge-label'+(active?' active':'')});label.textContent=edge.type;root.append(label);
+    for(const edge of graph?.edges||[]){const a=graph.nodes.find(n=>n.id===edge.from),b=graph.nodes.find(n=>n.id===edge.to);if(!a||!b)continue;const active=a.id===selected||b.id===selected,compare=['对比','关联'].includes(edge.type);
+      const shape=connectionGeometry({...a,width:226,height:nodeElements.get(a.id)?.offsetHeight||160},{...b,width:226,height:nodeElements.get(b.id)?.offsetHeight||160});
+      root.append(svg('path',{d:shape.path,class:'canvas-edge'+(active?' active':'')+(compare?' compare':''),'marker-end':`url(#${active?'canvas-arrow-active':'canvas-arrow'})`}));const label=svg('text',{x:shape.label.x,y:shape.label.y,'text-anchor':'middle',class:'canvas-edge-label'+(active?' active':'')});label.textContent=edge.type;root.append(label);
     }
   }
   function render(){
