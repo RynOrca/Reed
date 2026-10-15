@@ -31,12 +31,14 @@ test('真实 bridge 画布：打开整理、显式引用追问、布局保存、
     const roleSaved=JSON.parse(await readFile(join(data,'user-config.json'),'utf8')).roles.roles.find(r=>r.id===roleId);assert.equal(roleSaved.canvasEnabled,true);assert.equal(roleSaved.system,'保留角色说明');assert.equal(seen.findLast(e=>e.type==='session').canvasEnabled,true);
     const sessionId=seen.findLast(e=>e.type==='session').sessionId;
     await command('prompt',{text:'为什么要切块？'});assert.equal(analysisCalls,0);
-    const opened=await command('canvas_open',{sessionId});assert.equal(opened.graph.nodes.length,1);const nodeId=opened.graph.nodes[0].id;
-    await until(e=>e.type==='canvas'&&e.state==='ready'&&e.graph.nodes[0]?.state==='ready');
+    const opened=await command('canvas_open',{sessionId});assert.equal(opened.graph.nodes.length,0);
+    const initial=await until(e=>e.type==='canvas'&&e.state==='ready'&&e.graph.nodes[0]?.state==='ready');const nodeId=initial.graph.nodes[0].id;
     const source=(await command('canvas_source',{sessionId,nodeId})).source;assert.equal(source.question,'为什么要切块？');assert.match(source.answer,/可追溯/);
     const index=seen.length;await command('prompt',{text:'能举个例子吗？',canvasSessionId:sessionId,canvasNodeId:nodeId});
     const updated=await until(e=>e.type==='canvas'&&e.state==='ready'&&e.graph.nodes.length===2&&e.graph.nodes.every(n=>n.state==='ready'),index);
     assert.equal(referenceSeen,true);assert.equal(updated.graph.edges[0].explicit,true);assert.equal(updated.graph.edges[0].from,nodeId);
+    await command('canvas_hide',{sessionId,nodeId});const omitted=await command('canvas_candidates',{sessionId});assert.ok(omitted.items.some(item=>item.id===nodeId&&item.status==='hidden'));
+    const restored=await command('canvas_include',{sessionId,pairId:nodeId});assert.equal(restored.graph.nodes.find(n=>n.id===nodeId).hidden,false);
     await command('canvas_edit',{sessionId,patch:{nodes:[{id:nodeId,x:400,y:500,title:'我的问题'}],view:{x:30,y:40,scale:.9}}});
     const saved=JSON.parse(await readFile(join(data,'canvases',sessionId+'.json'),'utf8'));assert.equal(saved.nodes[0].x,400);assert.equal(saved.nodes[0].title,'我的问题');
     await assert.rejects(command('canvas_source',{sessionId:'other',nodeId}),/会话已切换/);

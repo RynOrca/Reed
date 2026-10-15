@@ -11,7 +11,7 @@ import { classifyAssistantOutcome } from "./turn-outcome.mjs";
 import { createTurnRecovery } from "./turn-recovery.mjs";
 import { createAbortWatchdog } from "./turn-watchdog.mjs";
 import { createReviewGate } from "./review-gate.mjs";
-import { ConversationCanvasStore, ConversationCanvasWorkflow, conversationPairs } from './conversation-canvas.mjs';
+import { ConversationCanvasStore, ConversationCanvasWorkflow, conversationPairs, canvasSource } from './conversation-canvas.mjs';
 import { createDiagnosticFetch, createRequestFetch } from "./stream-diagnostics.mjs";
 import { createVisualReview, VISUAL_TOOLS } from "./visual-review.mjs";
 import { createContextPolicy } from "./context-policy.mjs";
@@ -441,11 +441,26 @@ async function handle(command) {
       case 'canvas_edit': {
         const selected=canvasSession(command);const graph=await canvasStore.edit(selected.sessionId,command.patch);canvasWorkflow.event(selected.sessionId,{graph});send({type:'ack',id,graph});break;
       }
+      case 'canvas_candidates': {
+        const selected=canvasSession(command),graph=await canvasStore.get(selected.sessionId);
+        const included=new Set(graph.nodes.filter(n=>!n.hidden).flatMap(n=>n.turnIds||[n.id]));
+        const items=conversationPairs(selected.sessionManager.getBranch()).filter(p=>!included.has(p.id)).map(p=>({id:p.id,title:p.question.slice(0,180),status:graph.records?.[p.id]?.status||'pending'}));
+        send({type:'ack',id,items});break;
+      }
+      case 'canvas_include': case 'canvas_hide': {
+        const selected=canvasSession(command);canvasWorkflow.cancel();
+        let graph;
+        if(command.type==='canvas_include'){
+          const entries=selected.sessionManager.getBranch(),pair=conversationPairs(entries).find(p=>p.id===command.pairId);if(!pair)throw Error('原文不在当前会话分支');
+          await canvasStore.sync(selected.sessionId,entries);graph=await canvasStore.include(selected.sessionId,pair);
+        }else graph=await canvasStore.hide(selected.sessionId,command.nodeId);
+        canvasWorkflow.event(selected.sessionId,{graph});send({type:'ack',id,graph});if(!busy)void canvasWorkflow.refresh();break;
+      }
       case 'canvas_retry': {
         canvasSession(command);if(busy)throw Error('请等待当前回复结束再整理');if(canvasWorkflow.openSessionId!==session.sessionId)throw Error('请先打开画布');canvasWorkflow.cancel();send({type:'ack',id});void canvasWorkflow.refresh();break;
       }
       case 'canvas_source': {
-        const selected=canvasSession(command);const graph=await canvasStore.get(selected.sessionId);if(!graph.nodes.some(n=>n.id===command.nodeId))throw Error('画布节点不存在');const source=conversationPairs(selected.sessionManager.getBranch()).find(pair=>pair.id===command.nodeId);if(!source)throw Error('原文不在当前会话分支');send({type:'ack',id,source});break;
+        const selected=canvasSession(command);const graph=await canvasStore.get(selected.sessionId);const source=canvasSource(graph,selected.sessionManager.getBranch(),command.nodeId);send({type:'ack',id,source});break;
       }
       case 'get_history': if(busy)throw Error('请等待当前回复结束');emitHistory();send({type:'ack',id});break;
       case "promote_queue": {
@@ -785,8 +800,7 @@ async function handle(command) {
         try {
           if(command.canvasNodeId){
             const selected=canvasSession({sessionId:command.canvasSessionId});const graph=await canvasStore.get(selected.sessionId);
-            if(!graph.nodes.some(node=>node.id===command.canvasNodeId))throw Error('引用的画布节点不存在');
-            const pair=conversationPairs(selected.sessionManager.getBranch()).find(pair=>pair.id===command.canvasNodeId);if(!pair)throw Error('引用原文不在当前会话');
+            const pair=canvasSource(graph,selected.sessionManager.getBranch(),command.canvasNodeId);
             controller.canvasParentId=pair.id;controller.canvasReference={id:pair.id,question:pair.question.slice(0,8000),answer:pair.answer.slice(0,16000)};
           }
           await applyProviders();
