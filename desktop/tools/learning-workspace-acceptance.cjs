@@ -28,7 +28,7 @@ const {chromium}=require(process.env.SUMMON_PLAYWRIGHT_PATH);
     await page.evaluate(()=>window.__TAURI__.core.invoke('set_appearance',{style:'glass',theme:'dark'}));await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');
     const command=(type,args={})=>page.evaluate(({type,args})=>new Promise(async(resolve,reject)=>{const id='learning-'+Math.random();const timer=setTimeout(()=>{off();reject(Error('Command timeout '+type));},30000);const off=await window.__TAURI__.event.listen('agent-event',e=>{const r=e.payload;if(r.id===id){clearTimeout(timer);off();r.type==='error'?reject(Error(r.message)):resolve(r);}});await window.__TAURI__.core.invoke('agent_command',{command:{id,type,...args}});}),{type,args});
     const provider=await command('save_provider',{template:'custom',name:'学习工作区验收',baseUrl:`http://127.0.0.1:${server.address().port}/v1`,protocol:'openai-completions'});
-    await command('discover_models',{providerId:provider.providerId});await command('select_model',{provider:provider.providerId,model:'learning-test'});
+    await command('discover_models',{providerId:provider.providerId});await command('update_model',{providerId:provider.providerId,model:{id:'learning-test',enabled:true}});await command('select_model',{provider:provider.providerId,model:'learning-test'});
     assert.equal(await page.locator('.goals-handle').isVisible(),false);assert.match(await page.locator('#status-model').innerText(),/Agent.*learning-test/);
     await command('save_role',{roleId:'agent',name:'Agent',system:'你是隔离验收 Agent',learningGoalsEnabled:true});
     const project=path.join(data,'test-project');await fs.mkdir(project);await command('change_workspace',{path:project});
