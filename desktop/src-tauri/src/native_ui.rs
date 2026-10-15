@@ -32,16 +32,16 @@ pub fn taskbar_icon(window:&tauri::WebviewWindow,bytes:&[u8],key:&str)->Result<(
     unsafe{SetClassLongPtrW(hwnd,GCLP_HICON,handle);SetClassLongPtrW(hwnd,GCLP_HICONSM,handle);SendMessageW(hwnd,WM_SETICON,Some(WPARAM(1)),Some(LPARAM(handle)));SendMessageW(hwnd,WM_SETICON,Some(WPARAM(0)),Some(LPARAM(handle)));}
     // Running taskbar groups can prefer Shell's relaunch icon over WM_GETICON.
     // Keep that icon in the private profile; do not edit pinned user shortcuts.
-    use windows::{core::PWSTR,Win32::{Foundation::PROPERTYKEY,System::{Com::StructuredStorage::PROPVARIANT,Variant::VT_LPWSTR},Storage::EnhancedStorage::{PKEY_AppUserModel_RelaunchIconResource,PKEY_AppUserModel_RelaunchCommand,PKEY_AppUserModel_RelaunchDisplayNameResource},UI::Shell::PropertiesSystem::{SHGetPropertyStoreForWindow,IPropertyStore}}};
+    use windows::Win32::{Foundation::PROPERTYKEY,System::{Com::StructuredStorage::{PROPVARIANT,PropVariantChangeType,PVCHF_DEFAULT},Variant::VT_LPWSTR},Storage::EnhancedStorage::{PKEY_AppUserModel_RelaunchIconResource,PKEY_AppUserModel_RelaunchCommand,PKEY_AppUserModel_RelaunchDisplayNameResource},UI::Shell::PropertiesSystem::{SHGetPropertyStoreForWindow,IPropertyStore}};
     let directory=crate::profile::directory().map_err(|e|e.to_string())?.join("icons");std::fs::create_dir_all(&directory).map_err(|e|e.to_string())?;let path=directory.join(format!("{key}.ico"));
     let mut ico=vec![0,0,1,0,1,0,0,0,0,0,1,0,32,0];ico.extend_from_slice(&(bytes.len() as u32).to_le_bytes());ico.extend_from_slice(&22_u32.to_le_bytes());ico.extend_from_slice(bytes);
     if std::fs::read(&path).ok().as_deref()!=Some(ico.as_slice()){let temporary=path.with_extension("tmp");std::fs::write(&temporary,ico).map_err(|e|e.to_string())?;std::fs::rename(temporary,&path).map_err(|e|e.to_string())?;}
     unsafe{
         let store:IPropertyStore=SHGetPropertyStoreForWindow(hwnd).map_err(|e|e.to_string())?;
         fn set(store:&IPropertyStore,key:&PROPERTYKEY,text:&str)->Result<(),String>{
-            let mut wide:Vec<u16>=text.encode_utf16().chain(Some(0)).collect();let mut value=PROPVARIANT::default();
-            // SetValue copies the borrowed UTF-16 value before this buffer drops.
-            unsafe{(*value.Anonymous.Anonymous).vt=VT_LPWSTR;(*value.Anonymous.Anonymous).Anonymous.pwszVal=PWSTR(wide.as_mut_ptr());store.SetValue(key,&value).map_err(|e|e.to_string())}
+            let source=PROPVARIANT::from(text);let mut value=PROPVARIANT::default();
+            // The SDK owns both strings; PropVariantClear must never free a Vec.
+            unsafe{PropVariantChangeType(&mut value,&source,PVCHF_DEFAULT,VT_LPWSTR).map_err(|e|e.to_string())?;store.SetValue(key,&value).map_err(|e|e.to_string())}
         }
         set(&store,&PKEY_AppUserModel_RelaunchCommand,&format!("\"{}\"",std::env::current_exe().map_err(|e|e.to_string())?.display()))?;
         set(&store,&PKEY_AppUserModel_RelaunchDisplayNameResource,"Reed 苇")?;
