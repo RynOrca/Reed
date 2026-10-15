@@ -9,6 +9,7 @@ using System.Text;
 using System.Runtime.InteropServices;
 public static class ReedNativeProbe {
  public delegate bool Visitor(IntPtr hwnd,IntPtr data);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string cls,string title);
  [DllImport("user32.dll")] public static extern bool EnumWindows(Visitor visit,IntPtr data);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd,out uint owner);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hwnd,StringBuilder text,int count);
@@ -46,4 +47,9 @@ if($Mode -eq 'picker'){
  $taskIcon=[ReedNativeProbe]::GetClassIcon($script:taskHandle,-14);if($taskIcon -eq [IntPtr]::Zero){throw 'Class icon unavailable'}
  $taskBitmap=[Drawing.Icon]::FromHandle($taskIcon).ToBitmap();$taskStream=New-Object IO.MemoryStream
  try{$taskBitmap.Save($taskStream,[Drawing.Imaging.ImageFormat]::Png);$taskHash=[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($taskStream.ToArray())).Replace('-','');[pscustomobject]@{handle=$taskIcon.ToInt64().ToString();hash=$taskHash;width=$taskBitmap.Width;height=$taskBitmap.Height}|ConvertTo-Json -Compress}finally{$taskBitmap.Dispose();$taskStream.Dispose()}
+}
+
+if($Mode -eq 'icon' -and $Capture){
+ $taskBar=[ReedNativeProbe]::FindWindow('Shell_TrayWnd',$null)
+ if($taskBar -ne [IntPtr]::Zero){$taskRect=New-Object ReedNativeProbe+Rect;[ReedNativeProbe]::GetWindowRect($taskBar,[ref]$taskRect)|Out-Null;$taskBitmap=New-Object Drawing.Bitmap ($taskRect.Right-$taskRect.Left),($taskRect.Bottom-$taskRect.Top);$taskGraphics=[Drawing.Graphics]::FromImage($taskBitmap);try{$taskGraphics.CopyFromScreen($taskRect.Left,$taskRect.Top,0,0,$taskBitmap.Size);$taskBitmap.Save($Capture,[Drawing.Imaging.ImageFormat]::Png)}finally{$taskGraphics.Dispose();$taskBitmap.Dispose()}}
 }
