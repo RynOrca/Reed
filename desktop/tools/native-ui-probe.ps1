@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][int]$OwnerPid,[ValidateSet('icon','picker')][string]$Mode='icon',[string]$Capture='')
+﻿param([Parameter(Mandatory=$true)][int]$OwnerPid,[ValidateSet('icon','picker')][string]$Mode='icon',[string]$Capture='')
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName UIAutomationClient

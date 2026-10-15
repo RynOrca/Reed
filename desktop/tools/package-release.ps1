@@ -84,7 +84,7 @@ if ($SkipSignature) {
 $url = "https://github.com/$Repository/releases/latest/download/$InstallerName"
 $manifest = [ordered]@{
   version   = $version
-  notes     = "Reed 一苇 $version"
+  notes     = "Reed 苇 $version"
   pub_date  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
   platforms = [ordered]@{
     "windows-x86_64" = [ordered]@{

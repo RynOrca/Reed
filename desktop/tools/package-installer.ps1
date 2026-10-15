@@ -1,4 +1,4 @@
-﻿param([string]$Output = "")
+param([string]$Output = "")
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'executable-integrity.ps1')
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
@@ -19,7 +19,7 @@ foreach ($file in @('LICENSE','NOTICE.md','PI-DESKTOP-LICENSE','MARKED-LICENSE')
 $config = @{
     bundle = @{
         active = $true; useLocalToolsDir = $true; targets = @('nsis'); icon = @('icons/icon.ico')
-        shortDescription = 'Reed 一苇 — 一苇以航，轻渡学海。'
+        shortDescription = 'Reed 苇 — 一苇以航，轻渡学海。'
         # 有签名私钥时才生成更新产物：否则 tauri 会以缺少私钥直接失败，
         # 而签名是「关于 → 检查更新」内置安装的硬前提（应用会用公钥校验安装包）。
         createUpdaterArtifacts = [bool]$env:TAURI_SIGNING_PRIVATE_KEY

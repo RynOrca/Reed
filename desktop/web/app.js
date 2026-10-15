@@ -417,16 +417,6 @@ function renderRoles() {
     list.append(row);
   }
 }
-async function chooseWorkspace() {
-  try {
-    const path = await tauri.core.invoke("choose_workspace");
-    if (!path) return;
-    await command("change_workspace", { path }, true);
-
-  } catch (error) {
-    errorRow(String(error));
-  }
-}
 async function newSession() {
   try {
     await command("new_session", { noProject: true }, true);
@@ -605,7 +595,7 @@ document.addEventListener("click", event => {
   void command("resolve_file", { path: link.dataset.localFile }, true).then(r => tauri.core.invoke("open_local_file", { path: r.path })).catch(e => errorRow(String(e.message || e)));
 });
 async function command(type, args = {}, awaitReply = false) {
-  if(['open_session','new_session','select_role','change_workspace','save_role'].includes(type))await canvasPanel.flush();
+  if(['open_session','new_session','select_role','change_workspace','save_role','set_role_learning'].includes(type))await canvasPanel.flush();
   if (!tauri) return Promise.reject(new Error("需要在 Tauri 桌面窗口中运行"));
   const id = `${commandPrefix}${++sequence}`;
   if(type==='prompt')activePromptId=id;

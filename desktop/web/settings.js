@@ -401,7 +401,7 @@ if (tauri) {
     const prefs = await tauri.core.invoke("desktop_preferences"); savedShortcut = prefs.activeShortcut || prefs.shortcut || ""; $("shortcut").textContent = savedShortcut || "录入快捷键"; $("autostart").checked = prefs.autostart === true;
     await command("get_state");
   });
-} else notice("请在 Reed 一苇桌面应用中打开设置。", true);
+} else notice("请在 Reed 苇桌面应用中打开设置。", true);
 for (const button of document.querySelectorAll("nav button")) button.prepend(icon(({general:"settings",models:"model",memory:"memory",vault:"book",skills:"skill",tools:"tools",security:"shield",agent:"activity",mcp:"tools",roles:"role",about:"info"})[button.dataset.section]));
 $("close").replaceChildren(icon("close")); windowHandles(tauri);
 
