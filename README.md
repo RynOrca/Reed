@@ -1,46 +1,103 @@
-# Reed 苇
+<p align="center">
+  <img src=".github/assets/logo.png" width="120" alt="Reed 苇">
+</p>
 
-**一苇以航，轻渡学海。**
+<h1 align="center">Reed 苇</h1>
 
-Reed 是面向学习与日常工作的轻量 Windows 桌面 Agent，基于 PI Agent、Tauri 和 WebView2。当前源码版本 **0.3.0**。
+<p align="center"><b>一苇以航，轻渡学海。</b><br>
+常驻桌面的学习 Agent：本地笔记 + 分层记忆 + 角色技能，Windows 原生，随叫随到。</p>
 
-## 开始使用
+<p align="center">
+  <a href="../../releases/latest"><img src="https://img.shields.io/github/v/release/RynOrca/Reed?label=release" alt="release"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4" alt="platform">
+  <img src="https://img.shields.io/badge/stack-Tauri%202%20%2B%20WebView2%20%2B%20Node.js-24B47E" alt="stack">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="license"></a>
+</p>
 
-1. 安装 Windows 安装包，或解压便携包运行 `Reed.exe`。便携包需保留同目录 `agent/` 和 `runtime/`。
-2. 在设置中添加模型服务，填写 API Key，发现并勾选模型，再在聊天窗口选择模型和思考档位。
-3. 点击左下项目按钮，可恢复历史项目最近的会话，或选择其他文件夹。历史列表中项目旁的 `＋` 可直接新建该项目的会话。
-4. 在角色编辑中开启**学习模式 → 对话画布**。已有角色的开关即时保存；主窗左上入口展开画布，右上书本入口展开学习目标。
+Reed 是一个面向学习与日常工作的轻量 Windows 桌面 Agent。它不是聊天框套壳：会话、笔记库、学习画像和工作经验各有独立的存储与权限，Agent 通过工具去读写它们，你随时能在界面上看到它把什么记进了哪里。
 
-## 核心功能
+支持任意 OpenAI / Anthropic 兼容接口（含 DeepSeek、OpenRouter 等），模型由你自己配置，数据留在本机。
 
-- **对话画布**：按问题整理卡片与关联；查看原文、引用追问、拖动与缩放。打开期间每轮结束自动增量整理，按会话保存，归档保留，删除会话同步删除。
-- **学习模式**：按角色管理学习目标、学习画像与教学记忆；可绑定技能，安排练习和复习。
-- **笔记与记忆**：连接 Obsidian Markdown 笔记库，手动生成导航总览，检索原文并引用行号；从验证过的工具操作整理工作经验。
-- **桌面对话**：快捷键唤出、托盘驻留、窗口置顶、深浅主题、图片与文件附件、消息定位、排队与引导、上下文压缩。
-- **模型与工具**：支持 OpenAI / Anthropic 兼容接口、文件工具、浏览器、Tavily 和按需连接的 MCP。
+## 截图
 
-画布整理、笔记扩词与记忆整理可能额外调用所选模型。摘要与关联质量取决于模型；笔记检索使用本地 SQLite FTS5，尚未接入向量检索。
+| 主窗口 | 对话画布 |
+| --- | --- |
+| ![主窗口](.github/assets/main-window.png) | ![对话画布](.github/assets/canvas-light.png) |
+
+<details>
+<summary>深色主题、设置页与图标</summary>
+
+| 画布（深色） | 设置 |
+| --- | --- |
+| ![画布深色](.github/assets/canvas-dark.png) | ![设置](.github/assets/general-light.png) |
+
+![图标](.github/assets/icon-variants.png)
+
+</details>
+
+## 功能
+
+- **对话画布** — 把一轮轮问答整理成问题卡片与关联关系。可查看原文、沿节点继续追问、拖动与缩放；面板打开期间每轮结束自动增量整理，手工标题和布局不会被覆盖，按会话保存，删除会话时同步清理。
+- **学习模式（按角色）** — 每个角色独立开关学习目标、学习者画像与对话画布。目标以 Markdown 存在项目里，Agent 只读；画像记录目标、概念、误解与复习安排。
+- **笔记库（Obsidian Markdown）** — 连接本地库后手动生成一份导航总览，之后按知识点检索原文并引用文件与行号，回答里可以回查来源。
+- **分层记忆** — 画像 / 知识库 / 工作经验三层可分别启停。保存前先做价值判断（可靠证据、持久性、复用价值），不确定就不记；工作经验从验证过的工具操作里整理。
+- **桌面 Agent 体验** — 全局快捷键唤出、托盘驻留、窗口置顶、深浅主题与图标风格、图片与文件附件、消息定位、排队与引导、上下文压缩、停止看门狗。
+- **工具与权限** — 文件读写限制在工作区与只读目录内，写入可要求手动审批；支持浏览器截图、Tavily 联网与按需连接的 MCP，工具能力可在设置里逐项查看。
+
+## 快速开始
+
+1. 下载 [最新版本](../../releases/latest)：`Reed-x.y.z-setup.exe` 安装（当前用户，不需要管理员），或解压 `Reed-x.y.z-portable.zip` 直接运行 `Reed.exe`（同目录需保留 `agent/` 与 `runtime/`）。
+2. 首次安装可能弹「Windows 已保护你的电脑」：点「更多信息」→「仍要运行」。原因是安装包未做代码签名，不是检测到病毒。
+3. 打开设置 → 模型，添加服务地址与 API Key，发现并勾选模型。
+4. 回到主窗口选择模型与思考档位，开始对话。要体验画布：角色设置里打开**学习模式 → 对话画布**，左上入口即可展开。
+
+> 同一时间只运行一个实例。便携版和安装版共用数据目录，两个同时开会因为 WebView2 数据目录被占用而启动失败。
+
+## 使用
+
+| 想做的事 | 操作 |
+| --- | --- |
+| 换项目 | 左下项目按钮：恢复历史项目最近的会话，或选择其他文件夹 |
+| 在新项目开聊 | 历史列表中项目旁的 `＋` |
+| 展开画布 / 学习目标 | 左上 / 右上入口（依赖对应角色开关） |
+| 只回答不整理 | 保持画布关闭，或对该轮使用「未收录」 |
+| 换角色 | 顶部角色按钮，可自定义提示词并绑定技能 |
+| 停止当前回答 | 状态栏右侧停止按钮；上游不响应时会先本地恢复输入并如实说明 |
 
 ## 数据与权限
 
-配置、会话、画布和记忆保存于 `%APPDATA%\Reed`；原始笔记保留在用户选定的笔记库。API Key 由当前 Windows 用户加密保护。升级前通过托盘退出旧版，升级和卸载默认保留用户数据。
+- 配置、会话、画布、记忆位于 `%APPDATA%\Reed`；原始笔记始终留在你选定的笔记库，Reed 只在库根目录新建一份总览文件。
+- API Key 由当前 Windows 用户加密保存（DPAPI），不写入会话文件。
+- 升级前请从托盘退出旧版；升级与卸载默认保留用户数据。
+- 画布整理、笔记检索扩词与记忆整理会额外调用你所选的模型，消耗你自己的额度。
 
-工具写入受工作区、只读目录和审批设置限制。删除会话需再次确认；测试破坏性操作应使用隔离数据。
+## 从源码构建
 
-## 开发
-
-需要 Node.js 22.19+、Rust stable 和 Windows WebView2。
+需要 Node.js 22.19+、Rust stable 工具链、Windows WebView2 运行时。
 
 ```powershell
-npm ci
-npm run agent:install
-npm test
+npm ci                 # 顶层构建工具（Tauri CLI）
+npm run agent:install  # Agent 侧依赖
+npm test               # Agent 全量测试（Node test runner）
 npm run build          # 便携包
 npm run build:setup    # 安装包
 ```
 
-源码入口：`desktop/agent/`（Agent）、`desktop/web/`（界面）、`desktop/src-tauri/`（原生宿主）、`desktop/tools/`（构建与隔离验收）。安装包用于本地测试；应用内更新产物需使用发布签名私钥构建。
+| 目录 | 内容 |
+| --- | --- |
+| `desktop/agent/` | Node.js Agent：PI Agent 会话、工具、记忆、笔记检索、画布整理 |
+| `desktop/web/` | 界面：聊天、画布、设置、学习目标 |
+| `desktop/src-tauri/` | Rust 原生宿主：窗口、托盘、快捷键、图标、数据目录 |
+| `desktop/tools/` | 打包与隔离验收脚本 |
+
+应用内一键更新需要发布签名私钥（`TAURI_SIGNING_PRIVATE_KEY`），未配置时只产出安装包与便携包。
+
+## 已知边界
+
+- 画布整理、笔记扩词、记忆整理的质量取决于所选模型；笔记检索目前是本地 SQLite FTS5 全文检索，未接入向量检索。
+- 总览使用正文抽样，不是逐字精读全库。
+- 安装包未签名，因此 Windows 会提示未知发布者，也没有应用内更新。
 
 ## 许可证
 
-原创部分使用 [MIT License](LICENSE)；第三方来源及分发要求见 [NOTICE.md](NOTICE.md)。感谢 PI Agent、Tauri、WebView2 和 Marked。
+原创部分使用 [MIT License](LICENSE)。第三方来源与分发要求见 [NOTICE.md](NOTICE.md)。感谢 PI Agent、Tauri、WebView2 与 Marked。
