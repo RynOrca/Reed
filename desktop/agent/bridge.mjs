@@ -21,7 +21,7 @@ import { createWorkRecaller } from './work-recall.mjs';
 import { join, resolve } from "node:path";
 import { createApprovalGate } from "./approval.mjs";
 import { RoleStore } from "./roles.mjs";
-import { installLearningSkills, prepareRoleSkills, hasRequiredReview } from "./role-skills.mjs";
+import { installLearningSkills, prepareRoleSkills, hasPreparedReview } from "./role-skills.mjs";
 import { normalizeImages } from "./images.mjs";
 import { stageFile } from "./files.mjs";
 import { EndpointStore, REMOTE_PROVIDER, validateEndpoint } from "./endpoint.mjs";
@@ -123,14 +123,13 @@ memory.matchWorkTopic=semanticMatcher({runtime:getRuntime,model:()=>session?.mod
 const preparedSkills=new Map(),preparedReviews=new Set();
 const lastUserPrompt=()=>{const u=session?.state.messages.findLast(m=>m.role==="user");return typeof u?.content==="string"?u.content:(u?.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");};
 const spacedReviewSkill=()=>capabilities.state.skills.find(s=>s.name==="spaced-review"&&s.enabled&&roles.current().skills.some(b=>b.skillId===s.id));
-const reviewSkillPath=()=>{const skill=spacedReviewSkill();return skill?join(skill.path,"SKILL.md"):null;};
 // 门控按“轮次”而不是用户原文：同一轮的引导/排队消息不会关闭它，新一轮仍要重读技能。
 const reviewGateState=createReviewGate({
   match:event=>{if(event?.toolName!=="read"||!roles.current().learnerProfileEnabled)return false;const skill=spacedReviewSkill();return Boolean(skill&&typeof event.input?.path==="string"&&resolve(cwd,event.input.path)===resolve(skill.path,"SKILL.md"));},
   turnKey:()=>`${session?.sessionId||""}\u0000${activeTurnId||"idle"}`,
 });
 const reviewEnabled=(prompt=lastUserPrompt())=>reviewGateState.isLoaded()||preparedReviews.has(roles.activeId+"\n"+prompt);
-const workingTools=workMemoryExtension({memory,learner,roles,currentSession:()=>session,reviewEnabled,reviewHint:reviewSkillPath,send,judgeValue,runtime:getRuntime,currentWorkspace:()=>cwd});
+const workingTools=workMemoryExtension({memory,learner,roles,currentSession:()=>session,reviewEnabled,send,judgeValue,runtime:getRuntime,currentWorkspace:()=>cwd});
 const reviewGate=pi=>{
   // tool_call 在工具执行前触发：同一批并行发出的 read+recall_memory 也能看到已加载状态。
   pi.on("tool_call",event=>reviewGateState.mark(event));
@@ -140,7 +139,7 @@ async function prepareSkills(text) {
   const key=roles.activeId+'\n'+text;
   preparedSkills.set(key,await prepareRoleSkills(roles.current(),capabilities,text));
   preparedReviews.delete(key);
-  if(hasRequiredReview(roles.current(),capabilities,text))preparedReviews.add(key);
+  if(hasPreparedReview(roles.current(),capabilities,text))preparedReviews.add(key);
   if(preparedSkills.size>100){const oldest=preparedSkills.keys().next().value;preparedSkills.delete(oldest);preparedReviews.delete(oldest);}
 }
 const learningTools = createLearningTools({ capabilities, currentWorkspace: () => cwd, roles, send, scope, vaultOverview,runtime:getRuntime,model:()=>session?.model, turnSignal:()=>turnController?.signal,roleSkillInstructions: prompt=>prepareRoleSkills(roles.current(),capabilities,prompt) });

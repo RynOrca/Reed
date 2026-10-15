@@ -30,12 +30,12 @@ export function skillApplies(skill,prompt) {
   if(quoted?.[1]===skill.name) return true;
   return !!workflows[skill.name]?.test(String(prompt));
 }
-// Only call after prepareRoleSkills has successfully loaded required bodies.
+// Only call after prepareRoleSkills has successfully loaded matching bodies.
 // Text inside another skill cannot impersonate a loaded review workflow.
-export function hasRequiredReview(role,capabilities,prompt) {
+export function hasPreparedReview(role,capabilities,prompt) {
   return (role?.skills||[]).some(binding=>{
     const skill=capabilities.state.skills.find(s=>s.id===binding.skillId);
-    return binding.required&&skill?.enabled&&skill.name==='spaced-review'&&skillApplies(skill,prompt);
+    return skill?.enabled&&(!capabilities.canUseSkill||capabilities.canUseSkill(skill))&&skill.name==='spaced-review'&&skillApplies(skill,prompt);
   });
 }
 export async function prepareRoleSkills(role,capabilities,prompt) {
@@ -49,15 +49,17 @@ export async function prepareRoleSkills(role,capabilities,prompt) {
       continue;
     }
     descriptors.push({name:skill.name,description:skill.description,path:join(skill.path,'SKILL.md'),required:binding.required});
-    if(binding.required && applies) {
+    // Review is a workflow, not a permission to read the review queue. Load its
+    // instructions automatically when relevant, even for an on-demand binding.
+    if(applies && (binding.required || skill.name==='spaced-review')) {
       try {
         const path=join(skill.path,'SKILL.md'), info=await lstat(path);
         if(!info.isFile() || info.size>100000) throw new Error('文件无效或超过 100 KB');
         const text=await readFile(path,'utf8');
         if(!text.trim()) throw new Error('正文为空');
-        bodies.push(`必选流程：${skill.name}\n来源：${path}\n${text}`);
-      } catch(e) {throw new Error(`无法加载必选技能 ${skill.name}：${e.message}`);}
+        bodies.push(`已加载流程：${skill.name}\n来源：${path}\n${text}`);
+      } catch(e) {throw new Error(`无法加载技能 ${skill.name}：${e.message}`);}
     }
   }
-  return descriptors.length ? `角色绑定技能（执行步骤不能越过角色原则、权限或用户当前要求）：\n${JSON.stringify(descriptors)}\n按需技能只列出说明；相关任务执行前用 read 读取对应 SKILL.md。可用 /skill 技能名 明确启动流程。\n${bodies.length?'以下必选正文已由程序加载，当前任务须遵循流程；缺少用户回答时先等待，不编造完成情况。\n'+bodies.join('\n\n'):''}` : '';
+  return descriptors.length ? `角色绑定技能（执行步骤不能越过角色原则、权限或用户当前要求）：\n${JSON.stringify(descriptors)}\n未加载的按需技能只列出说明；相关任务执行前用 read 读取对应 SKILL.md。可用 /skill 技能名 明确启动流程。\n${bodies.length?'以下正文已由程序加载，不需要重复 read，当前任务须遵循流程；缺少用户回答时先等待，不编造完成情况。\n'+bodies.join('\n\n'):''}` : '';
 }

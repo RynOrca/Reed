@@ -33,8 +33,16 @@ test('按需只有元数据，必选仅加载匹配流程，明确命令与停�
     let text=await prepareRoleSkills(role,store,'教我矩阵');assert.ok(text.includes('BODY_SENTINEL_teach'));assert.ok(!text.includes('BODY_SENTINEL_practice-generator'));assert.ok(!text.includes('BODY_SENTINEL_spaced-review'));
     text=await prepareRoleSkills(role,store,'你好');assert.ok(!text.includes('BODY_SENTINEL_'));
     text=await prepareRoleSkills(role,store,'/skill spaced-review 矩阵');assert.ok(text.includes('BODY_SENTINEL_spaced-review'));assert.ok(!text.includes('BODY_SENTINEL_teach'));
+    role.skills[2].required=false;
+    text=await prepareRoleSkills(role,store,'我有什么要复习的吗');assert.match(text,/BODY_SENTINEL_spaced-review/);assert.match(text,/不需要重复 read/);
+    text=await prepareRoleSkills(role,store,'普通问题');assert.doesNotMatch(text,/BODY_SENTINEL_spaced-review/);
+    store.state.skills[2].enabled=false;
+    text=await prepareRoleSkills(role,store,'复习矩阵');assert.doesNotMatch(text,/BODY_SENTINEL_spaced-review/);
+    store.state.skills[2].enabled=true;
+    await rm(join(store.state.skills[2].path,'SKILL.md'));
+    await assert.rejects(prepareRoleSkills(role,store,'复习矩阵'),/无法加载技能/);
     role.skills[0].required=false;text=await prepareRoleSkills(role,store,'教我矩阵');assert.ok(text.includes('SKILL.md'));assert.ok(!text.includes('BODY_SENTINEL_teach'));
     role.skills[0].required=true;store.state.skills[0].enabled=false;await assert.rejects(prepareRoleSkills(role,store,'教我矩阵'),/已停用/);
-    store.state.skills[0].enabled=true;await rm(join(store.state.skills[0].path,'SKILL.md'));await assert.rejects(prepareRoleSkills(role,store,'教我矩阵'),/无法加载必选/);
+    store.state.skills[0].enabled=true;await rm(join(store.state.skills[0].path,'SKILL.md'));await assert.rejects(prepareRoleSkills(role,store,'教我矩阵'),/无法加载技能/);
   } finally {await rm(dir,{recursive:true,force:true});}
 });

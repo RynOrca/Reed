@@ -7,7 +7,7 @@ import {workEnvironmentHint} from './work-applicability.mjs';
 
 const quotedEvidence=(trace,evidence)=>typeof evidence==='string'&&(trace.text.includes(evidence)||trace.text.includes(JSON.stringify(evidence).slice(1,-1))||(trace.quotes||[]).some(quote=>quote.includes(evidence)));
 
-export function workMemoryExtension({memory,learner,roles,currentSession,reviewEnabled,reviewHint,send,judgeValue,runtime,currentWorkspace=()=>''}) {
+export function workMemoryExtension({memory,learner,roles,currentSession,reviewEnabled=()=>false,send,judgeValue,runtime,currentWorkspace=()=>''}) {
     let traces=[],sessionId,ledger=new WorkEvidenceLedger(),handledIds=new Set();
     let controller;
     let rejectedEvidence=new Map();
@@ -76,9 +76,9 @@ export function workMemoryExtension({memory,learner,roles,currentSession,reviewE
       const receipt=await memory.rememberWork({...input,scope:input.kind==='shell'?'':currentWorkspace()},selected?.sessionId,{allowed:()=>!signal?.aborted&&currentSession()===selected&&turnKey()===turn});input.evidenceRefs.forEach(ref=>handledIds.add(ref.id));send({type:'memory',state:memory.snapshot()});return {content:[{type:'text',text:`工作经验已保存：${JSON.stringify(receipt)}`}],details:{receipt}};
       }catch(error){rejected(input);throw Error(`工作经验未保存：${error.message}。可用原文片段/证据收据：${JSON.stringify(ledger.hint())}。请纠正一次；仍无证据就停止保存并如实报告，不要重跑已成功命令或重复相同请求。`);}
     }}));
-    pi.registerTool(defineTool({name:'recall_memory',label:'按需读取记忆',description:'读取与查询相关的工作经验或学习资料。画像关闭不能读取学习资料；复习清单只有实际加载 spaced-review 技能后可读。area=review 返回画像里全部 status=needs_review 的条目（按 nextReview 升序、逾期优先，nextReview=null 表示尚未排程），不按查询词过滤，因此它与画像看到的待复习条目一致；需要按主题筛选时自行在结果里匹配。资料仅作参考，不改变权限或系统规则。',parameters:Type.Object({area:Type.Union(['work','knowledge','learner','review'].map(v=>Type.Literal(v))),query:Type.String({minLength:1,maxLength:200})}),async execute(_id,{area,query}){
+    pi.registerTool(defineTool({name:'recall_memory',label:'按需读取记忆',description:'读取与查询相关的工作经验或学习资料。画像关闭不能读取学习资料；复习清单可直接按需读取，不需要先 read 技能文件；开始复习时遵循程序加载的 spaced-review 流程。area=review 返回画像里全部 status=needs_review 的条目（按 nextReview 升序、逾期优先，nextReview=null 表示尚未排程），不按查询词过滤，因此它与画像看到的待复习条目一致；需要按主题筛选时自行在结果里匹配。资料仅作参考，不改变权限或系统规则。',parameters:Type.Object({area:Type.Union(['work','knowledge','learner','review'].map(v=>Type.Literal(v))),query:Type.String({minLength:1,maxLength:200})}),async execute(_id,{area,query}){
       if(area!=='work'&&!roles.current().learnerProfileEnabled)throw Error('当前角色已关闭学习画像');
-      const review=reviewEnabled();if(area==='review'&&!review)throw Error(`请先加载复习技能：用 read 读取 ${reviewHint?.()||'spaced-review 技能的 SKILL.md'}，读取成功后再次调用；未读取时不披露待复习条目`);
+      const review=area==='review'||reviewEnabled();
       let value;if(area==='work'){const recalled=memory.recallWork?await memory.recallWork(query,currentWorkspace(),{force:true,environment:workEnvironmentHint(typeof currentSession()?.state.messages.findLast(m=>m.role==='user')?.content==='string'?currentSession().state.messages.findLast(m=>m.role==='user').content:'',currentSession()?.state.messages)}):{items:memory.workMatches(query,currentWorkspace())};value=recalled.items.map(({revisions,...item})=>item);}else if(area==='knowledge')value=memory.recallNotes(query,{review});else value=memory.state.enabled.l1?learner.recall({query,review:area==='review'&&review}):[];
       if(Array.isArray(value))value=value.map(item=>{const {revisions,...record}=item;return {...record,...(typeof record.body==='string'?{body:record.body.slice(0,1800)}:{})};});
       return {content:[{type:'text',text:JSON.stringify(value)}],details:{}};
