@@ -2,6 +2,7 @@
 
 mod profile;
 mod canvas_window;
+mod native_ui;
 
 use tauri::{
     menu::{Menu, MenuItem},
@@ -191,14 +192,16 @@ fn desktop_preferences(app: tauri::AppHandle, state: tauri::State<'_, ShortcutSt
     prefs
 }
 
-fn brand_icon(style: &str, dark: bool) -> tauri::Result<tauri::image::Image<'static>> {
-    let bytes: &[u8] = match (style, dark) {
+fn brand_bytes(style:&str,dark:bool)->&'static [u8]{
+    match (style, dark) {
         ("illustrated", false) => include_bytes!("../icons/illustrated-light.png"),
         ("illustrated", true) => include_bytes!("../icons/illustrated-dark.png"),
         (_, true) => include_bytes!("../icons/glass-dark.png"),
         _ => include_bytes!("../icons/glass-light.png"),
-    };
-    tauri::image::Image::from_bytes(bytes)
+    }
+}
+fn brand_icon(style: &str, dark: bool) -> tauri::Result<tauri::image::Image<'static>> {
+    tauri::image::Image::from_bytes(brand_bytes(style,dark))
 }
 
 #[tauri::command]
@@ -206,7 +209,11 @@ fn update_brand_icon(app: tauri::AppHandle, style: String, dark: bool) -> Result
     if !["glass", "illustrated"].contains(&style.as_str()) { return Err("图标风格无效".into()); }
     let icon=brand_icon(&style,dark).map_err(|e|e.to_string())?;
     if let Some(tray)=app.tray_by_id("reed-tray") { tray.set_icon(Some(icon.clone())).map_err(|e|e.to_string())?; }
-    for window in app.webview_windows().values() { window.set_icon(icon.clone()).map_err(|e|e.to_string())?; }
+    for window in app.webview_windows().values() {
+        window.set_icon(icon.clone()).map_err(|e|e.to_string())?;
+        #[cfg(windows)]
+        native_ui::taskbar_icon(window,brand_bytes(&style,dark),&format!("{style}-{dark}")).map_err(|e|e.to_string())?;
+    }
     Ok(())
 }
 
@@ -425,7 +432,7 @@ async fn open_settings(app: tauri::AppHandle, section: Option<String>) -> Result
         let mut builder = WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
             .data_directory(data_directory(&app)?.join("webview"))
             .initialization_script(format!("window.SUMMON_SETTINGS_SECTION={initial};"))
-            .title("Reed 一苇 · 设置").visible(false).decorations(false).shadow(false).inner_size(980.0, 700.0).min_inner_size(740.0, 480.0);
+            .title("Reed 苇 · 设置").visible(false).decorations(false).shadow(false).inner_size(980.0, 700.0).min_inner_size(740.0, 480.0);
         #[cfg(windows)]
         if std::env::var_os("SUMMON_TEST_DATA_DIR").is_some() {
             if let Ok(port) = std::env::var("SUMMON_TEST_WEBVIEW_PORT") {
@@ -498,22 +505,11 @@ fn set_window_pinned(window: tauri::WebviewWindow, pinned: bool) -> Result<bool,
 }
 
 #[tauri::command]
-async fn choose_workspace() -> Result<Option<String>, String> {
+async fn choose_workspace(window:tauri::WebviewWindow,initial_path:Option<String>) -> Result<Option<String>, String> {
     #[cfg(windows)]
     {
-        tauri::async_runtime::spawn_blocking(|| {
-            let script = "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new(); $shell=New-Object -ComObject Shell.Application; $folder=$shell.BrowseForFolder(0,'选择工作目录',0,0); if($folder){[Console]::Write($folder.Self.Path)}";
-            let mut picker = Command::new("powershell.exe");
-            picker.args(["-NoProfile", "-NonInteractive", "-STA", "-Command", script]);
-            use std::os::windows::process::CommandExt;
-            picker.creation_flags(0x08000000); // Hide the console; keep the native folder dialog visible.
-            let output = picker.output().map_err(|error| error.to_string())?;
-            if !output.status.success() {
-                return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
-            }
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-            Ok(if path.is_empty() { None } else { Some(path) })
-        }).await.map_err(|error| error.to_string())?
+        let owner=window.hwnd().map_err(|e|e.to_string())?.0 as isize;
+        tauri::async_runtime::spawn_blocking(move||native_ui::choose_folder(owner,initial_path.as_deref())).await.map_err(|error|error.to_string())?
     }
     #[cfg(not(windows))]
     { Err("Folder selection is currently available on Windows only".into()) }
@@ -564,7 +560,7 @@ fn show_startup_error(message: &str) {
         fn MessageBoxW(hwnd: isize, text: *const u16, caption: *const u16, flags: u32) -> i32;
     }
     let text: Vec<u16> = std::ffi::OsStr::new(message).encode_wide().chain(Some(0)).collect();
-    let caption: Vec<u16> = std::ffi::OsStr::new("Reed 一苇启动失败").encode_wide().chain(Some(0)).collect();
+    let caption: Vec<u16> = std::ffi::OsStr::new("Reed 苇启动失败").encode_wide().chain(Some(0)).collect();
     unsafe { MessageBoxW(0, text.as_ptr(), caption.as_ptr(), 0x10); }
 }
 
@@ -615,7 +611,7 @@ fn claim_instance() -> Result<Option<InstanceGuard>, String> {
     if unsafe { GetLastError() } != 183 {
         return Ok(Some(InstanceGuard(handle)));
     }
-    let title: Vec<u16> = std::ffi::OsStr::new("Reed 一苇").encode_wide().chain(Some(0)).collect();
+    let title: Vec<u16> = std::ffi::OsStr::new("Reed 苇").encode_wide().chain(Some(0)).collect();
     for _ in 0..20 {
         let mut window = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
         if window==0 {
@@ -666,14 +662,14 @@ mod window_readiness_tests {
 }
 
 fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "显示 Reed 一苇", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 Reed 一苇", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "显示 Reed 苇", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 Reed 苇", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &quit])?;
     let prefs=read_preferences(app.handle());
     let dark=prefs["theme"].as_str()==Some("dark") || (prefs["theme"].as_str()!=Some("light") && app.get_webview_window("main").and_then(|w|w.theme().ok())==Some(tauri::Theme::Dark));
     TrayIconBuilder::with_id("reed-tray")
         .icon(brand_icon(prefs["iconStyle"].as_str().unwrap_or("glass"),dark)?)
-        .tooltip("Reed 一苇 · 一苇以航，轻渡学海。")
+        .tooltip("Reed 苇 · 一苇以航，轻渡学海。")
         .menu(&menu)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => show_main(app),
@@ -795,7 +791,7 @@ fn main() {
             .or_else(|| panic.downcast_ref::<&str>().map(|value| (*value).to_string()))
             .unwrap_or_else(|| "Unknown startup panic".to_string()),
     };
-    let message = format!("Reed 一苇无法启动：{error}\n\n请将便携包文件夹中的 startup.log 发给开发者；若文件不存在，请查看系统临时目录中的 Reed-startup.log。");
+    let message = format!("Reed 苇无法启动：{error}\n\n请将便携包文件夹中的 startup.log 发给开发者；若文件不存在，请查看系统临时目录中的 Reed-startup.log。");
     startup_log(&format!("Startup failed: {error}"));
     show_startup_error(&message);
 }
