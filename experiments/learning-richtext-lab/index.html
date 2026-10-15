@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' file:; script-src 'self' file:; style-src 'self' file:; img-src 'self' file: data:; connect-src 'none'; object-src 'none'; base-uri 'none'">
+  <title>Reed · 学习表达实验室</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="data.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <aside class="rail">
+    <a class="brand" href="#gallery"><span class="brand-mark">苇</span><span>Reed<small>学习表达实验室</small></span></a>
+    <p class="rail-label">0.3.2 / EXPLORATIONS</p>
+    <nav aria-label="探索区域">
+      <button data-view="gallery" class="active"><span>01</span>组件图鉴<small>表达的不同可能</small></button>
+      <button data-view="conversation"><span>02</span>学习对话<small>在正文中感受节奏</small></button>
+      <button data-view="protocol"><span>03</span>数据试验<small>从描述到真实组件</small></button>
+      <button data-view="references"><span>04</span>参考项目<small>源码与可视化示例</small></button>
+    </nav>
+    <div class="rail-bottom"><span class="status-dot"></span>本地离线原型<p>合成内容 · 模拟回复<br>没有模型请求</p></div>
+  </aside>
+  <main>
+    <header class="topbar"><span>REED LAB <span class="slash">/</span> <span id="breadcrumb">组件图鉴</span></span><div class="toolbar"><button id="plain-toggle" aria-pressed="false">对照纯文字</button><button id="theme-toggle" aria-label="切换深浅主题">浅色主题</button></div></header>
+    <section class="page-intro"><p class="eyebrow" id="eyebrow">01 / COMPONENT ATLAS</p><h1 id="page-title">让知识，有更清楚的形状。</h1><p id="page-description">同一段解释，可以是一条路径、一组对照，也可以是一个恰好的问题。探索它们何时比文字更有用。</p></section>
+    <div id="view-content"></div>
+    <footer class="page-footer"><span>Reed / 0.3.2 探索原型</span><span>组件帮助表达，回答仍由你决定。</span></footer>
+  </main>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <noscript>请启用 JavaScript 以操作本地学习组件。此原型不需要联网。</noscript>
+</body>
+</html>
