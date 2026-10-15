@@ -1,4 +1,12 @@
 #[cfg(windows)]
+fn owned_shell_string(text:&str)->Result<windows::Win32::System::Com::StructuredStorage::PROPVARIANT,String>{
+    use windows::Win32::System::{Com::StructuredStorage::{PROPVARIANT,PropVariantChangeType,PVCHF_DEFAULT},Variant::VT_LPWSTR};
+    let source=PROPVARIANT::from(text);let mut value=PROPVARIANT::default();
+    unsafe{PropVariantChangeType(&mut value,&source,PVCHF_DEFAULT,VT_LPWSTR).map_err(|e|e.to_string())?;}
+    Ok(value)
+}
+
+#[cfg(windows)]
 pub fn choose_folder(owner:isize,initial:Option<&str>)->Result<Option<String>,String>{
     use windows::{core::w,Win32::{Foundation::HWND,System::Com::{CoInitializeEx,CoUninitialize,CoCreateInstance,CoTaskMemFree,COINIT_APARTMENTTHREADED,CLSCTX_INPROC_SERVER},UI::Shell::{IFileOpenDialog,FileOpenDialog,FOS_PICKFOLDERS,FOS_FORCEFILESYSTEM,FOS_PATHMUSTEXIST,FOS_NOCHANGEDIR,SIGDN_FILESYSPATH}}};
     struct Apartment;impl Drop for Apartment{fn drop(&mut self){unsafe{CoUninitialize();}}}
@@ -32,20 +40,26 @@ pub fn taskbar_icon(window:&tauri::WebviewWindow,bytes:&[u8],key:&str)->Result<(
     unsafe{SetClassLongPtrW(hwnd,GCLP_HICON,handle);SetClassLongPtrW(hwnd,GCLP_HICONSM,handle);SendMessageW(hwnd,WM_SETICON,Some(WPARAM(1)),Some(LPARAM(handle)));SendMessageW(hwnd,WM_SETICON,Some(WPARAM(0)),Some(LPARAM(handle)));}
     // Running taskbar groups can prefer Shell's relaunch icon over WM_GETICON.
     // Keep that icon in the private profile; do not edit pinned user shortcuts.
-    use windows::Win32::{Foundation::PROPERTYKEY,System::{Com::StructuredStorage::{PROPVARIANT,PropVariantChangeType,PVCHF_DEFAULT},Variant::VT_LPWSTR},Storage::EnhancedStorage::{PKEY_AppUserModel_RelaunchIconResource,PKEY_AppUserModel_RelaunchCommand,PKEY_AppUserModel_RelaunchDisplayNameResource},UI::Shell::PropertiesSystem::{SHGetPropertyStoreForWindow,IPropertyStore}};
+    use windows::Win32::{Foundation::PROPERTYKEY,Storage::EnhancedStorage::{PKEY_AppUserModel_RelaunchIconResource,PKEY_AppUserModel_RelaunchCommand,PKEY_AppUserModel_RelaunchDisplayNameResource},UI::Shell::PropertiesSystem::{SHGetPropertyStoreForWindow,IPropertyStore}};
     let directory=crate::profile::directory().map_err(|e|e.to_string())?.join("icons");std::fs::create_dir_all(&directory).map_err(|e|e.to_string())?;let path=directory.join(format!("{key}.ico"));
     let mut ico=vec![0,0,1,0,1,0,0,0,0,0,1,0,32,0];ico.extend_from_slice(&(bytes.len() as u32).to_le_bytes());ico.extend_from_slice(&22_u32.to_le_bytes());ico.extend_from_slice(bytes);
     if std::fs::read(&path).ok().as_deref()!=Some(ico.as_slice()){let temporary=path.with_extension("tmp");std::fs::write(&temporary,ico).map_err(|e|e.to_string())?;std::fs::rename(temporary,&path).map_err(|e|e.to_string())?;}
     unsafe{
         let store:IPropertyStore=SHGetPropertyStoreForWindow(hwnd).map_err(|e|e.to_string())?;
         fn set(store:&IPropertyStore,key:&PROPERTYKEY,text:&str)->Result<(),String>{
-            let source=PROPVARIANT::from(text);let mut value=PROPVARIANT::default();
-            // The SDK owns both strings; PropVariantClear must never free a Vec.
-            unsafe{PropVariantChangeType(&mut value,&source,PVCHF_DEFAULT,VT_LPWSTR).map_err(|e|e.to_string())?;store.SetValue(key,&value).map_err(|e|e.to_string())}
+            // The SDK owns the string; PropVariantClear must never free a Vec.
+            let value=owned_shell_string(text)?;unsafe{store.SetValue(key,&value).map_err(|e|e.to_string())}
         }
         set(&store,&PKEY_AppUserModel_RelaunchCommand,&format!("\"{}\"",std::env::current_exe().map_err(|e|e.to_string())?.display()))?;
         set(&store,&PKEY_AppUserModel_RelaunchDisplayNameResource,"Reed 苇")?;
         set(&store,&PKEY_AppUserModel_RelaunchIconResource,&path.to_string_lossy())?;store.Commit().map_err(|e|e.to_string())?;
     }
     Ok(())
+}
+
+#[cfg(all(test,windows))]
+mod tests{
+    #[test]fn shell_property_strings_survive_source_drop_and_repeated_release(){
+        for _ in 0..100{let source=String::from("D:\\测试目录\\Reed 苇.ico");let value=super::owned_shell_string(&source).unwrap();drop(source);assert_eq!(value.vt(),windows::Win32::System::Variant::VT_LPWSTR);let text=unsafe{value.Anonymous.Anonymous.Anonymous.pwszVal.to_string().unwrap()};assert_eq!(text,"D:\\测试目录\\Reed 苇.ico");drop(value);}
+    }
 }
