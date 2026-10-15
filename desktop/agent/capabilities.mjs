@@ -180,7 +180,19 @@ export class CapabilityStore {
   }
   async resolveFile(input,workspace) {
     let raw=String(input); if(raw.startsWith("summon-file:")) raw=decodeURIComponent(raw.slice(12).split("#")[0]); else if(raw.startsWith("file:")) raw=decodeURIComponent(new URL(raw).pathname).replace(/^\/(?=[A-Za-z]:)/,""); else raw=decodeURIComponent(raw.split("#")[0]);
-    const path=await realpath(resolve(workspace,raw)), roots=[workspace,this.state.vaultPath,join(this.dir,"attachments")].filter(Boolean);
+    raw=raw.replace(/^\[\[([^\]]+)\]\]$/,'$1').replace(/^\[([^\]]+)\]$/,'$1');
+    const roots=[workspace,this.state.vaultPath,join(this.dir,"attachments")].filter(Boolean);
+    let path;
+    try{path=await realpath(resolve(workspace,raw));}catch(error){
+      if(error.code!=='ENOENT'||isAbsolute(raw)||!this.state.vaultPath)throw error;
+      const candidate=resolve(this.state.vaultPath,raw);if(!inside(this.state.vaultPath,candidate))throw Error('引用路径超出笔记库范围');
+      try{path=await realpath(candidate);}catch(missing){
+        if(missing.code!=='ENOENT')throw missing;
+        const name=basename(raw).toLocaleLowerCase();const matches=await walk(this.state.vaultPath,p=>basename(p).toLocaleLowerCase()===name);
+        if(matches.length!==1)throw Error(matches.length?'存在多份同名笔记，请使用含目录的完整引用。':'引用的笔记不存在，请重新检索来源。');
+        path=await realpath(matches[0].path);
+      }
+    }
     if(!roots.some(r=>inside(r,path)) || !(await lstat(path)).isFile()) throw new Error("文件不在当前项目、笔记库或附件目录内");
     if(![".html",".htm",".md",".txt",".pdf",".png",".jpg",".jpeg",".svg",".csv"].includes(extname(path).toLowerCase())) throw new Error("此文件类型不支持直接打开"); return path;
   }
