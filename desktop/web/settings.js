@@ -2,7 +2,7 @@ import { createLearningMode } from './learning-mode.js';
 const $ = id => document.getElementById(id);
 import { icon, windowHandles } from "./icons.js";
 import { createSkillBindings } from "./role-skills.js";
-const roleLearningMode=createLearningMode(document.getElementById('role-learning-mode'));
+const roleLearningMode=createLearningMode(document.getElementById('role-learning-mode'),{onChange:async(features)=>{if(!roleId)return false;await command('set_role_learning',{roleId,...features});return true;}});
 const roleSkills = createSkillBindings($("role-skills"));
 import { initBrand, saveAppearance, appVersion } from "./brand.js";
 import { checkForUpdate, installUpdate, openReleasePage } from "./update.js";

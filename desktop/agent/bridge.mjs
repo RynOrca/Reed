@@ -600,8 +600,10 @@ async function handle(command) {
           if (!session.state.messages.some(message => message.role === "user")) throw new Error("请先进行对话，再整理记忆");
           if (!memory.state.enabled.l1 && !memory.state.enabled.l2) throw new Error("请先开启画像或知识库记忆");
         memoryAgent.cancel(); void memoryAgent.consolidate(); send({ type: "ack", id }); break;
+      case "set_role_learning":
       case "save_role": {
         if (busy) throw new Error("请先等待当前回复结束");
+        if(command.type==='set_role_learning'){const role=roles.list().roles.find(r=>r.id===command.roleId);if(!role)throw Error('找不到该角色');command={...command,name:role.name,system:role.system};}
         if(command.skills?.some(b=>!capabilities.state.skills.some(s=>s.id===b.skillId))) throw new Error("找不到绑定的技能，请刷新技能仓库");
         const roleId = await roles.save(command);
         if (roleId === roles.activeId) {

@@ -7,7 +7,7 @@ import { renderMarkdown } from "./markdown.js";
 import { icon, windowHandles } from "./icons.js";
 const $ = (id) => document.getElementById(id);
 import { createSkillBindings } from "./role-skills.js";
-const roleLearningMode=createLearningMode(document.getElementById('role-learning-mode'));
+const roleLearningMode=createLearningMode(document.getElementById('role-learning-mode'),{onChange:async(features)=>{if(!editingRoleId)return false;await command('set_role_learning',{roleId:editingRoleId,...features},true);return true;}});
 const roleSkills = createSkillBindings($("role-skills"));
 import { initBrand, finishStartup } from "./brand.js";
 const tauri = window.__TAURI__;

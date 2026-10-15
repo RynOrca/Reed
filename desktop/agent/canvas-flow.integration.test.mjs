@@ -25,7 +25,11 @@ test('真实 bridge 画布：打开整理、显式引用追问、布局保存、
     await writeFile(join(data,'app-state.json'),JSON.stringify({provider:'synthetic',modelId:'mock',projectPath:root}));
     child=spawn(process.execPath,[fileURLToPath(new URL('./bridge.mjs',import.meta.url))],{cwd:root,windowsHide:true,env:{...process.env,SUMMON_DATA_DIR:data,SUMMON_WORKSPACE:root},stdio:['pipe','pipe','pipe']});child.stderr.resume();
     createInterface({input:child.stdout}).on('line',line=>{const event=JSON.parse(line);seen.push(event);for(const waiter of [...waiters])if(waiter.predicate(event)){clearTimeout(waiter.timer);waiters.delete(waiter);waiter.resolve(event);}});
-    await until(e=>e.type==='ready');await command('init');const sessionId=seen.findLast(e=>e.type==='session').sessionId;
+    await until(e=>e.type==='ready');await command('init');
+    await command('save_role',{name:'自定义学习助手',system:'保留角色说明'});const roleId=seen.findLast(e=>e.type==='roles').roles.find(r=>r.name==='自定义学习助手').id;
+    await command('select_role',{roleId});await command('set_role_learning',{roleId,learningModeEnabled:true,canvasEnabled:true});
+    const roleSaved=JSON.parse(await readFile(join(data,'user-config.json'),'utf8')).roles.roles.find(r=>r.id===roleId);assert.equal(roleSaved.canvasEnabled,true);assert.equal(roleSaved.system,'保留角色说明');assert.equal(seen.findLast(e=>e.type==='session').canvasEnabled,true);
+    const sessionId=seen.findLast(e=>e.type==='session').sessionId;
     await command('prompt',{text:'为什么要切块？'});assert.equal(analysisCalls,0);
     const opened=await command('canvas_open',{sessionId});assert.equal(opened.graph.nodes.length,1);const nodeId=opened.graph.nodes[0].id;
     await until(e=>e.type==='canvas'&&e.state==='ready'&&e.graph.nodes[0]?.state==='ready');
