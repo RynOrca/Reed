@@ -1,6 +1,7 @@
 import { createLearningMode } from './learning-mode.js';
 // Transcript row structure and disclosure behavior adapted from PI-Desktop 0.16.1.
 import { createGoals } from "./goals.js";
+import { createConversationCanvas } from "./conversation-canvas.js";
 import { createMessageNavigation } from "./message-navigation.js";
 import { renderMarkdown } from "./markdown.js";
 import { icon, windowHandles } from "./icons.js";
@@ -44,6 +45,14 @@ const queuedTexts = new Map();
 let attachments = [];
 let followLatest = true;
 const goalsPanel = createGoals({command});
+const canvasPanel = createConversationCanvas({command,tauri,prompt,isRunning:()=>running,reportError:errorRow,onJump:async(messageId)=>{
+  if(running)throw new Error("请等待当前回复结束后定位原文");
+  await command("get_history",{},true);
+  const row=messages.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+  if(!row)throw new Error("当前会话分支中未找到这条原文");
+  followLatest=false;row.scrollIntoView({block:"center",behavior:"smooth"});
+  row.animate([{backgroundColor:"var(--goal-accent-soft)"},{backgroundColor:"transparent"}],{duration:1600});
+}});
 createMessageNavigation({messages,transcript,onNavigate:()=>{followLatest=false;}});
 transcript.addEventListener("scroll",()=>{followLatest=transcript.scrollHeight-transcript.clientHeight-transcript.scrollTop<65;},{passive:true});
 
@@ -261,6 +270,7 @@ function restoreHistory(history) {
         updateDisclosure(toolRows.get(block.id), "done");
       }
     }
+    if(content&&message.messageId)content.closest('.message-row').dataset.messageId=message.messageId;
     if (message.role === "user" && content) {
       const marker = "附件文件（可使用 read 工具读取）：\n";
       const index = content.textContent.lastIndexOf(marker);
@@ -458,6 +468,7 @@ function onEvent(event) {
       $("model-button").title = response.model || "选择模型";
       activeSessionId = response.sessionId || "";
       activeSessionName = response.sessionName || "";
+      void canvasPanel.session(activeSessionId,response.canvasEnabled===true,response.canvasOpen===true,activeSessionName);
       updateModelChip(response);$("compaction-state").textContent=response.autoCompaction?"自动压缩已开启":"自动压缩已关闭";
       $("workspace-label").textContent = (response.workspace || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "无项目";
       $("workspace-button").title = response.workspace || "切换工作目录";
@@ -482,6 +493,7 @@ function onEvent(event) {
       if (running) status(response.phase === "local" ? "正在查找本地笔记…" : response.phase === "expanding" ? "正在扩展笔记检索词（最多等待 5 秒）…" : response.phase === "fallback" ? "已使用本地检索结果，正在生成回复…" : response.count ? `已找到 ${response.count} 段笔记，正在生成回复…` : "正在生成回复…");
       break;
     case "memory_status": if (!running) status(response.status === "organizing" ? "Agent 正在整理记忆…" : "就绪"); break;
+    case "canvas": canvasPanel.event(response); break;
     case "sessions": renderSessions(response.sessions || []); break;
     case "history": restoreHistory(response.messages || []); status("就绪"); break;
     case "stopping": stopping=true;$("stop-button").disabled=true;if(response.turnId)activeTurnId=response.turnId;status(response.message||"正在停止，等待请求结束…");break;
@@ -522,7 +534,7 @@ function onEvent(event) {
       break;
     }
     case "compaction": $("compaction-state").textContent=response.status==="running"?"正在压缩上下文…":response.status==="error"?"压缩失败："+response.message:response.status==="skipped"?response.message:"上下文已压缩";$("compact-now").disabled=response.status==="running";break;
-    case "started": recoveryStatus = ""; submitted = null; turnErrorShown = false; activeTurnId = response.turnId || response.id || null; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
+    case "started": canvasPanel.foreground(); recoveryStatus = ""; submitted = null; turnErrorShown = false; activeTurnId = response.turnId || response.id || null; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
     case "message_outcome":
       finishThinking(response.outcome);
       assistantRow = null; thinkingRow = null; break;
@@ -539,6 +551,7 @@ function onEvent(event) {
       if (response.final === false) break;
       if (!turnMatches(response)) break;
       setRunning(false); finishThinking(response.outcome);
+      if(response.outcome?.status==='complete')canvasPanel.clearReference();
       if (response.outcome && response.outcome.status !== "complete") {
         status(outcomeLabel(response.outcome));
         if (response.outcome.status !== "aborted" && !turnErrorShown) errorRow(response.outcome.message || outcomeLabel(response.outcome));
@@ -589,7 +602,8 @@ document.addEventListener("click", event => {
   const link = event.target.closest?.("a[data-local-file]"); if (!link) return; event.preventDefault();
   void command("resolve_file", { path: link.dataset.localFile }, true).then(r => tauri.core.invoke("open_local_file", { path: r.path })).catch(e => errorRow(String(e.message || e)));
 });
-function command(type, args = {}, awaitReply = false) {
+async function command(type, args = {}, awaitReply = false) {
+  if(['open_session','new_session','select_role','change_workspace','save_role'].includes(type))await canvasPanel.flush();
   if (!tauri) return Promise.reject(new Error("需要在 Tauri 桌面窗口中运行"));
   const id = `${commandPrefix}${++sequence}`;
   if(type==='prompt')activePromptId=id;
@@ -606,6 +620,7 @@ $("composer").addEventListener("submit", async (event) => {
   const text = prompt.value.trim();
   if ((!text && !attachments.length)) return;
   if (running) {
+    if(canvasPanel.reference()){errorRow("请等待当前回复结束后发送画布追问。");return;}
     if (attachments.length) { errorRow("引导和排队目前支持文本；附件请在当前任务完成后发送。"); return; }
     queuedTexts.set(text,(queuedTexts.get(text)||0)+1);
     try { await command("queue_message", { text, mode: "followUp" }, true); prompt.value = ""; updateSendAvailability(); } catch(e) { queuedTexts.delete(text); errorRow(String(e.message || e)); } return;
@@ -633,7 +648,8 @@ $("composer").addEventListener("submit", async (event) => {
   attachments = []; renderAttachments();
   prompt.value = ""; prompt.style.height = "auto";
   setRunning(true);
-  void command("prompt", { text: outgoing, images: items.filter((item) => item.kind === "image").map(({ data, mimeType }) => ({ type: "image", data, mimeType })) });
+  const reference=canvasPanel.reference();
+  void command("prompt", { text: outgoing, ...(reference?{canvasSessionId:reference.sessionId,canvasNodeId:reference.nodeId}:{}), images: items.filter((item) => item.kind === "image").map(({ data, mimeType }) => ({ type: "image", data, mimeType })) });
 });
 $("add-image").addEventListener("click", () => $("attachment-picker").click());
 $("attachment-picker").addEventListener("change", (event) => {

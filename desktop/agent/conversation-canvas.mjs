@@ -66,7 +66,7 @@ export class ConversationCanvasStore{
   async edit(id,patch){
     if(!patch||typeof patch!=='object')throw Error('画布修改无效');
     return this.change(id,graph=>{
-      if(patch.view){const {x,y,scale}=patch.view;if(![x,y,scale].every(Number.isFinite)||scale<.1||scale>3||Math.abs(x)>1e7||Math.abs(y)>1e7)throw Error('画布视图无效');graph.view={x,y,scale};}
+      if(patch.view){const {x,y,scale}=patch.view;if(![x,y,scale].every(Number.isFinite)||scale<.1||scale>3||Math.abs(x)>1e7||Math.abs(y)>1e7)throw Error('画布视图无效');graph.view={x,y,scale,saved:true};}
       if(patch.nodes!==undefined){if(!Array.isArray(patch.nodes)||patch.nodes.length>200)throw Error('节点修改数量无效');for(const change of patch.nodes){const node=graph.nodes.find(n=>n.id===change.id);if(!node)throw Error('画布节点不存在');
         if(change.x!==undefined||change.y!==undefined){if(![change.x,change.y].every(Number.isFinite)||Math.abs(change.x)>1e6||Math.abs(change.y)>1e6)throw Error('节点坐标无效');node.x=change.x;node.y=change.y;node.manualPosition=true;}
         if(change.title!==undefined){if(typeof change.title!=='string'||!change.title.trim()||change.title.length>100)throw Error('节点标题无效');node.title=change.title.trim();node.manualTitle=true;}

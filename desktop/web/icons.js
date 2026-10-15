@@ -1,4 +1,6 @@
 const paths={
+  graph:["M4 10h5v5H4Z","M16 3h5v5h-5ZM16 17h5v5h-5Z","M9 12h3V5h4M12 12v7h4"],
+  fit:["M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5"],
   pin:["M9 3h6l-1 6 4 4v2H6v-2l4-4-1-6Z","M12 15v7"],
   archive:["M5 4h14a2 2 0 0 1 2 2v2H3V6a2 2 0 0 1 2-2Z","M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8","M9 12h6"],
   new:["M12 5v14M5 12h14"],history:["M3 11a9 9 0 1 1 2.8 7M3 4v7h7","M12 7v5l3 2"],spark:["m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z"],
