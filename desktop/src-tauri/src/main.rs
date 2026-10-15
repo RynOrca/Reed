@@ -207,6 +207,9 @@ fn brand_icon(style: &str, dark: bool) -> tauri::Result<tauri::image::Image<'sta
 #[tauri::command]
 fn update_brand_icon(app: tauri::AppHandle, style: String, dark: bool) -> Result<(), String> {
     if !["glass", "illustrated"].contains(&style.as_str()) { return Err("图标风格无效".into()); }
+    let prefs=read_preferences(&app);
+    let style=prefs["iconStyle"].as_str().filter(|value|["glass","illustrated"].contains(value)).unwrap_or(&style).to_owned();
+    let dark=match prefs["theme"].as_str(){Some("dark")=>true,Some("light")=>false,_=>dark};
     let icon=brand_icon(&style,dark).map_err(|e|e.to_string())?;
     if let Some(tray)=app.tray_by_id("reed-tray") { tray.set_icon(Some(icon.clone())).map_err(|e|e.to_string())?; }
     for window in app.webview_windows().values() {

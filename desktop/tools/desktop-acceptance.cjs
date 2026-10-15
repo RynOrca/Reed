@@ -93,7 +93,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     await settings.locator('#shortcut').filter({hasText:'Ctrl+Alt+Shift+F11'}).waitFor();
     const prefs = JSON.parse(await fs.readFile(path.join(data,'user-config.json'),'utf8')).desktop; assert.equal(prefs.shortcut,'Ctrl+Alt+Shift+F11'); checks.push('按键录入和真实全局快捷键注册');
     await main.locator('#startup').waitFor({state:'hidden'});
-    assert.equal(await main.title(),'Reed 一苇');
+    assert.equal(await main.title(),'Reed 苇');
     const brandPrefs=await main.evaluate(()=>window.__TAURI__.core.invoke('desktop_preferences'));
     assert.equal(brandPrefs.trayAvailable,true);
     const transparentIcons=await main.evaluate(async()=>Promise.all(['glass-light','glass-dark','illustrated-light','illustrated-dark'].map(async name=>{
