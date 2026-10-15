@@ -51,3 +51,14 @@ test("取消后不再发起扩词检索，只返回已得到的本地结果", as
   assert.equal(searched, 1, "取消后不得再扫描笔记库");
   assert.equal(hits.length, 1);
 });
+
+test('多条扩词反复命中的平台介绍不能压过原问题的切块策略',async()=>{
+  const weak={...hit('FastGPT'),content:'FastGPT 基于 RAG，可以上传文档，设置 chunk 大小。'};
+  const answer={...hit('文档切块'),heading:'文档切块策略',content:'文档切块应评估 chunk 边界；固定长度、递归切块和语义切块是三种策略。'};
+  const capabilities={state:{vaultPath:'/vault'},async searchNotes(){return [weak,answer];},async searchMany(queries){return queries.map(()=>[weak]);}};
+  const retrieve=createNoteRetriever({capabilities,runtime:async()=>planner(['FastGPT','低代码平台','RAG 平台']),model:()=>({provider:'test',id:'planner'})});
+  const hits=await retrieve('RAG 文档切块 chunk 策略');
+  assert.equal(hits[0].path,answer.path);
+  assert.ok(hits[0].score>hits[1].score);
+  assert.equal(hits.length,2,'重复扩词命中只保留一份原文');
+});
