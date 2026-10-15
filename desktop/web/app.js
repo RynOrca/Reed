@@ -47,7 +47,13 @@ let attachments = [];
 let followLatest = true;
 const goalsPanel = createGoals({command});
 const projectPicker=createProjectPicker({button:$('workspace-button'),command,tauri,isRunning:()=>running,onError:errorRow,onSelect:()=>{closeHistory();prompt.focus();}});
-const canvasPanel = createConversationCanvas({command,tauri,prompt,isRunning:()=>running,reportError:errorRow,onJump:async(messageId)=>{
+const canvasPanel = createConversationCanvas({command,tauri,prompt,isRunning:()=>running,reportError:errorRow,onUnavailable:()=>{
+  const role=roles.find(item=>item.id===activeRoleId);
+  if(!role){void command('get_state').catch(roleError);return;}
+  openRoleEditor(role);if(!rolesDialog.open)rolesDialog.showModal();
+  roleError('请启用此角色的「对话画布」，保存后即可从左侧展开。');
+  $('role-canvas-enabled').focus();
+},onJump:async(messageId)=>{
   if(running)throw new Error("请等待当前回复结束后定位原文");
   await command("get_history",{},true);
   const row=messages.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
@@ -370,6 +376,10 @@ function roleError(error) {
   $("role-error").textContent = String(error);
   $("role-error").hidden = false;
 }
+function openRoleEditor(role){
+  editingRoleId=role.id;$('role-name').value=role.name;$('role-system').value=role.system||'';
+  roleLearningMode.set(role);roleSkills.set(role.skills);$('role-editor').hidden=false;$('role-name').focus();
+}
 function renderRoles() {
   const list = $("roles-list");
   list.replaceChildren();
@@ -388,15 +398,7 @@ function renderRoles() {
     });
     const edit = document.createElement("button");
     edit.type = "button"; edit.textContent = "编辑";
-    edit.addEventListener("click", () => {
-      editingRoleId = role.id;
-      $("role-name").value = role.name;
-      $("role-system").value = role.system || "";
-      roleLearningMode.set(role);
-      roleSkills.set(role.skills);
-      $("role-editor").hidden = false;
-      $("role-name").focus();
-    });
+    edit.addEventListener("click", () => openRoleEditor(role));
     row.append(use, edit);
     if (!role.builtin) {
       const remove = document.createElement("button");
@@ -460,7 +462,7 @@ function onEvent(event) {
       $("model-button").title = response.model || "选择模型";
       activeSessionId = response.sessionId || "";
       activeSessionName = response.sessionName || "";
-      void canvasPanel.session(activeSessionId,response.canvasEnabled===true,response.canvasOpen===true,activeSessionName);
+      void canvasPanel.session(activeSessionId,response.canvasEnabled===true,response.canvasOpen===true,activeSessionName,response.learningModeEnabled===true||response.learningGoalsEnabled===true);
       updateModelChip(response);$("compaction-state").textContent=response.autoCompaction?"自动压缩已开启":"自动压缩已关闭";
       $("workspace-label").textContent = (response.workspace || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "无项目";
       $("workspace-button").title = response.workspace || "切换工作目录";

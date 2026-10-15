@@ -1,7 +1,7 @@
 import {icon} from './icons.js';
 import {renderMarkdown} from './markdown.js';
 
-export function createConversationCanvas({command,tauri,prompt,isRunning,onJump,reportError}){
+export function createConversationCanvas({command,tauri,prompt,isRunning,onJump,reportError,onUnavailable}){
   const shell=document.querySelector('.chat-shell'),body=document.querySelector('.chat-body'),transcript=document.getElementById('transcript');
   const workspace=document.createElement('div');workspace.className='reed-workspace';shell.before(workspace);
   const pane=document.createElement('section');pane.className='canvas-pane';pane.hidden=true;pane.setAttribute('aria-label','对话画布');
@@ -93,7 +93,7 @@ export function createConversationCanvas({command,tauri,prompt,isRunning,onJump,
     }catch(error){if(ticket===epoch){setStatus(error.message,'error');if(!value)reportError(error.message);if(value&&state==='error'&&!graph)q('empty').hidden=false;}}
     finally{if(ticket===epoch)transitioning=false;}
   }
-  handle.onclick=()=>void setOpen(!opened);q('close').onclick=()=>void setOpen(false);
+  handle.onclick=()=>{if(!available){onUnavailable?.();return;}void setOpen(!opened);};q('close').onclick=()=>void setOpen(false);
   q('retry').onclick=async()=>{if(saveFailure){await flush();return;}try{setStatus('正在重新整理…','organizing');if(!graph){const result=await command('canvas_open',{sessionId},true);applyGraph(result.graph);}else await command('canvas_retry',{sessionId},true);}catch(error){setStatus(error.message,'error');}};
   q('arrange').onclick=()=>{if(!graph)return;const positions=graph.nodes.map((n,index)=>({id:n.id,x:24+Math.floor(index/4)*290,y:40+(index%4)*190}));for(const change of positions){dirtyNodes.set(change.id,change);Object.assign(graph.nodes.find(n=>n.id===change.id),change);}viewTouched=false;render();fit(true,false);void flush();};
   q('plus').onclick=()=>zoom(scale*1.15);q('minus').onclick=()=>zoom(scale/1.15);q('zoom').onclick=()=>zoom(1);q('fit').onclick=()=>fit();q('minimap').onclick=()=>fit();clear.onclick=clearReference;
@@ -106,11 +106,16 @@ export function createConversationCanvas({command,tauri,prompt,isRunning,onJump,
   document.addEventListener('keydown',e=>{if(e.key!=='Escape'||document.querySelector('dialog[open]'))return;if(!source.hidden){closeSource();e.preventDefault();}else if(opened&&e.target.closest?.('.canvas-pane')){void setOpen(false);e.preventDefault();}});
   new ResizeObserver(()=>{if(opened){if(!viewTouched)fit(true,false);else transform();}}).observe(viewport);
   return {
-    async session(next,enabled,backendOpen=false,name=''){
+    async session(next,enabled,backendOpen=false,name='',entryEnabled=enabled){
       q('title').textContent=name||'当前对话';
+      // Discoverability follows the learning entry; permission still gates every operation.
+      handle.hidden=entryEnabled!==true;
+      handle.title=enabled===true?(opened?'收起对话画布':'展开对话画布'):'启用对话画布';
+      handle.setAttribute('aria-label',handle.title);
+      shell.classList.toggle('canvas-available',entryEnabled===true);
       if(next===sessionId&&enabled===available){if(opened&&!backendOpen&&!transitioning){try{await command('canvas_open',{sessionId},true);}catch(error){setStatus(error.message,'error');}}return;}
       const wasOpen=opened;epoch++;sourceEpoch++;clearTimeout(zoomTimer);available=false;closeSource();clearReference();rename.close();graph=null;deferredGraph=null;gesture=null;selected=null;dirtyNodes.clear();dirtyView=null;saveFailure=false;viewTouched=false;nodeElements.clear();q('nodes').replaceChildren();q('edges').replaceChildren();
-      opened=false;transitioning=false;pane.hidden=true;workspace.classList.remove('canvas-expanded');handle.setAttribute('aria-expanded','false');sessionId=next||'';available=enabled===true;handle.hidden=!available;shell.classList.toggle('canvas-available',available);
+      opened=false;transitioning=false;pane.hidden=true;workspace.classList.remove('canvas-expanded');handle.setAttribute('aria-expanded','false');sessionId=next||'';available=enabled===true;
       if(wasOpen){try{await nativeWindow(false);}catch(error){reportError(error.message);}}
     },
     event(event){if(event.sessionId!==sessionId||!available||!opened)return;if(event.graph)applyGraph(event.graph);if(saveFailure)return;if(event.state==='organizing')setStatus('正在整理本轮问答…','organizing');else if(event.state==='error')setStatus(event.message||'本轮整理未完成，已有画布已保留','error');else if(event.state==='ready')setStatus('已整理当前对话','ready');},
