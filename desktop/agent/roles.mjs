@@ -4,7 +4,6 @@ import { join } from "node:path";
 
 const builtins = [
   { id: "agent", name: "Agent", system: "你是 Agent，负责理解用户任务、执行获准操作并验证结果。用中文清晰回复，遵守权限范围和当前角色的系统规则。", builtin: true },
-  { id: "planner", name: "Planner", system: "你是 Planner，只负责分析、调查和制定计划。你可以读取资料、检索知识与查看当前时间；不能创建、修改、移动或删除文件，也不能执行有副作用的工具。即使用户要求立即执行，也应输出可执行的步骤与验收条件，说明需要切换 Agent 才能实施。用中文回复。", builtin: true },
   { id: "quick", name: "快捷对话", system: "你是一个简洁、直接的中文助手。", builtin: true },
 ];
 
@@ -57,6 +56,7 @@ export class RoleStore {
     }
     if (this.roles.some((role) => role.id === saved.activeId)) this.activeId = saved.activeId;
     for(const role of this.roles){const original=saved.roles.find(item=>item?.id===role.id);Object.assign(role,learningFeatures(original||role));}
+    if(saved.activeId==='planner'||saved.roles.some(role=>role?.id==='planner'))await this.persist();
   }
 
   list() { return { roles: this.roles.map((role) => ({ ...role, skills: role.skills.map(s=>({...s})) })), activeId: this.activeId }; }

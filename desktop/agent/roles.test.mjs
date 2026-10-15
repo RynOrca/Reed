@@ -10,7 +10,7 @@ test("角色预设可保存、重载、选择和删除，内置角色受保护",
   try {
     const first = new RoleStore(directory);
     await first.load();
-    assert.deepEqual(first.list().roles.map((role) => role.id), ["agent", "planner", "quick"]);
+    assert.deepEqual(first.list().roles.map((role) => role.id), ["agent", "quick"]);
     const id = await first.save({ name: "翻译官", system: "只做准确翻译" });
     await first.select(id);
 
@@ -24,10 +24,16 @@ test("角色预设可保存、重载、选择和删除，内置角色受保护",
 
     const third = new RoleStore(directory);
     await third.load();
-    assert.equal(third.list().roles.length, 3);
+    assert.equal(third.list().roles.length, 2);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('移除旧内置Planner后回退Agent，保留自定义角色',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'reed-planner-migration-'));
+  try{await writeFile(join(directory,'roles.json'),JSON.stringify({activeId:'planner',roles:[{id:'planner',name:'Planner',system:'旧规划角色'},{id:'role-user',name:'我的助手',system:'保留我的说明'}]}));const store=new RoleStore(directory);await store.load();assert.equal(store.activeId,'agent');assert.equal(store.list().roles.some(r=>r.id==='planner'),false);assert.equal(store.list().roles.find(r=>r.id==='role-user').system,'保留我的说明');await assert.rejects(store.select('planner'),/找不到/);}
+  finally{await rm(directory,{recursive:true,force:true});}
 });
 
 test('学习模式按角色统一权限，旧混合配置不扩大权限，画布显式开启并重载',async()=>{
