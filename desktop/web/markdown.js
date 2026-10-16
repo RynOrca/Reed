@@ -104,6 +104,15 @@ function blocks(tokens = [], options = {}) {
   return fragment;
 }
 
+// 行内富文本（含 $...$ 与 \(...\) 公式）：给流程图标签、结果值这类本来只当纯文本
+// 显示的字段用，避免模型写的 LaTeX 被原样展示。这里要的是行内 token，
+// 直接用 marked 的行内词法器，不能走 blocks 词法器（那会多包一层段落）。
+export function renderInline(root, source, options = {}) {
+  const lexer = new marked.Lexer({ ...marked.defaults, gfm: true });
+  const tokens = lexer.inlineTokens(String(source ?? ""));
+  root.replaceChildren(inline(tokens, { ...options, notes: options.notes || new Map(), taskIndex: { value: 0 } }));
+}
+
 export function renderMarkdown(root, source, options = {}) {
   const lines=String(source||'').split(/\r?\n/),body=[],notes=new Map();let fence=null;
   root._citationPrefix??='reed-source-'+crypto.randomUUID();

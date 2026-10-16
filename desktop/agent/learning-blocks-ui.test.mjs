@@ -193,6 +193,28 @@ test('恢复出来的题目可以作答，并用本地键记住已答',()=>{
 function await0(root){return root.textContent;}
 function serialize(node){if(!node||typeof node!=='object')return '';if(node.nodeType===3)return node.textContent;const cls=node.className?` class="${node.className}"`:'';const own=`data-id=${node.dataset?.blockId||'-'} onclick=${typeof node.onclick} disabled=${node.disabled}`;return `<${String(node.tagName||'?').toLowerCase()}${cls} ${own}>${(node.children||[]).map(serialize).join('')}</${String(node.tagName||'?').toLowerCase()}>`;}
 
+test('组件字段里的 $...$ 也排版成公式，不再显示 LaTeX 源码',()=>{
+  const spec={schemaVersion:1,fallbackText:'x',blocks:[
+    {id:'f',type:'flow',title:'数据流',fallbackText:'x',nodes:[{label:'密钥 $n = p\\cdot q$',value:'$\\mu = L(g^{\\lambda})^{-1}$',note:'其中 $\\lambda = \\mathrm{lcm}(p-1,q-1)$'}]},
+    {id:'r',type:'result',title:'结果',fallbackText:'x',items:[{label:'和',value:'$m_1 + m_2$',note:'模 $n$'}]},
+    {id:'c',type:'choices',title:'选一个',fallbackText:'x',options:[{id:'a',label:'$3(m_1+m_2)$',replyText:'我选 $3(m_1+m_2)$。'}]},
+    {id:'fl',type:'fill',title:'填空',fallbackText:'x',label:'$c_{\\mathrm{sum}} =$'},
+  ]};
+  const view=renderLearning(spec);
+  const mathNodes=[];
+  const collect=node=>{if(!node||typeof node!=='object')return;if(String(node.className||'').includes('reed-math'))mathNodes.push(node);for(const child of node.children||[])collect(child);};
+  collect(view.root);
+  assert.ok(mathNodes.length>=5,'每个带 $...$ 的字段都应产生公式节点，实际 '+mathNodes.length);
+  const flowNode=(()=>{const matches=[];const walk=node=>{if(!node||typeof node!=='object')return;if(String(node.className||'').split(' ').includes('learning-node'))matches.push(node);for(const child of node.children||[])walk(child);};walk(view.root);return matches[0];})();
+  assert.ok(flowNode,'流程图节点应渲染');
+  assert.ok(flowNode.children.some(child=>child.tagName==='STRONG'),'节点值容器结构保持');
+  assert.ok(String(flowNode.textContent).includes('密钥'),'标签文字保留');
+  assert.equal(/\$/.test(view.root.textContent),false,'不应再显示 $ 定界符：'+view.root.textContent.slice(0,120));
+  // DOM 桩里 KaTeX 会降级成文字，源码会原样留在公式节点内；真实浏览器由 Edge 检查确认排版。
+  const button=(()=>{const matches=[];const walk=node=>{if(!node||typeof node!=='object')return;if(String(node.className||'').split(' ').includes('learning-choice'))matches.push(node);for(const child of node.children||[])walk(child);};walk(view.root);return matches[0];})();
+  assert.equal(button.attributes['aria-label'],'3(m_1+m_2)；发送：关于「选一个」：我选 3(m_1+m_2)。','无障碍名称用去掉定界符的可读文字');
+});
+
 test('正常正文不经过恢复路径',()=>{
   const root=new El('div');
   assert.equal(renderAssistantMarkdown(root,'普通 **Markdown** 段落。',renderMarkdown,{}),false);
