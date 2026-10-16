@@ -1,3 +1,4 @@
+import {readLearningSource} from './learning-source.mjs';
 import { learningBlockExtension, LEARNING_BLOCK_TOOL, validateLearningReply, learningReceipt } from './learning-blocks.mjs';
 import { semanticMatcher } from "./memory-match.mjs";
 import { createMemoryValueGate } from './memory-value.mjs';
@@ -12,7 +13,7 @@ import { classifyAssistantOutcome, isRecoverableFailure } from "./turn-outcome.m
 import { createTurnRecovery } from "./turn-recovery.mjs";
 import { createAbortWatchdog } from "./turn-watchdog.mjs";
 import { createReviewGate } from "./review-gate.mjs";
-import { ConversationCanvasStore, ConversationCanvasWorkflow, conversationPairs, canvasSource } from './conversation-canvas.mjs';
+import { ConversationCanvasStore, ConversationCanvasWorkflow, conversationPairs, canvasSource, messageText } from './conversation-canvas.mjs';
 import { createDiagnosticFetch, createRequestFetch } from "./stream-diagnostics.mjs";
 import { createVisualReview, VISUAL_TOOLS } from "./visual-review.mjs";
 import { createContextPolicy } from "./context-policy.mjs";
@@ -363,6 +364,12 @@ async function openSession(provider, modelId, sessionManager) {
       const wasRetrying = retrySync.end(event.success === true);
       if (wasRetrying && event.success !== true) flushTurnError();
     }
+    if(event.type==='message_end'&&event.message.role==='user'&&turnController?.learningSubmission&&messageText(event.message)===turnController.learningText){
+      const receipt={...turnController.learningSubmission,sessionId:session.sessionId};
+      // The SDK persists this same user message immediately after public listeners.
+      event.message.reedLearningReply=receipt;turnController.learningSubmission=null;
+      send({type:'learning_answer',...receipt});
+    }
     if (event.type === "message_start" && event.message.role === "user" && busy) send({ type: "user_delivered", text: typeof event.message.content === "string" ? event.message.content : event.message.content?.filter(b => b.type === "text").map(b => b.text).join("\n") });
     if (event.type === "message_start" && event.message.role === "assistant") { generationStart = performance.now(); firstDelta = null; pendingTurnError = null; }
     if (event.type === "message_end" && event.message.role === "assistant") {
@@ -414,6 +421,7 @@ function emitHistory() {
     type: "history",
     messages: historyBranch.filter(entry => entry.type === "message").map(entry => ({ ...entry.message, reedMessageId:entry.id, reedOutcome: visualOutcomes.get(entry.id) })).map((message) => ({
       messageId:message.reedMessageId,
+      learningReply:message.role==="user" ? message.reedLearningReply : undefined,
       role: message.role,
       stopReason: message.stopReason,
       errorMessage: message.errorMessage,
@@ -605,6 +613,8 @@ async function handle(command) {
         if (!skill) throw new Error("技能不存在");
         send({ type: "ack", id, text: (await readFile(join(skill.path, "SKILL.md"), "utf8")).slice(0, 100000) }); break;
       }
+      case "read_learning_source":
+        send({type:"ack",id,source:await readLearningSource(command.url,capabilities,cwd)});break;
       case "resolve_file":
         send({ type: "ack", id, path: await capabilities.resolveFile(command.path, cwd) }); break;
       case "save_provider": {
@@ -861,7 +871,8 @@ async function handle(command) {
         if (!session.model || session.model.provider === "unknown") throw new Error("Configure an API key and select a model first");
         if(providers.providers.find(p=>p.id===session.model.provider)?.models.find(m=>m.id===session.model.id)?.enabled===false)throw Error('当前模型已取消勾选，请选择一个已启用模型');
         if (typeof command.text !== "string") throw new Error("消息文字无效");
-        if(command.learningReply){validateLearningReply(session.sessionManager.getBranch(),session.sessionId,command.learningReply,command.text);if(command.images?.length||command.canvasNodeId)throw Error("快捷回复不能携带草稿附件或画布引用");}
+        let learningSubmission;
+        if(command.learningReply){learningSubmission=validateLearningReply(session.sessionManager.getBranch(),session.sessionId,command.learningReply,command.text);if(command.images?.length||command.canvasNodeId)throw Error("快捷回复不能携带草稿附件或画布引用");}
         const images = normalizeImages(command.images);
         if(images.length && !session.model.input?.includes("image"))throw new Error("当前模型未启用视觉能力。请在设置 → 模型中启用支持图片，再重新发送。");
         if (!command.text.trim() && !images.length) throw new Error("请输入消息或添加图片");
@@ -874,6 +885,7 @@ async function handle(command) {
         canvasWorkflow.cancel();
         const priorUserIds=new Set(session.sessionManager.getBranch().filter(entry=>entry.type==='message'&&entry.message.role==='user').map(entry=>entry.id));
         controller.promptId=id;activeTurnId=id;
+        controller.learningSubmission=learningSubmission;controller.learningText=command.text;
         turnRecovery.begin();
         visualReview.begin(command.text);
         outputTokens = 0; generationMs = 0; missingUsage = false;

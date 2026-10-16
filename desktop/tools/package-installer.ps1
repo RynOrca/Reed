@@ -19,7 +19,7 @@ $portable = Join-Path $Output 'Reed-portable'
 if ($LASTEXITCODE -gt 7) { throw 'Portable staging failed' }
 $resources = @{}
 foreach ($folder in @('agent','runtime')) { $resources[(Join-Path $portable "$folder/")] = "$folder/" }
-foreach ($file in @('LICENSE','NOTICE.md','PI-DESKTOP-LICENSE','MARKED-LICENSE')) { $resources[(Join-Path $portable $file)] = $file }
+foreach ($file in @('LICENSE','NOTICE.md','PI-DESKTOP-LICENSE','MARKED-LICENSE','KATEX-LICENSE')) { $resources[(Join-Path $portable $file)] = $file }
 $config = @{
     bundle = @{
         active = $true; useLocalToolsDir = $true; targets = @('nsis'); icon = @('icons/icon.ico')

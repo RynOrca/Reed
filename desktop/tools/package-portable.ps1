@@ -44,6 +44,7 @@ foreach ($notice in @('LICENSE','NOTICE.md')) {
     Copy-Item -LiteralPath (Join-Path $desktopDir "../$notice") -Destination (Join-Path $Output $notice) -Force
 }
 Copy-Item -LiteralPath (Join-Path $desktopDir 'web/vendor/MARKED-LICENSE') -Destination (Join-Path $Output 'MARKED-LICENSE') -Force
+Copy-Item -LiteralPath (Join-Path $desktopDir 'web/vendor/KATEX-LICENSE') -Destination (Join-Path $Output 'KATEX-LICENSE') -Force
 Set-ReedExecutableIntegrity -Path (Join-Path $Output 'Reed.exe')
 Set-ReedExecutableIntegrity -Path (Join-Path $Output 'runtime/node.exe')
 Assert-ReedStandardIntegrity -Path (Join-Path $Output 'Reed.exe')

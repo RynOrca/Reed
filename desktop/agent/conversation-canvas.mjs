@@ -1,3 +1,4 @@
+import {learningReceipt} from './learning-blocks.mjs';
 import {mkdir,readFile,writeFile,rename,unlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -16,18 +17,19 @@ export function canvasSource(graph,entries,nodeId){
 }
 
 export function conversationPairs(entries){
-  const result=[];let users=[],failed=false;
+  const result=[];let users=[],failed=false,answerParts=[];
   const parents=new Map(entries.filter(e=>e.type==='custom'&&e.customType==='reed_canvas_parent').map(e=>[e.data?.userEntryId,e.data?.parentNodeId]));
   for(const entry of entries){
     if(entry.type!=='message')continue;
     const m=entry.message;
-    if(m.role==='user'){if(failed){users=[];failed=false;}users.push(entry);continue;}
+    if(m.role==='user'){if(failed){users=[];failed=false;answerParts=[];}users.push(entry);continue;}
+    const learning=learningReceipt(m);if(learning&&users.length){answerParts.push(learning.fallbackText);continue;}
     if(m.role!=='assistant'||!users.length)continue;
     if(['error','aborted','length'].includes(m.stopReason)){failed=true;continue;}
-    if((m.content||[]).some?.(block=>block.type==='toolCall'))continue;
-    const answer=messageText(m);if(!answer.trim())continue;
+    if((m.content||[]).some?.(block=>block.type==='toolCall')){const text=messageText(m);if(text.trim())answerParts.push(text);continue;}
+    const finalText=messageText(m);if(!finalText.trim())continue;const answer=[...answerParts,finalText].join("\n\n");
     const question=users.map(e=>messageText(e.message)).join('\n');
-    result.push({id:users[0].id,userMessageIds:users.map(e=>e.id),answerMessageId:entry.id,question,answer,parentNodeId:parents.get(users[0].id)||null});users=[];failed=false;
+    result.push({id:users[0].id,userMessageIds:users.map(e=>e.id),answerMessageId:entry.id,question,answer,parentNodeId:users[0].message.reedLearningReply?.parentUserId||parents.get(users[0].id)||null,relationKind:users[0].message.reedLearningReply?'learning_reply':null});users=[];failed=false;answerParts=[];
   }
   return result;
 }
@@ -64,7 +66,18 @@ export class ConversationCanvasStore{
       for(const node of graph.nodes){node.turnIds??=[node.id];for(const turnId of node.turnIds){if(!graph.records[turnId]){const pair=pairs.find(p=>p.id===turnId);if(pair){graph.records[turnId]={...pair,question:undefined,answer:undefined,title:short(pair.question,100),status:node.hidden?'hidden':node.state==='pending'?'pending':'included',nodeId:node.id};changed=true;}}}}
       for(const pair of pairs){
         const previous=graph.records[pair.id];if(previous?.answerMessageId===pair.answerMessageId)continue;
-        const hidden=previous?.manualHidden;graph.records[pair.id]={id:pair.id,userMessageIds:pair.userMessageIds,answerMessageId:pair.answerMessageId,parentNodeId:pair.parentNodeId,title:short(pair.question,100),status:hidden?'hidden':trivial(pair.question)?'ignored':'pending',...(hidden?{manualHidden:true}:{}),...(previous?.nodeId?{nodeId:previous.nodeId}:{})};changed=true;
+        const hidden=previous?.manualHidden;graph.records[pair.id]={id:pair.id,userMessageIds:pair.userMessageIds,answerMessageId:pair.answerMessageId,parentNodeId:pair.parentNodeId,relationKind:pair.relationKind,title:short(pair.question,100),status:hidden?'hidden':trivial(pair.question)?'ignored':'pending',...(hidden?{manualHidden:true}:{}),...(previous?.nodeId?{nodeId:previous.nodeId}:{})};changed=true;
+      }
+      // Exercise relationships are explicit receipts, not model guesses. Keep their
+      // nodes locally, including when the canvas was closed at submission time.
+      for(const pair of pairs.filter(p=>p.relationKind==='learning_reply')){
+        const record=graph.records[pair.id];if(record.manualHidden)continue;
+        const parentPair=pairs.find(p=>p.id===pair.parentNodeId),parentRecord=graph.records[pair.parentNodeId];
+        let parent=graph.nodes.find(n=>n.id===(parentRecord?.nodeId||pair.parentNodeId));
+        if(!parent&&parentPair&&!parentRecord?.manualHidden){parent=nodeFor(graph,{...parentPair,title:short(parentPair.question,100)});parent.summary=short(parentPair.answer,160);parent.state='ready';graph.nodes.push(parent);parentRecord.status='included';parentRecord.nodeId=parent.id;changed=true;}
+        let node=graph.nodes.find(n=>n.id===(record.nodeId||pair.id));
+        if(!node){node=nodeFor(graph,record);node.summary=short(pair.answer,160);node.state='ready';if(parent){node.x=parent.x+290;node.y=parent.y;while(graph.nodes.some(other=>Math.abs(other.x-node.x)<240&&Math.abs(other.y-node.y)<175))node.y+=190;}graph.nodes.push(node);record.status='included';record.nodeId=node.id;changed=true;}
+        if(parent&&!parent.hidden&&!graph.edges.some(e=>e.from===parent.id&&e.to===node.id&&e.kind==='learning_reply')){graph.edges.push({id:`${parent.id}:${node.id}`,from:parent.id,to:node.id,type:'作答',kind:'learning_reply',explicit:true});changed=true;}
       }
       return changed;
     });
@@ -88,6 +101,7 @@ export class ConversationCanvasStore{
       if(patch.nodes!==undefined){if(!Array.isArray(patch.nodes)||patch.nodes.length>200)throw Error('节点修改数量无效');for(const change of patch.nodes){const node=graph.nodes.find(n=>n.id===change.id);if(!node)throw Error('画布节点不存在');
         if(change.x!==undefined||change.y!==undefined){if(![change.x,change.y].every(Number.isFinite)||Math.abs(change.x)>1e6||Math.abs(change.y)>1e6)throw Error('节点坐标无效');node.x=change.x;node.y=change.y;node.manualPosition=true;}
         if(change.title!==undefined){if(typeof change.title!=='string'||!change.title.trim()||change.title.length>100)throw Error('节点标题无效');node.title=change.title.trim();node.manualTitle=true;}
+        if(change.answersCollapsed!==undefined){if(typeof change.answersCollapsed!=='boolean'||!graph.edges.some(e=>e.from===node.id&&e.kind==='learning_reply'&&e.explicit))throw Error('只能折叠已关联的练习作答');node.answersCollapsed=change.answersCollapsed;}
         if(change.collapsed!==undefined){if(typeof change.collapsed!=='boolean')throw Error('节点折叠状态无效');node.collapsed=change.collapsed;}
       }}
     });

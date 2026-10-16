@@ -1,4 +1,6 @@
 import { marked } from "./vendor/marked.esm.js";
+import {renderMath,mathExtension} from "./math.js";
+marked.use(mathExtension());
 
 // Build DOM nodes from Marked tokens. Raw HTML is always displayed as text.
 function inline(tokens = [], options = {}) {
@@ -6,6 +8,7 @@ function inline(tokens = [], options = {}) {
   for (const token of tokens) {
     let node;
     switch (token.type) {
+      case "reedInlineMath": node=renderMath(token.text);break;
       case "strong": node = document.createElement("strong"); node.append(inline(token.tokens,options)); break;
       case "em": node = document.createElement("em"); node.append(inline(token.tokens,options)); break;
       case "del": node = document.createElement("del"); node.append(inline(token.tokens,options)); break;
@@ -41,6 +44,7 @@ function blocks(tokens = [], options = {}) {
   for (const token of tokens) {
     let node;
     switch (token.type) {
+      case "reedBlockMath":node=renderMath(token.text,{display:true});break;
       case "space": continue;
       case "checkbox": {
         node = document.createElement("input"); node.type = "checkbox"; node.checked = token.checked;
@@ -112,7 +116,7 @@ export function renderMarkdown(root, source, options = {}) {
     if(!notes.has(definition[1]))notes.set(definition[1],{body:text,number:notes.size+1,target:root._citationPrefix+'-'+(notes.size+1)});
   }
   const context={...options,notes,taskIndex:{value:0}};
-  root.replaceChildren(blocks(marked.lexer(body.join('\n'),{gfm:true}),context));
+  root.replaceChildren(blocks(marked.lexer(body.join('\n'),{...marked.defaults,gfm:true}),context));
   if(notes.size){const section=document.createElement('section');section.className='markdown-sources';section.setAttribute('aria-label','引用来源');const heading=document.createElement('h4');heading.textContent='引用来源';const list=document.createElement('ol');
-    for(const note of notes.values()){const item=document.createElement('li');item.id=note.target;item.tabIndex=-1;item.append(blocks(marked.lexer(note.body,{gfm:true}),{...options,taskIndex:{value:0}}));list.append(item);}section.append(heading,list);root.append(section);}
+    for(const note of notes.values()){const item=document.createElement('li');item.id=note.target;item.tabIndex=-1;item.append(blocks(marked.lexer(note.body,{...marked.defaults,gfm:true}),{...options,taskIndex:{value:0}}));list.append(item);}section.append(heading,list);root.append(section);}
 }

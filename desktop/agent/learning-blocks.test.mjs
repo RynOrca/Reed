@@ -33,3 +33,19 @@ test('工具生成可持久化回执，不把未执行的工具参数当学习�
   await assert.rejects(tool.execute('c',spec,controller.signal));
   assert.equal(learningReceipt({role:'assistant',content:[{type:'toolCall',arguments:spec}]}),null);
 });
+
+test('填空提交保留输入语义和父问题来源，拒绝空白、篡改、超长及混合两题',()=>{
+  const fill={id:'fill',type:'fill',title:'补全加法表达式',label:'c_sum =',fallbackText:'填写 c_sum 表达式。',multiline:true};
+  const value={schemaVersion:1,fallbackText:'填写表达式。',blocks:[fill]};
+  const entries=[{id:'parent',message:{role:'user',content:'练习同态加法'}},{id:'tool',message:{...result,details:{learning:value}}}];
+  assert.deepEqual(validateLearningSpec(value),value);
+  const reply={sessionId:'s',toolCallId:'call-1',blockId:'fill',answer:'(c1 * c2) % (n ** 2)'};
+  const text=learningReplyText(fill,reply.answer);
+  assert.equal(validateLearningReply(entries,'s',reply,text).parentUserId,'parent');
+  assert.equal(validateLearningReply(entries,'s',reply,text).answer,reply.answer);
+  for(const answer of ['', ' ', 'x'.repeat(2001)])assert.throws(()=>validateLearningReply(entries,'s',{...reply,answer},learningReplyText(fill,answer)));
+  assert.throws(()=>validateLearningReply(entries,'s',reply,'篡改文字'));
+  assert.throws(()=>validateLearningSpec({...value,blocks:[fill,question]}));
+  assert.throws(()=>validateLearningSpec({...value,blocks:[{...fill,source:{label:'假来源',url:'javascript:alert(1)'}}]}));
+  assert.throws(()=>validateLearningSpec({...value,blocks:[{...fill,multiline:'true'}]}));
+});

@@ -45,6 +45,11 @@ let submitted = null;
 const toolRows = new Map();
 const learningRows=new Map();
 let learningCandidate=null;
+const learningStates=new Map();
+const learningStateKey=(sessionId,toolCallId,blockId)=>JSON.stringify([sessionId,toolCallId,blockId]);
+const learningDraftKey=(sessionId,toolCallId,blockId)=>'reed-learning-draft:'+learningStateKey(sessionId,toolCallId,blockId);
+function learningDraft(sessionId,toolCallId,blockId,value){const key=learningDraftKey(sessionId,toolCallId,blockId);try{if(value!==undefined)localStorage.setItem(key,value.slice(0,2000));return localStorage.getItem(key)||'';}catch{return '';}}
+
 function updateLearningAvailability(){for(const entry of learningRows.values()){
   if(!running&&!entry.view&&entry.content.querySelector('.learning-pending'))entry.content.textContent=entry.fallback||'图解未完成，请继续阅读正文或通过输入框追问。';
   entry.view?.update();
@@ -234,10 +239,13 @@ function toolEnd(event) {
   if(learning){
     const spec=!event.isError&&event.result?.details?.learning;
     if(spec){
-      const question=spec.blocks?.find(b=>b.type==='choices');
+      const question=spec.blocks?.find(b=>['choices','fill'].includes(b.type));
       if(question)learningCandidate={toolCallId:event.id,blockId:question.id,sessionId:learning.sessionId};
-      const view=renderLearning(spec,{isAvailable:b=>!running&&learningCandidate?.toolCallId===event.id&&learningCandidate.blockId===b.id&&learning.sessionId===activeSessionId,
-        onReply:(block,option)=>void sendUserMessage(replyText(block,option),{learningReply:{sessionId:learning.sessionId,toolCallId:event.id,blockId:block.id,optionId:option.id}})});
+      const view=renderLearning(spec,{
+        getReplyState:b=>learningStates.get(learningStateKey(learning.sessionId,event.id,b.id)),
+        getDraft:b=>learningDraft(learning.sessionId,event.id,b.id),onDraft:(b,value)=>learningDraft(learning.sessionId,event.id,b.id,value),
+        isAvailable:b=>!running&&learningCandidate?.toolCallId===event.id&&learningCandidate.blockId===b.id&&learning.sessionId===activeSessionId,
+        onReply:(block,option)=>void sendUserMessage(replyText(block,option),{learningReply:{sessionId:learning.sessionId,toolCallId:event.id,blockId:block.id,...(block.type==='fill'?{answer:option}:{optionId:option.id})}})});
       learning.content.replaceChildren(view.root);learning.view=view;updateLearningAvailability();
     }else{
       const blocks=Array.isArray(event.result)?event.result:event.result?.content||[];
@@ -280,6 +288,7 @@ function permissionRequest(event) {
 }
 function restoreHistory(history) {
   followLatest=true;
+  learningStates.clear();for(const m of history){if(m.role==='user'&&m.learningReply){const r=m.learningReply;learningStates.set(learningStateKey(activeSessionId,r.toolCallId,r.blockId),{...r,status:'answered'});}}
   messages.replaceChildren(); learningRows.clear(); learningCandidate=null; toolRows.clear(); permissionRows.clear(); assistantRow = null; thinkingRow = null;
   for (const message of history) {
     if (message.role === "toolResult") {
@@ -470,6 +479,12 @@ function onEvent(event) {
   }
   if(response.type==="ack"&&response.stale){stopping=false;$("stop-button").disabled=false;status(running?"这一轮已结束，正在等待 Agent 同步…":"已停止");}
   switch (response.type) {
+    case 'learning_answer':{
+      if(response.sessionId!==activeSessionId)break;
+      learningStates.set(learningStateKey(response.sessionId,response.toolCallId,response.blockId),{...response,status:'answered'});
+      try{localStorage.removeItem(learningDraftKey(response.sessionId,response.toolCallId,response.blockId));}catch{}
+      updateLearningAvailability();break;
+    }
     case "queue": {
       $("queue-items").replaceChildren();
       for (const [label, list] of [["引导", response.steering], ["排队", response.followUp]]) (list||[]).forEach((text,index)=>{const row=document.createElement("div");row.className="queue-item";const summary=document.createElement("span");summary.textContent=`${label} · ${text}`;row.append(summary);if(label==="排队"){const steer=document.createElement("button");steer.type="button";steer.textContent="发送（引导）";steer.onclick=async()=>{steer.disabled=true;try{await command("promote_queue",{text,index},true);}catch(e){errorRow(e.message||String(e));steer.disabled=false;}};row.append(steer);}$("queue-items").append(row);});
@@ -622,15 +637,17 @@ function onEvent(event) {
         break;
       }
       finishThinking({ status: "error" });
+      const failedLearningReply=submitted?.learningReply;
       if (submitted) {
         submitted.row.remove();
         if(!submitted.learningReply){prompt.value = submitted.text;attachments = submitted.images;}
         learningCandidate=submitted.previousQuestion;
+        if(submitted.learningReply){const r=submitted.learningReply;learningStates.set(learningStateKey(r.sessionId,r.toolCallId,r.blockId),{status:'error',message:response.message});}
         renderAttachments();
         submitted = null;
         refreshEmpty();
       }
-      if (!handledReply) { errorRow(terminalErrorMessage(response)); turnErrorShown = true; }
+      if (!handledReply&&!failedLearningReply) { errorRow(terminalErrorMessage(response)); turnErrorShown = true; }
       setRunning(false); break;
     case "disconnected":
       setRunning(false); status("PI Agent 已断开，正在恢复连接…");
@@ -653,6 +670,17 @@ function renderTelemetry(data) {
 }
 $("context-usage").onclick = () => $("context-dialog").showModal();
 $("context-close").onclick = () => $("context-dialog").close();
+document.addEventListener('click',event=>{
+  const button=event.target.closest?.('[data-learning-source]');if(!button)return;
+  void (async()=>{
+    let dialog=document.getElementById('learning-source-dialog');
+    if(!dialog){dialog=document.createElement('dialog');dialog.id='learning-source-dialog';dialog.className='learning-source-dialog';dialog.setAttribute('aria-label','笔记来源');const header=document.createElement('header'),title=document.createElement('h3'),close=document.createElement('button'),body=document.createElement('div');title.className='learning-source-title';close.type='button';close.textContent='关闭';close.onclick=()=>dialog.close();body.className='learning-source-lines';header.append(title,close);dialog.append(header,body);document.body.append(dialog);}
+    const ticket=crypto.randomUUID();dialog.dataset.ticket=ticket;dialog.querySelector('h3').textContent='正在读取笔记来源…';dialog.querySelector('.learning-source-lines').replaceChildren();if(!dialog.open)dialog.showModal();
+    try{const result=await command('read_learning_source',{url:button.dataset.learningSource},true);if(dialog.dataset.ticket!==ticket||!dialog.open)return;dialog.querySelector('h3').textContent=result.source.title+' · 第 '+result.source.line+' 行';
+      for(const line of result.source.lines){const row=document.createElement('span'),number=document.createElement('small');row.className='learning-source-line'+(line.number===result.source.line?' is-target':'');number.textContent=line.number;row.append(number,document.createTextNode(line.text));dialog.querySelector('.learning-source-lines').append(row);}dialog.querySelector('.is-target')?.scrollIntoView({block:'center'});
+    }catch(error){if(dialog.dataset.ticket===ticket)dialog.querySelector('h3').textContent=error.message||String(error);}
+  })();
+});
 document.addEventListener("click", event => {
   const link = event.target.closest?.("a[data-local-file]"); if (!link) return; event.preventDefault();
   void command("resolve_file", { path: link.dataset.localFile }, true).then(r => tauri.core.invoke("open_local_file", { path: r.path })).catch(e => errorRow(String(e.message || e)));
@@ -674,6 +702,7 @@ async function sendUserMessage(text,{learningReply}={}) {
   followLatest=true;
   if(learningReply&&running)return;
   const previousQuestion=learningCandidate;
+  if(learningReply)learningStates.set(learningStateKey(learningReply.sessionId,learningReply.toolCallId,learningReply.blockId),{status:'sending'});
   if ((!text && !attachments.length)) return;
   if (running) {
     if(canvasPanel.reference()){errorRow("请等待当前回复结束后发送画布追问。");return;}

@@ -11,3 +11,14 @@ export function connectionGeometry(a,b){
   const c1={x:start.x+start.nx*bend,y:start.y+start.ny*bend},c2={x:end.x+end.nx*bend,y:end.y+end.ny*bend};
   return {start,end,path:`M ${start.x} ${start.y} C ${c1.x} ${c1.y},${c2.x} ${c2.y},${end.x} ${end.y}`,label:{x:(start.x+3*c1.x+3*c2.x+end.x)/8,y:(start.y+3*c1.y+3*c2.y+end.y)/8-7}};
 }
+
+// Only authenticated exercise edges participate. Ordinary follow-ups stay visible.
+export function learningDescendants(graph,id){
+  const found=new Set(),pending=[id];
+  while(pending.length){const from=pending.pop();for(const edge of graph.edges||[])if(edge.from===from&&edge.kind==='learning_reply'&&edge.explicit&&edge.to!==id&&!found.has(edge.to)){found.add(edge.to);pending.push(edge.to);}}
+  return found;
+}
+export function visibleCanvasNodes(graph){
+  if(!graph)return [];const folded=new Set();for(const node of graph.nodes||[])if(node.answersCollapsed)for(const id of learningDescendants(graph,node.id))folded.add(id);
+  return (graph.nodes||[]).filter(n=>!n.hidden&&!folded.has(n.id));
+}
