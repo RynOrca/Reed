@@ -3,10 +3,15 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {constants} from 'node:fs';
 
+// 教学/练习场合的触发词：正文学习块与这两个流程同时适用。比单个流程技能的词表宽，
+// 因为用户常换说法（“帮我出三道题”“练几道”），这类场合同样需要组件表达规范。
+const learningIntent = /教学|教我|教一下|我要学|想学|学习一下|讲解|练习|习题|测试我的|测一测|考考|道题|出题|复习|回顾|teach\b|explain\b|practice\b|quiz\b|review\b|recall\b/i;
 const workflows = {
   teach: /教学|教我|教一下|我要学|想学|学习一下|讲解|teach\b|explain\b/i,
   'practice-generator': /练习|出题|习题|测试我的|practice\b|quiz\b/i,
   'spaced-review': /复习|回顾|间隔|review\b|recall\b/i,
+  // 正文学习块是表达规范，不是独立教学流程：教学/练习/复习场合随流程技能一起加载。
+  'learning-blocks': learningIntent,
 };
 export async function installLearningSkills(capabilities) {
   let changed=false;
@@ -40,10 +45,23 @@ export function hasPreparedReview(role,capabilities,prompt) {
 }
 export async function prepareRoleSkills(role,capabilities,prompt) {
   const descriptors=[], bodies=[];
-  for(const binding of role?.skills || []) {
+  // 没有绑定学习块技能时，也要让教学/练习这一轮拿到这份表达规范：它是流程技能的
+  // 伴随说明，不是额外权限，因此不要求用户先改角色绑定。停用或无关请求仍然不加载。
+  const companions=new Set();
+  if(learningIntent.test(String(prompt))) for(const name of ['learning-blocks']) {
+    const skill=capabilities.state.skills.find(s=>s.name===name);
+    if(!skill) continue;
+    if(role?.skills?.some(binding=>binding.skillId===skill.id)) continue;
+    if(skill.enabled&&(!capabilities.canUseSkill||capabilities.canUseSkill(skill))) companions.add(name);
+  }
+  const bindings=[...(role?.skills||[]),...capabilities.state.skills.filter(s=>companions.has(s.name)).map(s=>({skillId:s.id,required:false}))];
+  for(const binding of bindings) {
     const skill=capabilities.state.skills.find(s=>s.id===binding.skillId);
     if(!skill) throw new Error('角色绑定的技能已不存在，请编辑角色移除该绑定');
     const applies=skillApplies(skill,prompt);
+    // 学习块规范跟随教学/练习意图本身，而不是它自己的关键词：用户说“帮我出三道题”
+    // 时也属于这类场合，但“出题”不一定字面出现。
+    const relevant=companions.has(skill.name)?applies||learningIntent.test(String(prompt)):applies;
     if(!skill.enabled||(capabilities.canUseSkill&&!capabilities.canUseSkill(skill))) {
       if(binding.required && applies) throw new Error(`必选技能 ${skill.name} 已停用，请在技能仓库启用后重试`);
       continue;
@@ -51,7 +69,7 @@ export async function prepareRoleSkills(role,capabilities,prompt) {
     descriptors.push({name:skill.name,description:skill.description,path:join(skill.path,'SKILL.md'),required:binding.required});
     // Review is a workflow, not a permission to read the review queue. Load its
     // instructions automatically when relevant, even for an on-demand binding.
-    if(applies && (binding.required || skill.name==='spaced-review')) {
+    if(relevant && (binding.required || companions.has(skill.name) || skill.name==='spaced-review')) {
       try {
         const path=join(skill.path,'SKILL.md'), info=await lstat(path);
         if(!info.isFile() || info.size>100000) throw new Error('文件无效或超过 100 KB');

@@ -18,9 +18,29 @@ test('角色绑定保存重载、兼容旧编辑入口、独立正文不被更�
     const snapshot=loaded.list();snapshot.roles.find(r=>r.id===id).skills[0].required=false;assert.equal(loaded.current().skills[0].required,true);
     await assert.rejects(loaded.save({name:'bad',system:'',skills:[{skillId:teach.id,required:true},{skillId:teach.id,required:false}]}),/重复/);
     const path=join(teach.path,'SKILL.md');await writeFile(path,'用户独立修改');await installLearningSkills(store);assert.equal(await readFile(path,'utf8'),'用户独立修改');
-    assert.equal(store.state.skills.length,3);
+    assert.equal(store.state.skills.length,4);
     store.state.skills=[];await installLearningSkills(store);assert.equal(await readFile(path,'utf8'),'用户独立修改');
     await loaded.save({roleId:id,name:'学习导师',system:'',skills:[]});assert.deepEqual(loaded.current().skills,[]);
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('未绑定学习块技能时随教学/练习加载，停用或无关请求不加载',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'summon-role-companion-'));
+  try {
+    const store=new CapabilityStore(dir);await installLearningSkills(store);
+    for(const skill of store.state.skills)await writeFile(join(skill.path,'SKILL.md'),`BODY_SENTINEL_${skill.name}`);
+    const blocks=store.state.skills.find(s=>s.name==='learning-blocks');
+    const role={skills:[{skillId:store.state.skills.find(s=>s.name==='teach').id,required:false}]};
+    let text=await prepareRoleSkills(role,store,'教我矩阵');
+    assert.ok(text.includes('BODY_SENTINEL_learning-blocks'),'教学请求应自动带上学习块规范');
+    assert.ok(text.includes('"name":"learning-blocks"'),'未绑定的伴随技能也要出现在技能清单里');
+    text=await prepareRoleSkills(role,store,'帮我出三道题');
+    assert.ok(text.includes('BODY_SENTINEL_learning-blocks'),'练习请求同样适用');
+    text=await prepareRoleSkills(role,store,'今天天气怎么样');
+    assert.ok(!text.includes('BODY_SENTINEL_learning-blocks'));
+    blocks.enabled=false;
+    text=await prepareRoleSkills(role,store,'教我矩阵');
+    assert.ok(!text.includes('BODY_SENTINEL_learning-blocks'),'停用后不再自动加载');
   } finally {await rm(dir,{recursive:true,force:true});}
 });
 
@@ -30,9 +50,9 @@ test('按需只有元数据，必选仅加载匹配流程，明确命令与停�
     const store=new CapabilityStore(dir);await installLearningSkills(store);
     for(const skill of store.state.skills)await writeFile(join(skill.path,'SKILL.md'),`BODY_SENTINEL_${skill.name}`);
     const role={skills:store.state.skills.map(s=>({skillId:s.id,required:true}))};
-    let text=await prepareRoleSkills(role,store,'教我矩阵');assert.ok(text.includes('BODY_SENTINEL_teach'));assert.ok(!text.includes('BODY_SENTINEL_practice-generator'));assert.ok(!text.includes('BODY_SENTINEL_spaced-review'));
+    let text=await prepareRoleSkills(role,store,'教我矩阵');assert.ok(text.includes('BODY_SENTINEL_teach'));assert.ok(!text.includes('BODY_SENTINEL_practice-generator'));assert.ok(!text.includes('BODY_SENTINEL_spaced-review'));assert.ok(text.includes('BODY_SENTINEL_learning-blocks'));
     text=await prepareRoleSkills(role,store,'你好');assert.ok(!text.includes('BODY_SENTINEL_'));
-    text=await prepareRoleSkills(role,store,'/skill spaced-review 矩阵');assert.ok(text.includes('BODY_SENTINEL_spaced-review'));assert.ok(!text.includes('BODY_SENTINEL_teach'));
+    text=await prepareRoleSkills(role,store,'/skill spaced-review 矩阵');assert.ok(text.includes('BODY_SENTINEL_spaced-review'));assert.ok(!text.includes('BODY_SENTINEL_teach'));assert.ok(!text.includes('BODY_SENTINEL_learning-blocks'));
     role.skills[2].required=false;
     text=await prepareRoleSkills(role,store,'我有什么要复习的吗');assert.match(text,/BODY_SENTINEL_spaced-review/);assert.match(text,/不需要重复 read/);
     text=await prepareRoleSkills(role,store,'普通问题');assert.doesNotMatch(text,/BODY_SENTINEL_spaced-review/);
