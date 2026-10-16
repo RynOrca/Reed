@@ -66,6 +66,18 @@ const parse=(spec,render)=>{
   if(fallbacks.length&&fallbacks.length===spec.blocks.length&&envelopeFallback(spec)&&fallbacks.every(node=>node.textContent.startsWith(envelopeFallback(spec))))throw Error(envelopeFallback(spec));
   return root;
 };
+// 容器空间记录：宽度不足时切到紧凑布局（流程竖排、对比/结果单列），
+// 让长公式与多列内容换行，而不是把卡片压到溢出。
+const COMPACT_WIDTH=430;
+function trackWidth(root){
+  if(typeof ResizeObserver!=='function')return;
+  const apply=width=>root.classList.toggle('is-compact',width>0&&width<COMPACT_WIDTH);
+  try{
+    const observer=new ResizeObserver(entries=>{for(const entry of entries)apply(entry.contentRect.width);});
+    observer.observe(root);
+    apply(root.getBoundingClientRect().width||root.clientWidth||0);
+  }catch{/* 环境不支持时保持默认布局 */}
+}
 // 把工具回执渲染成正文组件；任何一步失败都退回可读文字，不抛出到调用方。
 export function createLearningView(spec,{onReply=()=>{},onStatus=()=>{},isAvailable=()=>false,getReplyState=()=>null,getDraft=()=>'',onDraft=()=>{},unavailableText='当前不可回答；可通过输入框继续交流。'}={}){
   const controls=[];
@@ -79,7 +91,7 @@ export function createLearningView(spec,{onReply=()=>{},onStatus=()=>{},isAvaila
     if(c.option){const selected=answered&&state.optionId===c.option.id;c.button.classList.toggle('is-selected',selected);c.button.setAttribute('aria-pressed',String(selected));}
     c.status.textContent=answered?'已发送你的回答：'+state.answer:sending?'正在发送回答…':state?.status==='error'?'发送失败，可重试。'+(state.message?' '+String(state.message).slice(0,250):''):!isAvailable(c.block)?unavailableText:'提交后作为用户消息发送；输入框草稿会保留。';
   }};
-  update();return {root,update,setStatus:(value)=>{for(const c of controls){c.status.textContent=String(value);c.button.disabled=true;if(c.input)c.input.disabled=true;}}};
+  update();trackWidth(root);return {root,update,setStatus:(value)=>{for(const c of controls){c.status.textContent=String(value);c.button.disabled=true;if(c.input)c.input.disabled=true;}}};
 }
 // 兼容旧调用点：只需要一个已渲染的正文根节点。
 export function renderLearning(spec,options={}){return createLearningView(spec,options);}
