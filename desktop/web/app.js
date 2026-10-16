@@ -1,3 +1,4 @@
+import {renderLearning,replyText} from './learning-blocks.js';
 import { createLearningMode } from './learning-mode.js';
 // Transcript row structure and disclosure behavior adapted from PI-Desktop 0.16.1.
 import { createGoals } from "./goals.js";
@@ -42,6 +43,12 @@ let assistantRow = null;
 let thinkingRow = null;
 let submitted = null;
 const toolRows = new Map();
+const learningRows=new Map();
+let learningCandidate=null;
+function updateLearningAvailability(){for(const entry of learningRows.values()){
+  if(!running&&!entry.view&&entry.content.querySelector('.learning-pending'))entry.content.textContent=entry.fallback||'图解未完成，请继续阅读正文或通过输入框追问。';
+  entry.view?.update();
+}}
 const permissionRows = new Map();
 const pending = new Map();
 const queuedTexts = new Map();
@@ -76,6 +83,7 @@ function scrollToLatest() { if(followLatest)transcript.scrollTop = transcript.sc
 function refreshEmpty() { $("empty-state").hidden = messages.childElementCount > 0; }
 function setRunning(value) {
   running = value;
+  updateLearningAvailability();
   if(!value){stopping=false;activeTurnId=null;retrying=false;}
   $("stop-button").disabled=stopping;
   if (!value) recoveryStatus = "";
@@ -98,6 +106,7 @@ function errorRow(message) {
   refreshEmpty(); scrollToLatest();
 }
 function messageRow(role, text = "") {
+  if(role==="user"){learningCandidate=null;updateLearningAvailability();}
   const row = document.createElement("div");
   row.className = `message-row ${role}`;
   row.setAttribute("role", "article");
@@ -212,11 +221,30 @@ function pretty(value) {
   return JSON.stringify(value, null, 2);
 }
 function toolStart(event) {
+  if(event.name==='show_learning'){
+    const content=messageRow('assistant');content.append(Object.assign(document.createElement('p'),{className:'learning-pending',textContent:'正在整理学习图解…'}));
+    learningRows.set(event.id,{content,sessionId:activeSessionId,fallback:typeof event.args?.fallbackText==='string'?event.args.fallbackText.slice(0,6000):''});return;
+  }
   const detail = pretty(event.args);
   const row = disclosure({ kind: "tool", title: event.name || "工具", summary: detail.replace(/\s+/g, " ").slice(0, 120), detail, state: "running", id: event.id });
   toolRows.set(event.id, row);
 }
 function toolEnd(event) {
+  const learning=learningRows.get(event.id);
+  if(learning){
+    const spec=!event.isError&&event.result?.details?.learning;
+    if(spec){
+      const question=spec.blocks?.find(b=>b.type==='choices');
+      if(question)learningCandidate={toolCallId:event.id,blockId:question.id,sessionId:learning.sessionId};
+      const view=renderLearning(spec,{isAvailable:b=>!running&&learningCandidate?.toolCallId===event.id&&learningCandidate.blockId===b.id&&learning.sessionId===activeSessionId,
+        onReply:(block,option)=>void sendUserMessage(replyText(block,option),{learningReply:{sessionId:learning.sessionId,toolCallId:event.id,blockId:block.id,optionId:option.id}})});
+      learning.content.replaceChildren(view.root);learning.view=view;updateLearningAvailability();
+    }else{
+      const blocks=Array.isArray(event.result)?event.result:event.result?.content||[];
+      learning.content.textContent=blocks.filter(b=>b.type==='text').map(b=>b.text).join('\n')||'图解暂时无法显示，请继续阅读正文。';
+    }
+    scrollToLatest();return;
+  }
   const row = toolRows.get(event.id);
   if (!row) return;
   const blocks = Array.isArray(event.result) ? event.result : event.result?.content || [];
@@ -252,10 +280,10 @@ function permissionRequest(event) {
 }
 function restoreHistory(history) {
   followLatest=true;
-  messages.replaceChildren(); toolRows.clear(); permissionRows.clear(); assistantRow = null; thinkingRow = null;
+  messages.replaceChildren(); learningRows.clear(); learningCandidate=null; toolRows.clear(); permissionRows.clear(); assistantRow = null; thinkingRow = null;
   for (const message of history) {
     if (message.role === "toolResult") {
-      toolEnd({ id: message.toolCallId, isError: message.isError, result: message.content });
+      toolEnd({ id: message.toolCallId, isError: message.isError, result: {content:message.content,details:message.details} });
       continue;
     }
     if (message.role !== "user" && message.role !== "assistant") continue;
@@ -276,8 +304,10 @@ function restoreHistory(history) {
         const row = disclosure({ kind: "thinking", title: "思考过程", summary: text.replace(/\s+/g, " ").slice(0, 120), detail: text, state: outcome?.status === "complete" ? "done" : "error" });
         row.label.textContent = outcomeLabel(outcome);
       } else if (block.type === "toolCall") {
+        if(content&&message.messageId)content.closest(".message-row").dataset.messageId=message.messageId;
         toolStart({ id: block.id, name: block.name, args: block.arguments });
-        updateDisclosure(toolRows.get(block.id), "done");
+        if(toolRows.has(block.id))updateDisclosure(toolRows.get(block.id), "done");
+        content=null;
       }
     }
     if(content&&message.messageId)content.closest('.message-row').dataset.messageId=message.messageId;
@@ -295,7 +325,7 @@ function restoreHistory(history) {
     }
     if (outcome?.status === "unverified") errorRow(outcome.message || "产物尚未通过视觉验收");
   }
-  refreshEmpty(); scrollToLatest();
+  updateLearningAvailability();refreshEmpty(); scrollToLatest();
 }
 function closeHistory() {
   historyDrawer.hidden = true;
@@ -462,6 +492,7 @@ function onEvent(event) {
       void goalsPanel.session(response.workspace || null, response.learningGoalsEnabled === true);
       $("model-label").textContent = response.modelName || response.model || "选择模型";
       $("model-button").title = response.model || "选择模型";
+      if(activeSessionId!==(response.sessionId||"")){learningCandidate=null;updateLearningAvailability();}
       activeSessionId = response.sessionId || "";
       activeSessionName = response.sessionName || "";
       void canvasPanel.session(activeSessionId,response.canvasEnabled===true,response.canvasOpen===true,activeSessionName,response.learningModeEnabled===true||response.learningGoalsEnabled===true);
@@ -593,8 +624,8 @@ function onEvent(event) {
       finishThinking({ status: "error" });
       if (submitted) {
         submitted.row.remove();
-        prompt.value = submitted.text;
-        attachments = submitted.images;
+        if(!submitted.learningReply){prompt.value = submitted.text;attachments = submitted.images;}
+        learningCandidate=submitted.previousQuestion;
         renderAttachments();
         submitted = null;
         refreshEmpty();
@@ -638,10 +669,11 @@ async function command(type, args = {}, awaitReply = false) {
   });
   return response;
 }
-$("composer").addEventListener("submit", async (event) => {
-  event.preventDefault();
+$("composer").addEventListener("submit", event=>{event.preventDefault();void sendUserMessage(prompt.value.trim());});
+async function sendUserMessage(text,{learningReply}={}) {
   followLatest=true;
-  const text = prompt.value.trim();
+  if(learningReply&&running)return;
+  const previousQuestion=learningCandidate;
   if ((!text && !attachments.length)) return;
   if (running) {
     if(canvasPanel.reference()){errorRow("请等待当前回复结束后发送画布追问。");return;}
@@ -649,9 +681,9 @@ $("composer").addEventListener("submit", async (event) => {
     queuedTexts.set(text,(queuedTexts.get(text)||0)+1);
     try { await command("queue_message", { text, mode: "followUp" }, true); prompt.value = ""; updateSendAvailability(); } catch(e) { queuedTexts.delete(text); errorRow(String(e.message || e)); } return;
   }
-  const items = attachments;
-  running = true; updateSendAvailability();
-  status("正在准备附件…");
+  const items = learningReply?[]:attachments;
+  running = true; updateLearningAvailability(); updateSendAvailability();
+  status(learningReply?"正在发送回答…":"正在准备附件…");
   let outgoing = text;
   try {
     const staged = [];
@@ -661,20 +693,20 @@ $("composer").addEventListener("submit", async (event) => {
     }
     if (staged.length) outgoing += `${outgoing ? "\n\n" : ""}附件文件（可使用 read 工具读取）：\n${staged.map((path) => `- ${path}`).join("\n")}`;
   } catch (error) {
-    running = false; updateSendAvailability();
+    running = false; updateLearningAvailability(); updateSendAvailability();
     status("就绪"); errorRow(String(error));
     return;
   }
   const userContent = messageRow("user", text);
   attachmentPreview(userContent, items);
-  submitted = { text, images: items, row: userContent.closest(".message-row") };
+  submitted = { text, images: items, row: userContent.closest(".message-row"),learningReply,previousQuestion };
   assistantRow = null; thinkingRow = null;
-  attachments = []; renderAttachments();
-  prompt.value = ""; prompt.style.height = "auto";
+  if(!learningReply){attachments = []; renderAttachments();
+  prompt.value = ""; prompt.style.height = "auto";}
   setRunning(true);
-  const reference=canvasPanel.reference();
-  void command("prompt", { text: outgoing, ...(reference?{canvasSessionId:reference.sessionId,canvasNodeId:reference.nodeId}:{}), images: items.filter((item) => item.kind === "image").map(({ data, mimeType }) => ({ type: "image", data, mimeType })) });
-});
+  const reference=learningReply?null:canvasPanel.reference();
+  void command("prompt", { text: outgoing, ...(learningReply?{learningReply}:{}), ...(reference?{canvasSessionId:reference.sessionId,canvasNodeId:reference.nodeId}:{}), images: items.filter((item) => item.kind === "image").map(({ data, mimeType }) => ({ type: "image", data, mimeType })) });
+}
 $("add-image").addEventListener("click", () => $("attachment-picker").click());
 $("attachment-picker").addEventListener("change", (event) => {
   void addFiles(Array.from(event.target.files || [])).catch((error) => errorRow(String(error)));
