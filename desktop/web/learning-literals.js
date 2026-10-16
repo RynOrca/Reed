@@ -191,23 +191,64 @@ export function stripLearningMarkup(source){
     .replace(/\n{3,}/g,'\n\n');
 }
 export function hasLearningMarkup(source){return /<\/?show(?=-|_|>|\s|$)/i.test(String(source??''));}
+// 恢复出来的块没有工具回执，早先只能显示、不能作答。这里给它一个本地稳定标识，
+// 作答时作为普通用户消息发送（模型仍能看到完整题干），本地记录已答与题干，
+// 历史重放时把同一道的已答状态恢复回来；后端不需要伪造回执。
+export function recoveredQuestionKey(messageId,index,blockId){
+  return JSON.stringify([String(messageId||''),Number(index)||0,String(blockId||'')]);
+}
+function defaultStore(){
+  try{return globalThis.localStorage||null;}catch{return null;}
+}
+export function readRecoveredAnswer(key,store=defaultStore()){
+  if(!key||!store)return null;
+  try{const data=JSON.parse(store.getItem('reed-recovered-answer:'+key)||'null');return data&&typeof data==='object'?data:null;}catch{return null;}
+}
+export function loadRecoveredAnswers(index,store=defaultStore()){
+  if(!index||!store)return {};
+  const found={};
+  for(const [key,entry] of Object.entries(index)){
+    const data=readRecoveredAnswer(key,store);
+    if(data?.answered&&typeof data.text==='string')found[key]={question:entry.text,answer:data.answer,text:data.text};
+  }
+  return found;
+}
+export function saveRecoveredAnswer(key,{question,answer,text},store=defaultStore()){
+  if(!key||!store)return false;
+  try{store.setItem('reed-recovered-answer:'+key,JSON.stringify({question:String(question||'').slice(0,2000),answer:String(answer||'').slice(0,2000),text:String(text||'').slice(0,6000),answered:true}));return true;}catch{return false;}
+}
 // 正文里出现标记时：能解析的片段渲染成真实组件，剩下的文字正常排版。
-// 恢复出来的块没有工具回执，因此不接入作答链路：按钮禁用并说明改用输入框。
 export function renderAssistantMarkdown(root,source,render,options){
   if(!hasLearningMarkup(source)){render(root,source,options);return false;}
   const spans=splitLearningLiterals(source),fragment=document.createDocumentFragment();
+  const recovered=options.recovered||{};
   let rendered=0;
   for(const span of spans){
     if(span.kind==='learning'){
       try{
-        fragment.append(createLearningView(span.spec,{...options.reply,isAvailable:()=>false,unavailableText:'这段内容由模型正文标记恢复，未接入作答链路；请直接用输入框回答。'}).root);
-        rendered++;continue;
+        const question=(span.spec.blocks||[]).find(block=>['choices','fill'].includes(block.type));
+        const key=question?recoveredQuestionKey(options.messageId,rendered,question.id):null;
+        // 状态要读“当前”的：作答后就地刷新时必须看到 sending/answered，不能是渲染那一刻的快照。
+        const currentState=()=>key&&recovered[key]?{status:'answered',answer:recovered[key].answer}:null;
+        // 恢复出来的块不用等下一次整页刷新：提交时就地标记“正在发送/已发送”，
+        // 状态另行写入本地存档，历史重放时据此恢复。
+        const view=createLearningView(span.spec,{
+          isAvailable:()=>Boolean(key)&&!currentState()&&typeof options.canAnswer==='function'&&options.canAnswer(),
+          onReply:key&&typeof options.onRecoveredReply==='function'?(block,value)=>{view.setStatus('正在发送回答…');options.onRecoveredReply({key,block,question,value,view});}:undefined,
+          getReplyState:currentState,
+          getDraft:block=>typeof options.getRecoveredDraft==='function'?options.getRecoveredDraft(key,block):'',
+          onDraft:(block,value)=>{if(typeof options.setRecoveredDraft==='function')options.setRecoveredDraft(key,block,value);},
+          unavailableText:currentState()?'已回答过这道题；继续追问可以直接用输入框。':'当前不可回答；可通过输入框继续交流。',
+        });
+        if(key&&question)view.root.dataset.recoveredQuestion=key;
+        if(typeof options.onRecoveredView==='function')options.onRecoveredView(view);
+        fragment.append(view.root);rendered++;continue;
       }
       catch{fragment.append(document.createTextNode(span.spec.fallbackText||''));continue;}
     }
     const clean=hasLearningMarkup(span.text)?stripLearningMarkup(span.text):span.text;
     if(!clean.trim())continue;
-    const host=document.createElement('div');render(host,clean,options);fragment.append(...host.childNodes);
+    const host=document.createElement('div');render(host,clean,options);fragment.append(host);
   }
   root.replaceChildren(fragment);
   return rendered>0;

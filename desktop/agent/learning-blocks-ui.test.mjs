@@ -2,12 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {renderLearning,createLearningView,isLearningSpec} from '../web/learning-blocks.js';
-import {splitLearningLiterals,stripLearningMarkup,hasLearningMarkup,renderAssistantMarkdown} from '../web/learning-literals.js';
+import {splitLearningLiterals,stripLearningMarkup,hasLearningMarkup,renderAssistantMarkdown,recoveredQuestionKey,saveRecoveredAnswer,loadRecoveredAnswers} from '../web/learning-literals.js';
 import {renderMarkdown} from '../web/markdown.js';
+import {restoreLatexCommands,normalizeLatexEscapes} from '../web/math.js';
 
 // 这些用例直接跑真实前端模块，因此需要一个够用的 DOM 桩：只实现渲染器用到的部分。
 class El {
-  constructor(tag){this.tagName=String(tag).toUpperCase();this.children=[];this.attributes={};this.dataset={};this.style={};this.className='';this._text='';this.hidden=false;this.classList={add:n=>{if(!this.className.split(' ').includes(n))this.className=(this.className+' '+n).trim();},toggle:()=>{},contains:()=>false};}
+  constructor(tag){this.tagName=String(tag).toUpperCase();this.children=[];this.attributes={};this.dataset={};this.style={};this.className='';this._text='';this.hidden=false;this.disabled=false;this.classList={add:n=>{if(!this.className.split(' ').includes(n))this.className=(this.className+' '+n).trim();},toggle:()=>{},contains:()=>false};}
   append(...nodes){for(const node of nodes)if(node!==null&&node!==undefined)this.children.push(typeof node==='string'?{nodeType:3,textContent:node}:node);}
   replaceChildren(...nodes){this.children=[];this.append(...nodes);}
   setAttribute(name,value){this.attributes[name]=String(value);if(name.startsWith('data-'))this.dataset[name.slice(5)]=String(value);}
@@ -135,6 +136,62 @@ test('真实会话里的两条标记消息全部还原，不再只剩标题',asy
     assert.ok(find(root,node=>String(node.className).includes('learning-block')),'至少渲染出一个块容器');
   }
 });
+
+test('反斜杠被吃掉的公式补回 LaTeX 命令，正常公式与正文不动',()=>{
+  const broken='c^{lambda} equiv g^{mlambda}, r^{nlambda} pmod{n^{2}}';
+  const restored=restoreLatexCommands(broken);
+  assert.ok(restored.includes('\\lambda'),'命令名要补回反斜杠：'+restored);
+  assert.ok(restored.includes('\\equiv')&&restored.includes('\\pmod'));
+  assert.equal(restoreLatexCommands('c^{\\lambda} \\equiv 1 \\pmod{n^{2}}'),'c^{\\lambda} \\equiv 1 \\pmod{n^{2}}','已有反斜杠的公式原样保留');
+  assert.equal(restoreLatexCommands('第1.5节 与 min 和 max 的比较'),'第1.5节 与 min 和 max 的比较','普通文字里的 min/max 不动');
+  const node=renderLearning({schemaVersion:1,fallbackText:'x',blocks:[{id:'d',type:'derivation',title:'推导',fallbackText:'x',steps:[{expression:broken,reason:'依据'}]}]});
+  assert.equal(find(node.root,item=>item.className==='reed-math-fallback'),null,'补回后不应再走文字降级');
+});
+
+test('重复反斜杠的命令名归一，`\\\\` 换行与真实表达式保留',()=>{
+  // 实测载荷形态：命令名前有两个反斜杠，KaTeX 把命令名当正文，公式变成一串字母。
+  const doubled='c^{\\\\lambda} \\\\equiv g^{m\\\\lambda} \\\\pmod{n^{2}}';
+  const fixed=normalizeLatexEscapes(doubled);
+  assert.equal(fixed,'c^{\\lambda} \\equiv g^{m\\lambda} \\pmod{n^{2}}','命令名只留一个反斜杠：'+fixed);
+  assert.equal(normalizeLatexEscapes('c^{\\lambda} \\equiv 1 \\pmod{n^{2}}'),'c^{\\lambda} \\equiv 1 \\pmod{n^{2}}','本来就正确的公式不动');
+  assert.equal(normalizeLatexEscapes('a \\\\ b'),'a \\\\ b','非命令名的 \\\\ 换行保留');
+  const view=renderLearning({schemaVersion:1,fallbackText:'x',blocks:[{id:'d',type:'derivation',title:'推导',fallbackText:'x',steps:[{expression:doubled,reason:'依据'}]}]});
+  const math=find(view.root,item=>String(item.className).includes('reed-math'));
+  assert.ok(math,'应渲染出公式容器');
+  // DOM 桩下 KaTeX 会走文字降级，因此这里只确认渲染器拿到的是归一后的源串。
+  assert.equal(math.textContent,fixed,'渲染前必须完成归一：'+JSON.stringify(math.textContent.slice(0,60)));
+});
+
+test('恢复出来的题目可以作答，并用本地键记住已答',()=>{
+  const python="[{'id':'ask','type':'choices','title':'选一个','fallbackText':'请选择甲或乙。','options':[{'id':'a','label':'甲','replyText':'我选甲。'},{'id':'b','label':'乙','replyText':'我选乙。'}]}]";
+  const source=`先看题。\n\n<show_learning schemaVersion="1" fallbackText="整体降级" blocks="${python}"></show_learning>`;
+  const replies=[];
+  const root=new El('div');
+  const options={messageId:'m1',canAnswer:()=>true,onRecoveredReply:payload=>replies.push(payload),recovered:{}};
+  assert.equal(renderAssistantMarkdown(root,source,renderMarkdown,options),true);
+  const button=(()=>{const matches=[];const collect=(node)=>{if(!node||typeof node!=='object')return;if(String(node.className||'').split(' ').includes('learning-choice'))matches.push(node);for(const child of node.children||[])collect(child);};collect(root);return matches[0];})();
+  assert.ok(button,'应渲染出可点的选项');
+  assert.equal(typeof button.onclick,'function','选项要挂上点击处理');
+  assert.ok(!button.disabled,'可回答时选项应可点');
+  button.onclick();
+  assert.equal(replies.length,1);
+  assert.equal(replies[0].block.id,'ask');
+  assert.equal(replies[0].value.id,'a');
+  // 已答状态：同一道题下次渲染应禁用并显示已答文字。
+  const key=recoveredQuestionKey('m1',0,'ask');
+  const anyChoice=(host)=>{const matches=[];const collect=(node)=>{if(!node||typeof node!=='object')return;if(String(node.className||'').split(' ').includes('learning-choice'))matches.push(node);for(const child of node.children||[])collect(child);};collect(host);return matches[0];};
+  const answered=new El('div');
+  renderAssistantMarkdown(answered,source,renderMarkdown,{...options,recovered:{[key]:{status:'answered',answer:'甲',text:'我选甲。'}}});
+  assert.equal(anyChoice(answered).disabled,true,'已答后应禁用');
+  assert.ok((await0(answered)).includes('已发送你的回答：甲'),'已答状态要显示出来');
+  // 本地存档读写
+  const memory={data:{},getItem(name){return this.data[name]??null;},setItem(name,value){this.data[name]=value;}};
+  assert.equal(saveRecoveredAnswer(key,{question:'选一个',answer:'甲',text:'我选甲。'},memory),true);
+  const loaded=loadRecoveredAnswers({[key]:{text:'我选甲。'}},memory);
+  assert.equal(loaded[key].answer,'甲');
+});
+function await0(root){return root.textContent;}
+function serialize(node){if(!node||typeof node!=='object')return '';if(node.nodeType===3)return node.textContent;const cls=node.className?` class="${node.className}"`:'';const own=`data-id=${node.dataset?.blockId||'-'} onclick=${typeof node.onclick} disabled=${node.disabled}`;return `<${String(node.tagName||'?').toLowerCase()}${cls} ${own}>${(node.children||[]).map(serialize).join('')}</${String(node.tagName||'?').toLowerCase()}>`;}
 
 test('正常正文不经过恢复路径',()=>{
   const root=new El('div');

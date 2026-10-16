@@ -1,12 +1,12 @@
 import {renderLearning,replyText} from './learning-blocks.js';
-import { createLearningMode } from './learning-mode.js';
+import {createLearningMode} from './learning-mode.js';
 // Transcript row structure and disclosure behavior adapted from PI-Desktop 0.16.1.
-import { createGoals } from "./goals.js";
-import { createConversationCanvas } from "./conversation-canvas.js";
-import { createProjectPicker } from "./project-picker.js";
-import { createMessageNavigation } from "./message-navigation.js";
-import { renderMarkdown } from "./markdown.js";
-import { renderAssistantMarkdown } from "./learning-literals.js";
+import {createGoals} from "./goals.js";
+import {createConversationCanvas} from "./conversation-canvas.js";
+import {createProjectPicker} from "./project-picker.js";
+import {createMessageNavigation} from "./message-navigation.js";
+import {renderMarkdown} from "./markdown.js";
+import {renderAssistantMarkdown,recoveredQuestionKey,saveRecoveredAnswer,loadRecoveredAnswers} from "./learning-literals.js";
 import { icon, windowHandles } from "./icons.js";
 import { retryStarted, retryEnded, turnStillRunning, terminalErrorMessage } from "./turn-state.mjs";
 const $ = (id) => document.getElementById(id);
@@ -50,6 +50,14 @@ const learningStates=new Map();
 const learningStateKey=(sessionId,toolCallId,blockId)=>JSON.stringify([sessionId,toolCallId,blockId]);
 const learningDraftKey=(sessionId,toolCallId,blockId)=>'reed-learning-draft:'+learningStateKey(sessionId,toolCallId,blockId);
 function learningDraft(sessionId,toolCallId,blockId,value){const key=learningDraftKey(sessionId,toolCallId,blockId);try{if(value!==undefined)localStorage.setItem(key,value.slice(0,2000));return localStorage.getItem(key)||'';}catch{return '';}}
+// 模型把标记写进正文时，块是从文字里恢复的，没有工具回执。它们同样要能作答：
+// 用本地稳定键记录题干与已答状态，作答走普通用户消息，历史重放时恢复状态。
+const recoveredAnswerStates=new Map();
+// 恢复题目的待确认作答：本轮 done 后据此落定已答状态。
+let recoveredPending=null;
+const recoveredQuestionTexts=new Map();
+const recoveredIndex=()=>{const index={};for(const [key,text] of recoveredQuestionTexts)index[key]={text};return index;};
+function updateRecoveredStates(){for(const [key,state] of Object.entries(loadRecoveredAnswers(recoveredIndex())))if(!recoveredAnswerStates.has(key))recoveredAnswerStates.set(key,state);}
 
 function updateLearningAvailability(){for(const entry of learningRows.values()){
   if(!running&&!entry.view&&entry.content.querySelector('.learning-pending'))entry.content.textContent=entry.fallback||'图解未完成，请继续阅读正文或通过输入框追问。';
@@ -86,9 +94,37 @@ function status(text) {
 }
 function updateSendAvailability() { $("send-button").disabled = (!prompt.value.trim() && !attachments.length); }
 function scrollToLatest() { if(followLatest)transcript.scrollTop = transcript.scrollHeight; }
+// 恢复出来的题目没有工具回执，状态得自己维护：直接改这一段组件里的状态行，
+// 不依赖视图注册表（历史重放时注册表会被清空重建）。
+function setRecoveredStatus(key,value){
+  if(!key)return;
+  for(const node of document.querySelectorAll('.learning-blocks[data-recovered-question]')){
+    if(node.dataset.recoveredQuestion!==key)continue;
+    const line=node.querySelector('.learning-reply-status');
+    if(line)line.textContent=value;
+    for(const control of node.querySelectorAll('.learning-choice,.learning-submit,input,textarea'))control.disabled=true;
+  }
+}
 // 助手正文统一走这个入口：正常情况就是 Markdown，正文里混进 show_learning 标记时
-// 把能识别的部分还原成真实学习块，避免用户读到一整段标签和 JSON。
-function renderAssistant(content, source) { return renderAssistantMarkdown(content, source, renderMarkdown, {reply:{render:renderLearning}}); }
+// 把能识别的部分还原成真实学习块，并让恢复出来的题目可以作答。
+function renderAssistant(content, source, messageId){
+  return renderAssistantMarkdown(content, source, renderMarkdown, {
+    messageId,
+    recovered:recoveredAnswerStates,
+    canAnswer:()=>!running,
+    getRecoveredDraft:(key,block)=>learningDraft('recovered',key,block.id),
+    setRecoveredDraft:(key,block,value)=>learningDraft('recovered',key,block.id,value),
+    onRecoveredReply:({key,block,question,value})=>{
+      const text=replyText(block,value);
+      const answer=block.type==='fill'?value.trim():value.replyText;
+      recoveredQuestionTexts.set(key,{text,blockTitle:question?.title||''});
+      recoveredAnswerStates.set(key,{status:'sending'});
+      recoveredPending={key,answer,text,question:question?.title||'',turnId:activeTurnId};
+      setRecoveredStatus(key,'正在发送回答…');
+      void sendUserMessage(text,{recoveredReply:{key,answer,text,question:question?.title||''}});
+    },
+  });
+}
 function refreshEmpty() { $("empty-state").hidden = messages.childElementCount > 0; }
 function setRunning(value) {
   running = value;
@@ -115,7 +151,10 @@ function errorRow(message) {
   refreshEmpty(); scrollToLatest();
 }
 function messageRow(role, text = "") {
-  if(role==="user"){learningCandidate=null;updateLearningAvailability();}
+  if(role==="user"){learningCandidate=null;
+    // 新的用户消息让恢复出来的题目失效：与有回执的题目一致，旧题不能再点。
+    for(const [key,state] of recoveredAnswerStates)if(state.status!=='answered'&&state.status!=='sending')recoveredAnswerStates.set(key,{status:'expired'});
+    updateLearningAvailability();}
   const row = document.createElement("div");
   row.className = `message-row ${role}`;
   row.setAttribute("role", "article");
@@ -307,7 +346,7 @@ function restoreHistory(history) {
         if (!content) content = messageRow(message.role);
         if (message.role === "assistant") {
           content._source = (content._source || "") + (block.text || "");
-          renderAssistant(content, content._source);
+          renderAssistant(content, content._source, message.messageId);
         } else content.textContent += block.text || "";
       } else if (block.type === "image" && message.role === "user") {
         if (!content) content = messageRow("user");
@@ -580,7 +619,7 @@ function onEvent(event) {
       } else {
         if (!assistantRow) assistantRow = messageRow("assistant");
         assistantRow._source = (assistantRow._source || "") + (response.text || "");
-        renderAssistant(assistantRow, assistantRow._source);
+        renderAssistant(assistantRow, assistantRow._source, assistantRow.dataset.messageId || 'live');
       }
       scrollToLatest(); break;
     }
@@ -618,6 +657,14 @@ function onEvent(event) {
       if (!turnMatches(response)) break;
       setRunning(false); finishThinking(response.outcome);
       if(response.outcome?.status==='complete')canvasPanel.clearReference();
+      // 恢复出来的题目：本轮成功结束后记成已回答，并把题干一起存下来供历史重放。
+      // 这里不依赖 submitted（它可能在别的分支里已被清掉），而是按轮次配对。
+      if(response.outcome?.status==='complete'&&recoveredPending&&(!recoveredPending.turnId||!response.turnId||recoveredPending.turnId===response.turnId)){
+        const r=recoveredPending;recoveredPending=null;
+        recoveredAnswerStates.set(r.key,{status:'answered',answer:r.answer});
+        saveRecoveredAnswer(r.key,{question:r.question,answer:r.answer,text:r.text});
+        setRecoveredStatus(r.key,'已发送你的回答：'+r.answer);
+      }
       if (response.outcome && response.outcome.status !== "complete") {
         status(outcomeLabel(response.outcome));
         if (response.outcome.status !== "aborted" && !turnErrorShown) errorRow(response.outcome.message || outcomeLabel(response.outcome));
@@ -642,11 +689,13 @@ function onEvent(event) {
       }
       finishThinking({ status: "error" });
       const failedLearningReply=submitted?.learningReply;
+      const failedRecovered=submitted?.recoveredReply;
       if (submitted) {
         submitted.row.remove();
         if(!submitted.learningReply){prompt.value = submitted.text;attachments = submitted.images;}
         learningCandidate=submitted.previousQuestion;
         if(submitted.learningReply){const r=submitted.learningReply;learningStates.set(learningStateKey(r.sessionId,r.toolCallId,r.blockId),{status:'error',message:response.message});}
+        if(failedRecovered)recoveredAnswerStates.set(failedRecovered.key,{status:'error',message:response.message});
         renderAttachments();
         submitted = null;
         refreshEmpty();
@@ -702,11 +751,12 @@ async function command(type, args = {}, awaitReply = false) {
   return response;
 }
 $("composer").addEventListener("submit", event=>{event.preventDefault();void sendUserMessage(prompt.value.trim());});
-async function sendUserMessage(text,{learningReply}={}) {
+async function sendUserMessage(text,{learningReply,recoveredReply}={}) {
   followLatest=true;
-  if(learningReply&&running)return;
+  if((learningReply||recoveredReply)&&running)return;
   const previousQuestion=learningCandidate;
   if(learningReply)learningStates.set(learningStateKey(learningReply.sessionId,learningReply.toolCallId,learningReply.blockId),{status:'sending'});
+  if(recoveredReply)recoveredAnswerStates.set(recoveredReply.key,{status:'sending'});
   if ((!text && !attachments.length)) return;
   if (running) {
     if(canvasPanel.reference()){errorRow("请等待当前回复结束后发送画布追问。");return;}
@@ -732,13 +782,18 @@ async function sendUserMessage(text,{learningReply}={}) {
   }
   const userContent = messageRow("user", text);
   attachmentPreview(userContent, items);
-  submitted = { text, images: items, row: userContent.closest(".message-row"),learningReply,previousQuestion };
+  submitted = { text, images: items, row: userContent.closest(".message-row"),learningReply,recoveredReply,previousQuestion };
   assistantRow = null; thinkingRow = null;
   if(!learningReply){attachments = []; renderAttachments();
   prompt.value = ""; prompt.style.height = "auto";}
   setRunning(true);
-  const reference=learningReply?null:canvasPanel.reference();
-  void command("prompt", { text: outgoing, ...(learningReply?{learningReply}:{}), ...(reference?{canvasSessionId:reference.sessionId,canvasNodeId:reference.nodeId}:{}), images: items.filter((item) => item.kind === "image").map(({ data, mimeType }) => ({ type: "image", data, mimeType })) });
+  const reference=(learningReply||recoveredReply)?null:canvasPanel.reference();
+  // 先落定 submitted 再发请求：模拟或极快的 Agent 可能在同一次 await 前就回报 done，
+  // 那样“已完成”分支会看不到这条提交而漏掉已答状态。恢复出来的题目用 recoveredPending
+  // 单独配对，不依赖 submitted（它可能在别的分支里已被清掉）。
+  if(recoveredReply)recoveredPending={key:recoveredReply.key,answer:recoveredReply.answer,text:recoveredReply.text,question:recoveredReply.question,turnId:activeTurnId};
+  void command("prompt", { text: outgoing, ...(learningReply?{learningReply}:{}), ...(reference?{canvasSessionId:reference.sessionId,canvasNodeId:reference.nodeId}:{}), images: items.filter((item) => item.kind === "image").map(({ data, mimeType }) => ({ type: "image", data, mimeType })) })
+    .catch(error=>{if(!recoveredReply)return;recoveredPending=null;recoveredAnswerStates.set(recoveredReply.key,{status:'error',message:String(error?.message||error)});setRecoveredStatus(recoveredReply.key,'发送失败，可重试。'+String(error?.message||error).slice(0,120));});
 }
 $("add-image").addEventListener("click", () => $("attachment-picker").click());
 $("attachment-picker").addEventListener("change", (event) => {
