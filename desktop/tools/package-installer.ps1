@@ -1,4 +1,4 @@
-﻿param([string]$Output = "")
+﻿param([string]$Output = "", [switch]$Portable)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'executable-integrity.ps1')
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
@@ -97,13 +97,19 @@ $installerPath = Join-Path $Output "Reed-$appVersion-setup.exe"
 Copy-Item -LiteralPath $installer.FullName -Destination $installerPath
 Set-ReedExecutableIntegrity -Path $installerPath
 Assert-ReedStandardIntegrity -Path $installerPath
-# The staged portable tree is what the ZIP carries and what the user launches.
+# 暂存目录始终保留：验收脚本直接用它启动，不必等 ZIP。
 Set-ReedOutputIntegrity -Path $portable
 $version = @{ product = 'Reed'; version = $appVersion; sourceCommit = (& git -C $root rev-parse HEAD); dataDirectory = '%APPDATA%\Reed' }
 [IO.File]::WriteAllText((Join-Path $portable 'VERSION.json'), ($version | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
-Compress-Archive -Path (Join-Path $portable '*') -DestinationPath (Join-Path $Output "Reed-$appVersion-portable.zip")
-Set-ReedOutputIntegrity -Path (Join-Path $Output "Reed-$appVersion-portable.zip")
-Assert-ReedStandardIntegrity -Path (Join-Path $Output "Reed-$appVersion-portable.zip")
+# 便携 ZIP 由 -Portable 显式开启：压缩上万个文件是本流程最慢的一步，
+# 而安装包已包含同一份内容，日常只发 setup 即可。
+if ($Portable) {
+    Compress-Archive -Path (Join-Path $portable '*') -DestinationPath (Join-Path $Output "Reed-$appVersion-portable.zip")
+    Set-ReedOutputIntegrity -Path (Join-Path $Output "Reed-$appVersion-portable.zip")
+    Assert-ReedStandardIntegrity -Path (Join-Path $Output "Reed-$appVersion-portable.zip")
+} else {
+    Write-Host '已跳过便携 ZIP（需要时加 -Portable）；暂存目录仍可用于验收。'
+}
 $checksums = foreach ($file in Get-ChildItem -LiteralPath $Output -File | Where-Object { $_.Extension -in @('.exe','.zip') }) {
     "$((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLower())  $($file.Name)"
 }
