@@ -245,6 +245,31 @@ test('代码块带语言标签、复制按钮与词法着色',()=>{
   assert.ok(code.textContent.includes('import secrets'),'代码原文要完整保留');
 });
 
+test('没写 $ 定界符的近似 LaTeX 也会被识别并排版，中文叙述不动',()=>{
+  const view=renderLearning({schemaVersion:1,fallbackText:'x',blocks:[
+    {id:'f',type:'flow',title:'数据流',fallbackText:'x',nodes:[
+      {label:'密钥',value:'n = p·q，λ = lcm(p-1, q-1)'},
+      {label:'加密',value:'c = g^m · r^n mod n²'},
+      {label:'说明',value:'同一明文每次加密结果都不同（概率加密）'},
+    ]},
+    {id:'c',type:'compare',title:'对比',fallbackText:'x',columns:[
+      {title:'A',body:'D(c1c2c3) = m1 + m2 + m3\n√ 结构保持，隐私保持'},
+      {title:'B',body:'不满足 L(u) 的定义域\n× 加法不在乘法群 Z*_{n²} 的结构里'},
+    ]},
+    {id:'d',type:'derivation',title:'推导',fallbackText:'x',steps:[{expression:'c^{\\lambda} \\equiv 1 + mn\\lambda \\pmod{n^{2}}',reason:'把密文按 c = g^m r^n 代入，整体取 λ 次幂'}]},
+  ]});
+  const mathNodes=[];
+  const texts=[];
+  const walk=node=>{if(!node||typeof node!=='object')return;const cls=String(node.className||'');if(cls.includes('reed-math'))mathNodes.push(node);if(node.nodeType===3)texts.push(node.textContent);for(const child of node.children||[])walk(child);};
+  walk(view.root);
+  assert.ok(mathNodes.length>=6,'未定界公式也应产生公式节点，实际 '+mathNodes.length);
+  const plain=texts.join('');
+  assert.equal(/[（(]概率加密/.test(plain)&&/g\^m/.test(plain),false,'近似 LaTeX 不应原样留在文字里：'+plain.slice(0,120));
+  assert.ok(plain.includes('同一明文每次加密结果都不同（概率加密）'),'普通中文叙述保持原样');
+  assert.ok(plain.includes('结构保持，隐私保持'),'普通说明保持原样');
+  assert.ok(plain.includes('的定义域'),'中文与函数名混排保持原样');
+});
+
 test('正常正文不经过恢复路径',()=>{
   const root=new El('div');
   assert.equal(renderAssistantMarkdown(root,'普通 **Markdown** 段落。',renderMarkdown,{}),false);

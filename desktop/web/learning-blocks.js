@@ -1,5 +1,6 @@
 import {renderMarkdown,renderInline} from './markdown.js';
 import {renderMath} from './math.js';
+import {normalizeMathDelimiters} from './math-auto.js';
 const text=(tag,value,cls='')=>{const n=document.createElement(tag);n.className=cls;n.textContent=String(value||'').slice(0,6000);return n;};
 // 按钮文字的 aria-label 需要纯文本，这里把公式源码取出来当名字。
 const plain=value=>String(value||'').replace(/\$([^$]*)\$/g,'$1').replace(/\\\(([^)]*)\\\)/g,'$1');
@@ -14,10 +15,10 @@ function blockView(b,{getReplyState,getDraft,onDraft,onReply,onStatus=()=>{},isA
   const section=document.createElement('section');section.className='learning-block learning-'+b.type;section.dataset.blockId=b.id;
   // [^1] 这类脚注在正文里渲染成链接，来源清单附在块末，避免原样显示标记。
   const notes=new Map();
-  // 所有可能出现数学的字段都按行内富文本渲染：模型写 $c_1$ 或 \(c_1\) 时排版成公式，
-  // 而不是把 LaTeX 源码显示出来。
-  const rich=(tag,value,cls='')=>{const n=document.createElement(tag);n.className=cls;renderInline(n,String(value||'').slice(0,6000),{notes});return n;};
-  const body=(host,value)=>{const n=document.createElement('div');renderMarkdown(n,String(value||'').slice(0,2400),{notes});host.append(n);};
+  // 所有可能出现数学的字段都按行内富文本渲染：模型写 $c_1$ 时排版成公式；
+  // 写成 c = g^m r^n 这种没有定界符的近似 LaTeX 时，先补齐定界符再渲染。
+  const rich=(tag,value,cls='')=>{const n=document.createElement(tag);n.className=cls;renderInline(n,normalizeMathDelimiters(String(value||'')).slice(0,6000),{notes});return n;};
+  const body=(host,value)=>{const n=document.createElement('div');renderMarkdown(n,normalizeMathDelimiters(String(value||'')).slice(0,2400),{notes});host.append(n);};
   const list=(values,max)=>{if(!Array.isArray(values)||!values.length||values.length>max)throw Error('无效学习列表');return values;};
   if(b.title&&!['reveal','callout'].includes(b.type))section.append(rich('h3',b.title));
   switch(b.type){
