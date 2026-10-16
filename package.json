@@ -1,6 +1,6 @@
 {
   "name": "reed",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Reed 苇 — 一苇以航，轻渡学海。独立 Windows 学习 Agent。",
   "scripts": {
