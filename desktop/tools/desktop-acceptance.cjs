@@ -154,7 +154,9 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     assert.equal(await main.locator('.compact-button-label').allTextContents().then(a=>a.join(',')),'Model,Role');assert.equal(await main.locator('#model-label').isVisible(),false);
     for (const id of ['model-button','role-button']) { const style=await main.locator('#'+id).evaluate(e=>({border:getComputedStyle(e).borderTopWidth,background:getComputedStyle(e).backgroundColor}));assert.equal(style.border,'0px');assert.equal(style.background,'rgba(0, 0, 0, 0)'); }
     assert.ok((await main.locator('.status-line').evaluate(e=>getComputedStyle(e,'::before').backdropFilter)).includes('blur'));checks.push('窄窗仅模型角色按钮、项目旁布局与就绪行内渐变模糊');
-    const fade=await main.locator('.status-line').evaluate(e=>({background:getComputedStyle(e,'::before').backgroundColor,mask:getComputedStyle(e,'::before').maskImage,height:e.getBoundingClientRect().height}));assert.equal(fade.background,'rgb(24, 24, 24)');assert.ok(fade.mask.includes('80%'));assert.ok(fade.height>=36);
+    const fade=await main.locator('.status-line').evaluate(e=>({background:getComputedStyle(e,'::before').backgroundColor,mask:getComputedStyle(e,'::before').maskImage,height:e.getBoundingClientRect().height}));
+    // 状态栏那层改为半透明的主题色，让下方内容透出被渐变模糊，而不是一块实色。
+    assert.match(fade.background,/^color\(srgb 0\.0941176 0\.0941176 0\.0941176 \/ 0\.6\d\)$/);assert.ok(fade.mask.includes('85%'));assert.ok(fade.height>=36);
     const dragWidth=await main.locator('.drag-space').evaluate(e=>e.getBoundingClientRect().width);assert.ok(dragWidth>=100);
     await settings.locator('button[data-section="roles"]').click();
     // 角色列表按钮对齐：内置角色行只有「编辑」，自定义角色行还有「删除」。
