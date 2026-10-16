@@ -6,6 +6,7 @@ import { createConversationCanvas } from "./conversation-canvas.js";
 import { createProjectPicker } from "./project-picker.js";
 import { createMessageNavigation } from "./message-navigation.js";
 import { renderMarkdown } from "./markdown.js";
+import { renderAssistantMarkdown } from "./learning-literals.js";
 import { icon, windowHandles } from "./icons.js";
 import { retryStarted, retryEnded, turnStillRunning, terminalErrorMessage } from "./turn-state.mjs";
 const $ = (id) => document.getElementById(id);
@@ -85,6 +86,9 @@ function status(text) {
 }
 function updateSendAvailability() { $("send-button").disabled = (!prompt.value.trim() && !attachments.length); }
 function scrollToLatest() { if(followLatest)transcript.scrollTop = transcript.scrollHeight; }
+// 助手正文统一走这个入口：正常情况就是 Markdown，正文里混进 show_learning 标记时
+// 把能识别的部分还原成真实学习块，避免用户读到一整段标签和 JSON。
+function renderAssistant(content, source) { return renderAssistantMarkdown(content, source, renderMarkdown, {reply:{render:renderLearning}}); }
 function refreshEmpty() { $("empty-state").hidden = messages.childElementCount > 0; }
 function setRunning(value) {
   running = value;
@@ -120,7 +124,7 @@ function messageRow(role, text = "") {
   const bubble = document.createElement("div"); bubble.className = "message-bubble";
   const content = document.createElement("div");
   content.className = role === "user" ? "message-user-text" : "prose-chat";
-  if (role === "assistant") renderMarkdown(content, text);
+  if (role === "assistant") renderAssistant(content, text);
   else content.textContent = text;
   bubble.append(content); col.append(bubble); row.append(col); messages.append(row);
   refreshEmpty(); scrollToLatest();
@@ -303,7 +307,7 @@ function restoreHistory(history) {
         if (!content) content = messageRow(message.role);
         if (message.role === "assistant") {
           content._source = (content._source || "") + (block.text || "");
-          renderMarkdown(content, content._source);
+          renderAssistant(content, content._source);
         } else content.textContent += block.text || "";
       } else if (block.type === "image" && message.role === "user") {
         if (!content) content = messageRow("user");
