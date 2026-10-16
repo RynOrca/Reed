@@ -243,8 +243,15 @@ body { border:0; border-radius:14px; }
 #model-thinking { flex:none; font-size:10px; color:#b3c3df; background:#a5bce715; border-radius:5px; padding:2px 5px; white-space:nowrap; }
 
 /* Composer controls stay beside the workspace; small windows use two short buttons. */
+/* 底部渐变高斯模糊：状态栏与输入区都留一层带遮罩的 backdrop-filter，
+   上方内容滑过时被逐渐模糊并淡出，而不是被一条实色条截断。 */
 .status-line { position:relative; isolation:isolate; background:transparent; min-height:36px; padding-top:12px; }
-.status-line::before { content:""; position:absolute; inset:0; z-index:-1; backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); background:var(--ds-bg-primary); mask-image:linear-gradient(to bottom,transparent 0%,#0003 25%,#000a 55%,#000 80%); }
+.status-line::before { content:""; position:absolute; inset:0; z-index:-1; backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); background:color-mix(in srgb,var(--ds-bg-primary) 62%,transparent); mask-image:linear-gradient(to bottom,transparent 0%,#0004 30%,#000c 62%,#000 85%); -webkit-mask-image:linear-gradient(to bottom,transparent 0%,#0004 30%,#000c 62%,#000 85%); }
+:root[data-theme=light] .status-line::before { background:#f7f8f5a8; }
+.composer-dock { isolation:isolate; }
+.composer-dock::before { content:""; position:absolute; inset:-26px 0 0; z-index:-1; pointer-events:none; backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); background:color-mix(in srgb,var(--ds-bg-primary) 68%,transparent); mask-image:linear-gradient(to bottom,transparent 0%,#0006 34%,#000d 66%,#000 88%); -webkit-mask-image:linear-gradient(to bottom,transparent 0%,#0006 34%,#000d 66%,#000 88%); }
+:root[data-theme=light] .composer-dock::before { background:#f7f8f5b0; }
+@media (prefers-reduced-transparency:reduce) { .status-line::before,.composer-dock::before { backdrop-filter:none; -webkit-backdrop-filter:none; } }
 .fade-band { display:none; }
 .composer-configuration { flex:1; min-width:0; padding:0; gap:5px; }
 .composer-toolbar .composer-spacer { display:none; }

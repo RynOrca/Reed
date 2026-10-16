@@ -13,3 +13,19 @@ description: 教学流程。在用户要求教我、学习某个主题或分步�
 6. 最后总结概念、易错点和下一步。用户原话及实际作答提供证据时，通过 record_learning_event 记录目标、概念或误解；遵循该工具的真实参数和证据要求。若画像关闭则不宣称已记住。
 
 角色预设决定教学原则和语气；本流程只决定教学步骤。教学本身无需修改文件。
+
+
+正文表达（show_learning）：它是工具，必须在回复过程中发起真正的函数调用，参数是 JSON 对象；把 `<show_learning ...>` 或 `blocks="[...]"` 当文字写进正文是错的，用户只会看到一串代码。用法是在同一轮里交替排列：Markdown 讲解 → 调用工具放图解或提问 → 继续讲解，不要把所有块堆在回复末尾。每轮最多 8 块，其中 choices/fill 合计最多 1 个。
+
+按内容选择块（详见 learning-blocks 技能）：
+- 顺序、因果、数据流 → flow（`nodes[{label,value,note?}]`，时间线加 `layout:"timeline"`）。
+- 易混概念并排比较 → compare（2–3 列，比较维度一致）。
+- 输入/中间量/输出与不变量 → result（`items`，可选 `conclusion`）。
+- 分步推导，公式配依据 → derivation（`steps[{expression,reason}]`，expression 用不含分隔符的 LaTeX）。
+- 易错点、适用条件 → callout；默认折叠的线索 → reveal（展开不发消息）；术语就地解释 → term。
+
+提问必须用组件，不要在正文里写“你觉得呢？”再等用户打字：
+- 选择题用 choices，每个选项的 replyText 是用户会真实说出口的完整句子；一次只问一个问题，不预写判题反馈。
+- 填空题用 fill：单个输入框，`label` 标明要填的字段或等号左侧，`multiline` 可选；用户点“提交回答”才作为用户消息发送，不自动执行用户输入代码。
+
+用户要求直接解释或跳过练习时尊重其选择，不为展示组件强行提问。展开提示、自报“懂了”或选择偏好均不自动成为掌握证据，学习记录继续遵循已有权限与证据规则。**数学一律用 LaTeX**：所有字段（含 `nodes[].label/value/note`、`items[].value`、`columns[].body`、选项文字、`fill.label`）与正文的行内公式用 `$...$`，独立公式用 `$$...$$`，推导 expression 用不含分隔符的 LaTeX；不要写 `c1*c2 mod n^2` 这类纯文本公式，也不要用全角 `＝`。不要输出 HTML 或脚本。需要来源时只使用检索返回的原始 summon-file URL 与行号，source.label 说明笔记和位置，不编造来源。

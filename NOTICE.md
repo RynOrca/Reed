@@ -35,3 +35,6 @@ Markdown 渲染使用 Marked，MIT License；完整文本位于 `desktop/web/ven
 ## Tauri 与其他依赖
 
 Tauri 及 Rust / npm 依赖各自遵循包内许可证。依赖列表由 Cargo.lock 和 package-lock.json 记录。本仓库不是 PI-Desktop 插件发行包。
+
+
+KaTeX 0.19.0 is distributed under the MIT License. Copyright Khan Academy and other contributors. Source: https://github.com/KaTeX/KaTeX. License: desktop/web/vendor/KATEX-LICENSE. Reed uses its local MathML output for mathematical typesetting.

@@ -76,3 +76,17 @@ test('取消或删除后，忽略 abort 的迟到模型结果不能改图或复�
   await workflow.open();const task=workflow.refresh();await reached;workflow.close();await store.remove('s');finish({stopReason:'stop',content:[{type:'text',text:JSON.stringify({nodes:[analysis('u1')]})}]});await task;
   await assert.rejects(access(store.path('s')),/ENOENT/);await assert.rejects(store.get('s'),/已删除/);
 }));
+
+
+test('练习关系独立保存，折叠仅隐藏作答链且不隐藏普通追问',()=>fixture(async root=>{
+  const {visibleCanvasNodes}=await import('../web/canvas-geometry.js');
+  const entries=[...pair(1,'原问题'),...pair(2,'选择作答'),...pair(3,'普通追问'),...pair(4,'下一次作答')];
+  entries.find(e=>e.id==='u2').message.reedLearningReply={parentUserId:'u1',toolCallId:'c1',blockId:'q'};
+  entries.find(e=>e.id==='u4').message.reedLearningReply={parentUserId:'u2',toolCallId:'c2',blockId:'q2'};
+  entries.push({type:'custom',customType:'reed_canvas_parent',data:{userEntryId:'u3',parentNodeId:'u1'}});
+  const store=new ConversationCanvasStore(root);await store.sync('s',entries);await store.analyze('s',[analysis('u3')],['u3']);
+  const full=await store.get('s');assert.equal(full.nodes.length,4);assert.equal(full.edges.filter(e=>e.kind==='learning_reply').length,2);
+  await store.edit('s',{nodes:[{id:'u1',answersCollapsed:true}]});const folded=await new ConversationCanvasStore(root).get('s');assert.deepEqual(visibleCanvasNodes(folded).map(n=>n.id).sort(),['u1','u3']);assert.equal(folded.nodes.length,4);
+  await assert.rejects(store.edit('s',{nodes:[{id:'u3',answersCollapsed:true}]}),/只能折叠/);
+  await store.edit('s',{nodes:[{id:'u1',answersCollapsed:false}]});assert.equal(visibleCanvasNodes(await store.get('s')).length,4);
+}));
