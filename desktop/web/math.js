@@ -31,11 +31,26 @@ export function renderMath(expression,{display=false}={}){
   try{
     if(!source.trim()||source.length>4000)throw Error('公式长度无效');
     // Only KaTeX's untrusted-input MathML output enters the DOM, never model HTML.
-    katex.render(source,node,{displayMode:display,output:'mathml',throwOnError:true,trust:false,maxExpand:200,maxSize:10,strict:'ignore',macros:{}});
-    if(source!==String(expression??''))node.dataset.reedMathSource=source;
+    // 单个不认识的命令不能让整条公式（连同整块图解）降级：让它只标红那一处，
+    // 其余部分照常排版；整串无法解析时才退回文字。
+    katex.render(source,node,{displayMode:display,output:'mathml',throwOnError:false,errorColor:'#c98f8f',trust:false,maxExpand:200,maxSize:10,strict:'ignore',macros:{}});
+    if(!node.querySelector('math'))throw Error('未产出数学结构');
   }catch{node.textContent=source;node.classList.add('reed-math-fallback');node.title='公式暂时无法排版，保留原文';}
   return node;
 }
+
+// 重点标记：==高亮== 与 ++虚线下划线++。模型用它标出关键结论或术语，
+// 渲染成无行为的 span，颜色由学习块/正文样式决定。
+export function emphasisExtension(){return {extensions:[
+  {name:'reedHighlight',level:'inline',start:src=>src.indexOf('=='),tokenizer(src){
+    const m=/^==(?![=])([\s\S]+?)==(?![=])/.exec(src);
+    if(m)return {type:'reedEmphasis',raw:m[0],kind:'hl',text:m[1]};
+  }},
+  {name:'reedWave',level:'inline',start:src=>src.indexOf('++'),tokenizer(src){
+    const m=/^\+\+(?!\+)([\s\S]+?)\+\+(?!\+)/.exec(src);
+    if(m)return {type:'reedEmphasis',raw:m[0],kind:'wave',text:m[1]};
+  }},
+]};}
 
 export function mathExtension(){return {extensions:[
   {name:'reedBlockMath',level:'block',start:src=>src.search(/(?:^|\n)[ \t]*(?:\$\$|\\\[)/),tokenizer(src){

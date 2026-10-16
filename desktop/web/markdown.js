@@ -1,14 +1,16 @@
 import { marked } from "./vendor/marked.esm.js";
-import {renderMath,mathExtension} from "./math.js";
+import {renderMath,mathExtension,emphasisExtension} from "./math.js";
 marked.use(mathExtension());
+marked.use(emphasisExtension());
 
-// Build DOM nodes from Marked tokens. Raw HTML is always displayed as text.
+// 行内 token → DOM。原始 HTML 一律按文本显示。
 function inline(tokens = [], options = {}) {
   const fragment = document.createDocumentFragment();
   for (const token of tokens) {
     let node;
     switch (token.type) {
       case "reedInlineMath": node=renderMath(token.text);break;
+      case "reedEmphasis": node=document.createElement("span"); node.className="emphasis-"+token.kind; node.append(inline(token.tokens||[{type:"text",text:token.text}],options)); break;
       case "strong": node = document.createElement("strong"); node.append(inline(token.tokens,options)); break;
       case "em": node = document.createElement("em"); node.append(inline(token.tokens,options)); break;
       case "del": node = document.createElement("del"); node.append(inline(token.tokens,options)); break;
@@ -88,7 +90,18 @@ function blocks(tokens = [], options = {}) {
       }
       case "blockquote": node = document.createElement("blockquote"); node.append(blocks(token.tokens,options)); break;
       case "hr": node = document.createElement("hr"); break;
-      case "html": node = document.createElement("p"); node.textContent = token.text || token.raw || ""; break;
+      case "html": {
+        // 原始 HTML 一律按文本显示；只有 <mark> / <u> 这两个纯视觉、无行为的标签例外，
+        // 它们是模型可用的重点标记（不带事件、链接或脚本）。
+        const raw = String(token.text || token.raw || "");
+        const emphasis = /^<(mark|u)>([\s\S]*?)<\/\1>$/.exec(raw);
+        if (emphasis) {
+          node = document.createElement("span"); node.className = emphasis[1] === "mark" ? "emphasis-hl" : "emphasis-wave";
+          node.textContent = emphasis[2];
+          break;
+        }
+        node = document.createElement("p"); node.textContent = raw; break;
+      }
       case "table": {
         node = document.createElement("table"); const head = document.createElement("thead"); const heading = document.createElement("tr");
         for (const cell of token.header || []) { const th = document.createElement("th"); th.append(inline(cell.tokens,options)); heading.append(th); }

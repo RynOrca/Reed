@@ -215,6 +215,22 @@ test('组件字段里的 $...$ 也排版成公式，不再显示 LaTeX 源码',(
   assert.equal(button.attributes['aria-label'],'3(m_1+m_2)；发送：关于「选一个」：我选 3(m_1+m_2)。','无障碍名称用去掉定界符的可读文字');
 });
 
+test('重点标记与无法排版的命令不会拖垮整块',()=>{
+  const view=renderLearning({schemaVersion:1,fallbackText:'x',blocks:[
+    {id:'c',type:'callout',title:'注意条件',fallbackText:'x',text:'明文空间是 $\\mathbb{Z}_n$；==只有掌握 $\\lambda$ 的人能还原明文==，++密文膨胀约 2 倍++。'},
+    {id:'d',type:'derivation',title:'推导',fallbackText:'x',steps:[{expression:'c^{\\lambda} \\\\equiv 1 \\pmod{n^{2}}',reason:'不认识的命令 $\\notacommand{x}$ 只标出问题，不整块降级'}]},
+  ]});
+  const classes=[];
+  const collect=node=>{if(!node||typeof node!=='object')return;const cls=String(node.className||'');if(cls)classes.push(cls);for(const child of node.children||[])collect(child);};
+  collect(view.root);
+  assert.ok(classes.some(name=>name.split(' ').includes('emphasis-hl')),'==高亮== 应渲染成高亮标记');
+  assert.ok(classes.some(name=>name.split(' ').includes('emphasis-wave')),'++下划线++ 应渲染成标记');
+  assert.equal(/==|\+\+/.test(view.root.textContent),false,'标记语法不应留在文字里：'+view.root.textContent.slice(0,80));
+  const steps=find(view.root,node=>String(node.className||'').includes('learning-step'));
+  assert.ok(steps,'推导步骤应渲染');
+  assert.ok(find(steps,node=>String(node.className||'').includes('reed-math')),'公式容器仍在');
+});
+
 test('正常正文不经过恢复路径',()=>{
   const root=new El('div');
   assert.equal(renderAssistantMarkdown(root,'普通 **Markdown** 段落。',renderMarkdown,{}),false);

@@ -1,9 +1,6 @@
 import {renderMarkdown,renderInline} from './markdown.js';
 import {renderMath} from './math.js';
 const text=(tag,value,cls='')=>{const n=document.createElement(tag);n.className=cls;n.textContent=String(value||'').slice(0,6000);return n;};
-// 所有可能出现数学的字段都按行内富文本渲染：模型写 $c_1$ 或 \(c_1\) 时排版成公式，
-// 而不是把 LaTeX 源码显示出来。
-const rich=(tag,value,cls='')=>{const n=document.createElement(tag);n.className=cls;renderInline(n,String(value||'').slice(0,6000));return n;};
 // 按钮文字的 aria-label 需要纯文本，这里把公式源码取出来当名字。
 const plain=value=>String(value||'').replace(/\$([^$]*)\$/g,'$1').replace(/\\\(([^)]*)\\\)/g,'$1');
 export const replyText=(block,answer)=>block.type==='fill'?`关于「${block.title}」：\n${block.label} ${answer.trim()}`:`关于「${block.title}」：${answer.replyText}`;
@@ -15,9 +12,14 @@ export function isLearningSpec(spec){
 }
 function blockView(b,{getReplyState,getDraft,onDraft,onReply,onStatus=()=>{},isAvailable,controls,refresh}){
   const section=document.createElement('section');section.className='learning-block learning-'+b.type;section.dataset.blockId=b.id;
-  const body=(host,value)=>{const n=document.createElement('div');renderMarkdown(n,String(value||'').slice(0,2400));host.append(n);};
+  // [^1] 这类脚注在正文里渲染成链接，来源清单附在块末，避免原样显示标记。
+  const notes=new Map();
+  // 所有可能出现数学的字段都按行内富文本渲染：模型写 $c_1$ 或 \(c_1\) 时排版成公式，
+  // 而不是把 LaTeX 源码显示出来。
+  const rich=(tag,value,cls='')=>{const n=document.createElement(tag);n.className=cls;renderInline(n,String(value||'').slice(0,6000),{notes});return n;};
+  const body=(host,value)=>{const n=document.createElement('div');renderMarkdown(n,String(value||'').slice(0,2400),{notes});host.append(n);};
   const list=(values,max)=>{if(!Array.isArray(values)||!values.length||values.length>max)throw Error('无效学习列表');return values;};
-  if(b.title&&!['reveal','callout'].includes(b.type))section.append(text('h3',b.title));
+  if(b.title&&!['reveal','callout'].includes(b.type))section.append(rich('h3',b.title));
   switch(b.type){
     case 'flow':{const grid=document.createElement('div');grid.className=b.layout==='timeline'?'learning-timeline':'learning-path';for(const [i,item]of list(b.nodes,6).entries()){const node=document.createElement('div');node.className='learning-node';node.append(rich('small',item.label),rich('strong',item.value));if(visible(item.note))node.append(rich('p',item.note));if(i&&b.layout!=='timeline')grid.append(text('span','→','learning-arrow'));grid.append(node);}section.append(grid);break;}
     case 'compare':{const grid=document.createElement('div');grid.className='learning-compare-grid';for(const item of list(b.columns,3)){const col=document.createElement('div');col.append(rich('h4',item.title));body(col,item.body);grid.append(col);}section.append(grid);break;}
@@ -30,12 +32,27 @@ function blockView(b,{getReplyState,getDraft,onDraft,onReply,onStatus=()=>{},isA
     default:throw Error('不支持的块类型');
   }
   if(b.source&&/^summon-file:[^\r\n]+#L[1-9][0-9]*$/.test(b.source.url)){const source=text('button','查看来源 · '+b.source.label,'learning-source');source.type='button';source.dataset.learningSource=b.source.url;section.append(source);}
+  appendSources(section,notes);
   return section;
 }
 // 单个块不可用时只让这一块退回可读文字：同一条消息里的其他图解和提问继续显示。
 function blockFallback(b,error){
   const message=String(b?.fallbackText||'').trim()||'此内容暂不支持，继续阅读正文。';
   return text('p',error?.message&&/无效学习列表/.test(error.message)?`${message}（${error.message}）`:message,'learning-block-fallback');
+}
+// 正文里可能出现 [^1] 这类脚注标记：正文渲染负责建立编号，这里负责把它列出来，
+// 否则标记会在正文里原样显示成 [^1]。
+function appendSources(section,notes){
+  if(!notes?.size)return false;
+  const list=document.createElement('section');list.className='markdown-sources';list.setAttribute('aria-label','引用来源');
+  const heading=document.createElement('h4');heading.textContent='引用来源';const ordered=document.createElement('ol');
+  for(const note of notes.values()){
+    const item=document.createElement('li');item.id=note.target;item.tabIndex=-1;
+    if(note.fragment)item.append(note.fragment);else renderMarkdown(item,note.body,{taskIndex:{value:0}});
+    ordered.append(item);
+  }
+  list.append(heading,ordered);section.append(list);
+  return true;
 }
 const envelopeFallback=spec=>String(spec?.fallbackText||'').trim();
 const parse=(spec,render)=>{

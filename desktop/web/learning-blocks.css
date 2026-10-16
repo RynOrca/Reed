@@ -3,3 +3,74 @@
 .learning-fill-form{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap}.learning-fill-form label{display:flex;align-items:center;gap:10px;flex:1;min-width:min(100%,220px)}.learning-fill-form input,.learning-fill-form textarea{flex:1;min-width:0;background:var(--ds-bg-composer);color:inherit;border:1px solid var(--ds-tile-deep);border-radius:8px;padding:10px 12px;font:inherit}.learning-fill-form textarea{min-height:90px;resize:vertical;font-family:var(--font-mono)}.learning-submit,.learning-source{padding:9px 12px;border-radius:8px;border:1px solid var(--ds-tile-deep);background:var(--ds-bg-hover);color:inherit}.learning-submit:disabled{opacity:.55;cursor:default}.learning-source{margin-top:12px;font-size:.8em;background:transparent}.learning-choice.is-selected{border-color:var(--ds-success);opacity:1}.learning-source-dialog{max-width:min(850px,95vw);max-height:85vh;background:var(--ds-bg-primary);color:inherit;border:1px solid var(--ds-tile-deep);border-radius:12px;padding:20px}.learning-source-dialog header{display:flex;justify-content:space-between;gap:12px}.learning-source-dialog button{background:var(--ds-bg-hover);color:inherit;padding:6px 12px;border-radius:7px}.learning-source-lines{overflow:auto;max-height:60vh;font:13px/1.8 var(--font-mono);white-space:pre-wrap;overflow-wrap:anywhere}.learning-source-line{display:block;padding:1px 8px}.learning-source-line.is-target{background:var(--ds-bg-hover);border-left:2px solid var(--ds-success)}.learning-source-line small{display:inline-block;min-width:35px;color:var(--ds-text-muted);user-select:none}
 .learning-block-fallback{color:var(--ds-text-muted);border-left:2px solid var(--ds-tile-deep);padding:10px 16px}
 .learning-node strong .reed-math,.learning-result-grid strong .reed-math{display:inline}
+
+/* 学习块的配色：低饱和的莫兰迪/马卡龙色系，深浅主题各一套。
+   颜色只用来说明“这是哪一类表达”，文字仍走主题文本色；深色模式让底色更接近卡片色。 */
+:root{
+  --learn-flow:#c3cbe2;--learn-flow-bg:#aab6d21f;--learn-flow-line:#8f9dc4;
+  --learn-compare:#c0b4d6;--learn-compare-bg:#b3a3d21a;
+  --learn-derive:#c3b3e0;--learn-derive-bg:#b6a3e01f;--learn-derive-chip:#c3b3e0;
+  --learn-ask:#c79ab8;--learn-ask-bg:#c79ab81f;
+  --learn-input:#8fa8a4;--learn-input-bg:#8fa8a41f;
+  --learn-note:#a9bcd6;--learn-note-bg:#9fb2d01f;
+  --learn-hint:#9a94bd;--learn-hint-bg:#9a94bd1a;--learn-hint-line:#9a94bd;
+  --learn-term:#8fb2c4;--learn-term-bg:transparent;
+  --learn-warning:#c9a98f;--learn-warning-bg:#c9a98f1f;--learn-danger:#c98f8f;
+  --learn-tile-bg:#ffffff08;--learn-tile-border:var(--ds-tile-deep);
+}
+:root[data-theme=light]{
+  --learn-flow:#5b7098;--learn-flow-bg:#e3e7f2;--learn-flow-line:#7f93b8;
+  --learn-compare:#6f7fae;--learn-compare-bg:#e9e6f4;
+  --learn-derive:#7a6796;--learn-derive-bg:#efe9f6;--learn-derive-chip:#8a74a6;
+  --learn-ask:#a76f9c;--learn-ask-bg:#f7ecf4;
+  --learn-input:#5f8f8a;--learn-input-bg:#e7efe9;
+  --learn-note:#4f7d8c;--learn-note-bg:#e7eef5;
+  --learn-hint:#6d67a2;--learn-hint-bg:#ecf0f8;--learn-hint-line:#7a86ad;
+  --learn-term:#4a7f92;--learn-term-bg:#e7f0f280;
+  --learn-warning:#a9743f;--learn-warning-bg:#f7ecdf80;--learn-danger:#b06a6a;
+  --learn-tile-bg:#ffffffcc;--learn-tile-border:#c9d3c6;
+}
+.learning-flow .learning-path{border-color:var(--learn-flow-line);background:var(--learn-flow-bg)}
+.learning-node strong,.learning-node small{color:var(--learn-flow)}
+.learning-timeline{border-left-color:var(--learn-flow-line)}
+.learning-compare-grid>div{border-left-color:var(--learn-compare)}
+.learning-block.learning-compare h4{color:var(--learn-compare)}
+.learning-derivation{border-left:2px solid var(--learn-derive);padding:4px 0 4px 14px;border-radius:2px;background:var(--learn-derive-bg)}
+.learning-step small{color:var(--learn-derive);font-variant-numeric:tabular-nums;font-weight:600}
+.learning-block.learning-choices{border-left:2px solid var(--learn-ask);padding-left:14px;background:var(--learn-ask-bg);border-radius:2px}
+.learning-choice{border-color:var(--learn-ask);background:var(--learn-tile-bg)}
+.learning-choice:hover:enabled{background:var(--learn-ask-bg);border-color:var(--learn-ask);box-shadow:0 0 0 1px var(--learn-ask)}
+.learning-block.learning-fill{border-left:2px solid var(--learn-input);padding-left:14px;background:var(--learn-input-bg);border-radius:2px}
+.learning-fill-form input,.learning-fill-form textarea{border-color:var(--learn-input)}
+.learning-submit{border-color:var(--learn-input);background:var(--learn-input-bg)}
+.learning-callout{border-left-color:var(--learn-note);background:var(--learn-note-bg);border-radius:2px}
+.learning-callout h4{color:var(--learn-note)}
+.learning-warning{border-left-color:var(--learn-warning);background:var(--learn-warning-bg)}
+.learning-warning h4{color:var(--learn-warning)}
+.learning-reveal{border-color:var(--learn-hint-line);background:var(--learn-hint-bg);border-radius:2px;padding-inline:12px}
+.learning-reveal summary{color:var(--learn-hint)}
+.learning-reveal details>div{border-left-color:var(--learn-hint-line)}
+.learning-term summary{color:var(--learn-term)}
+.learning-term details>div{border-left-color:var(--learn-term)}
+.learning-result-grid>div{border-color:var(--learn-tile-border);background:var(--learn-tile-bg)}
+.learning-result-grid strong{color:var(--learn-note)}
+.learning-term .reed-math,.learning-reveal .reed-math,.learning-callout .reed-math{color:var(--learn-term)}
+.learning-expression{color:var(--ds-text-secondary)}
+:root[data-theme=light] .learning-expression{color:#2f3a33}
+/* 重点标记：==高亮== 与 ++虚线下划线++，低饱和底色，深浅主题各一套。 */
+:root{--emphasis-hl-bg:#c79ab833;--emphasis-hl-text:inherit;--emphasis-wave:#a99ac6}
+:root[data-theme=light]{--emphasis-hl-bg:#f0e2ef;--emphasis-hl-text:#7a4f74;--emphasis-wave:#7a6796}
+.prose-chat .emphasis-hl,.learning-block .emphasis-hl{background:var(--emphasis-hl-bg);color:var(--emphasis-hl-text);border-radius:5px;padding:1px 5px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+.prose-chat .emphasis-wave,.learning-block .emphasis-wave{text-decoration:underline dotted var(--emphasis-wave);text-decoration-thickness:2px;text-underline-offset:5px}
+/* 独立公式（$$...$$）单独居中一行（适合卡片内「一个恒等式」式的关键式子）；
+   推导步骤与表格/节点里的公式保持左对齐，避免右侧留出缺口。 */
+.learning-block .reed-math-display{display:block;text-align:center;margin:12px 0}
+.learning-step .reed-math-display,.learning-compare-grid .reed-math-display,.learning-result-grid .reed-math-display,.learning-node .reed-math-display{text-align:left;margin:8px 0}
+.learning-expression .reed-math-display{margin:4px 0}
+/* 卡片底色与内部文字保持足够对比：底色是淡色调，文字仍用主题文本色。 */
+.learning-block.learning-flow{background:var(--learn-flow-bg);border-radius:10px;padding:12px 14px}
+.learning-block.learning-result{background:var(--learn-note-bg);border-radius:10px;padding:12px 14px}
+.learning-block.learning-compare{background:var(--learn-compare-bg);border-radius:10px;padding:12px 14px}
+.learning-block.learning-term{background:var(--learn-term-bg);border-radius:10px;padding:12px 14px}
+.learning-block.learning-reveal{padding:10px 12px}
+.learning-block.learning-reveal+.learning-block.learning-term{margin-top:.6em}
