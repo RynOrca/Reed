@@ -1,0 +1,65 @@
+/* 学习块与富文本配色：取自用户给定的两套色系（color inspiration #005 / #010）。
+   深色主题用色阶中低饱和的中间色，浅色主题用同色系更浅的一档；文字仍走主题文本色保证对比。
+   #005：#E1E4EA #D2C3D5 #84709B #464879 #5D7DB3 #B6CAD7
+   #010：#E9B9AA #D98481 #7892B5 #8CB9C0 #91B5A9 #EDCA7F */
+
+:root {
+  --learn-flow: #b6cad7;
+  --learn-flow-line: #5d7db3;
+  --learn-compare: #d2c3d5;
+  --learn-derive: #a693b8;
+  --learn-derive-chip: #84709b;
+  --learn-ask: #8cb9c0;
+  --learn-input: #91b5a9;
+  --learn-note: #d2c3d5;
+  --learn-hint: #84709b;
+  --learn-term: #8cb9c0;
+  --learn-warning: #edca7f;
+  --learn-ephemeral: #e9b9aa;
+  --learn-danger: #d98481;
+  /* 卡片底色统一走 --learn-card-bg：深色主题是低透明度叠加，浅色主题是实色浅底。 */
+  --learn-card-bg: #b6cad71f;
+  --learn-tile-bg: #ffffff08;
+  --learn-tile-border: var(--ds-tile-deep);
+  --learn-featured-bg: #ffffff0a;
+  --learn-end-bg: #b6cad71f;
+  --learn-end-text: #b6cad7;
+  --emphasis-hl-bg: #d2c3d540;
+  --emphasis-hl-text: inherit;
+  --emphasis-wave: #a693b8;
+  --learn-code-kw: #b9a6cd;
+  --learn-code-str: #a8c0ae;
+  --learn-code-num: #d9b98c;
+  --learn-code-com: #8d93a8;
+  --learn-code-fn: #8fb6c9;
+}
+
+:root[data-theme=light] {
+  --learn-flow: #464879;
+  --learn-flow-line: #5d7db3;
+  --learn-compare: #84709b;
+  --learn-derive: #84709b;
+  --learn-derive-chip: #84709b;
+  --learn-ask: #6f9ba3;
+  --learn-input: #5f8f84;
+  --learn-note: #84709b;
+  --learn-hint: #84709b;
+  --learn-term: #6f9ba3;
+  --learn-warning: #b8892f;
+  --learn-ephemeral: #c07f6d;
+  --learn-danger: #c4645f;
+  --learn-card-bg: #e1e4ea;
+  --learn-tile-bg: #ffffff;
+  --learn-tile-border: #d3d8e2;
+  --learn-featured-bg: #eceff4;
+  --learn-end-bg: #dfeae4;
+  --learn-end-text: #3f7a5f;
+  --emphasis-hl-bg: #e6dcf3;
+  --emphasis-hl-text: #5b4a78;
+  --emphasis-wave: #84709b;
+  --learn-code-kw: #7a5f9e;
+  --learn-code-str: #4f7a5c;
+  --learn-code-num: #a06a2c;
+  --learn-code-com: #7c8496;
+  --learn-code-fn: #3f6f8a;
+}

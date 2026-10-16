@@ -3,6 +3,35 @@ import {renderMath,mathExtension,emphasisExtension} from "./math.js";
 marked.use(mathExtension());
 marked.use(emphasisExtension());
 
+const CODE_LANGUAGES = /^(?:python|py|python3|javascript|js|jsx|typescript|ts|tsx|json|bash|sh|shell|zsh|powershell|ps1|sql|java|c|cpp|c\+\+|cs|csharp|go|rust|rs|ruby|rb|php|kotlin|swift|yaml|yml|toml|ini|css|scss|html|xml)$/i;
+const CODE_LABELS = { py: "Python", python3: "Python", js: "JavaScript", ts: "TypeScript", sh: "Shell", shell: "Shell", zsh: "Shell", ps1: "PowerShell", rs: "Rust", rb: "Ruby", cs: "C#", yml: "YAML", htm: "HTML" };
+// 极简词法着色：注释、字符串、数字、关键字与函数名。只认常见语言，其它语言原样显示。
+const CODE_KEYWORDS = new Set(("def class return if elif else for while in not and or is None True False import from as with try except finally raise lambda yield global nonlocal assert del pass break continue async await match case self " +
+  "function const let var new typeof instanceof this super extends static get set of null undefined true false => " +
+  "SELECT FROM WHERE INSERT UPDATE DELETE JOIN GROUP ORDER BY LIMIT SUM COUNT AS ON AND OR NOT NULL BEGIN COMMIT " +
+  "public private protected struct enum impl fn let mut use mod match trait void int char bool float double string final").split(/\s+/).filter(Boolean));
+function codeSpans(code, lang) {
+  const fragment = document.createDocumentFragment();
+  const word = (value, cls) => { const node = document.createElement("span"); if (cls) node.className = cls; node.textContent = value; return node; };
+  if (!CODE_LANGUAGES.test(String(lang || ""))) { fragment.append(document.createTextNode(code)); return fragment; }
+  const pattern = new RegExp("(#[^\\n]*|//[^\\n]*)|(\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`)|\\b(\\d+(?:\\.\\d+)?)\\b|\\b([A-Za-z_][A-Za-z0-9_]*)\\b", "g");
+  let last = 0;
+  for (let match = pattern.exec(code); match; match = pattern.exec(code)) {
+    // end 必须按整段匹配算：用组长度会在前导空白/注释上错位，导致后面全部落到纯文本分支。
+    const end = match.index + match[0].length;
+    if (match.index > last) fragment.append(document.createTextNode(code.slice(last, match.index)));
+    if (match[1]) fragment.append(word(match[1], "tk-com"));
+    else if (match[2]) fragment.append(word(match[2], "tk-str"));
+    else if (match[3]) fragment.append(word(match[3], "tk-num"));
+    else if (CODE_KEYWORDS.has(match[4])) fragment.append(word(match[4], "tk-kw"));
+    else if (code[end] === "(") fragment.append(word(match[4], "tk-fn"));
+    else fragment.append(document.createTextNode(match[4]));
+    last = end;
+  }
+  if (last < code.length) fragment.append(document.createTextNode(code.slice(last)));
+  return fragment;
+}
+
 // 行内 token → DOM。原始 HTML 一律按文本显示。
 function inline(tokens = [], options = {}) {
   const fragment = document.createDocumentFragment();
@@ -63,7 +92,8 @@ function blocks(tokens = [], options = {}) {
         node = document.createElement("div"); node.className = "markdown-code";
         const header = document.createElement("div"); header.className = "markdown-code-header";
         const language = document.createElement("span"); language.className = "markdown-code-language";
-        language.textContent = String(token.lang || "文本").split(/\s+/)[0];
+        const declared = String(token.lang || "").split(/\s+/)[0];
+        language.textContent = declared ? (CODE_LABELS[declared.toLowerCase()] || declared) : "文本";
         const copy = document.createElement("button"); copy.type = "button"; copy.className = "markdown-code-copy";
         copy.textContent = "复制代码"; copy.setAttribute("aria-label", "复制代码");
         copy.onclick = async () => {
@@ -78,7 +108,9 @@ function blocks(tokens = [], options = {}) {
           }
         };
         header.append(language, copy);
-        const pre = document.createElement("pre"); const code = document.createElement("code"); code.textContent = token.text || "";
+        const pre = document.createElement("pre"); const code = document.createElement("code");
+        // 认识的语言做极简词法着色；复制仍然取原文，不带着色标签。
+        code.append(codeSpans(token.text || "", declared));
         if (token.lang) code.dataset.lang = token.lang;
         pre.append(code); node.append(header, pre); break;
       }

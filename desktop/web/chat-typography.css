@@ -1,15 +1,15 @@
 /* Reading rhythm for the main conversation; keep the native shell compact. */
 .chat-shell {
-  --chat-code-bg:#222422;
-  --chat-code-bar:#ffffff05;
+  --chat-code-bg:#20222b;
+  --chat-code-bar:#ffffff0a;
   --chat-rule:#ffffff1c;
-  --chat-inline-bg:#ffffff0d;
+  --chat-inline-bg:#ffffff12;
 }
 [data-theme=light] .chat-shell {
-  --chat-code-bg:#eef1eb;
+  --chat-code-bg:#f2f3f7;
   --chat-code-bar:#24342805;
   --chat-rule:#26372824;
-  --chat-inline-bg:#2434280c;
+  --chat-inline-bg:#46487912;
 }
 .chat-shell .thread-scroll { padding-inline:clamp(18px,4vw,48px); }
 .chat-shell .transcript-list { max-width:760px; }
@@ -113,3 +113,15 @@
   .markdown-code-header { padding-inline:12px; }
   .prose-chat .markdown-code pre { padding:14px; }
 }
+
+/* 代码着色：极简词法着色（注释/字符串/数字/关键字/函数名），深浅主题各一套，
+   取自同一套莫兰迪色系；未识别的语言不着色。 */
+.prose-chat .markdown-code { --tk-kw:#b9a6cd; --tk-str:#a8c0ae; --tk-num:#d9b98c; --tk-com:#8d93a8; --tk-fn:#8fb6c9; }
+:root[data-theme=light] .prose-chat .markdown-code { --tk-kw:#7a5f9e; --tk-str:#4f7a5c; --tk-num:#a06a2c; --tk-com:#7c8496; --tk-fn:#3f6f8a; }
+.prose-chat .markdown-code .tk-kw { color:var(--tk-kw); }
+.prose-chat .markdown-code .tk-str { color:var(--tk-str); }
+.prose-chat .markdown-code .tk-num { color:var(--tk-num); }
+.prose-chat .markdown-code .tk-com { color:var(--tk-com); font-style:italic; }
+.prose-chat .markdown-code .tk-fn { color:var(--tk-fn); }
+.learning-block .markdown-code { --tk-kw:#b9a6cd; --tk-str:#a8c0ae; --tk-num:#d9b98c; --tk-com:#8d93a8; --tk-fn:#8fb6c9; border-radius:12px; }
+:root[data-theme=light] .learning-block .markdown-code { --tk-kw:#7a5f9e; --tk-str:#4f7a5c; --tk-num:#a06a2c; --tk-com:#7c8496; --tk-fn:#3f6f8a; }

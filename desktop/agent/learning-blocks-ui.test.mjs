@@ -231,6 +231,20 @@ test('重点标记与无法排版的命令不会拖垮整块',()=>{
   assert.ok(find(steps,node=>String(node.className||'').includes('reed-math')),'公式容器仍在');
 });
 
+test('代码块带语言标签、复制按钮与词法着色',()=>{
+  const spec={schemaVersion:1,fallbackText:'x',blocks:[{id:'c',type:'callout',title:'实现',fallbackText:'x',text:'随机数用 `secrets.randbelow`：\n\n```python\nimport secrets\n\ndef choose_r(n):\n    # 注释\n    if gcd(r, n) == 1:\n        return r\n```\n'}]};
+  const view=renderLearning(spec);
+  const code=find(view.root,node=>String(node.className||'').includes('markdown-code'));
+  assert.ok(code,'应渲染代码块');
+  assert.ok(find(code,node=>String(node.className||'').includes('markdown-code-language')).textContent==='python','语言标签应显示 python');
+  assert.ok(find(code,node=>String(node.className||'').includes('markdown-code-copy')),'复制按钮应在');
+  const kinds=new Set();
+  const walk=node=>{if(!node||typeof node!=='object')return;if(String(node.className||'').startsWith('tk-'))kinds.add(node.className);for(const child of node.children||[])walk(child);};
+  walk(code);
+  assert.ok(kinds.has('tk-kw')&&kinds.has('tk-com')&&kinds.has('tk-fn'),'关键字/注释/函数名都应着色：'+[...kinds].join(','));
+  assert.ok(code.textContent.includes('import secrets'),'代码原文要完整保留');
+});
+
 test('正常正文不经过恢复路径',()=>{
   const root=new El('div');
   assert.equal(renderAssistantMarkdown(root,'普通 **Markdown** 段落。',renderMarkdown,{}),false);
