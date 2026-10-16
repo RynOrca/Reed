@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
 import {renderLearning,createLearningView,isLearningSpec} from '../web/learning-blocks.js';
 import {splitLearningLiterals,stripLearningMarkup,hasLearningMarkup,renderAssistantMarkdown} from '../web/learning-literals.js';
 import {renderMarkdown} from '../web/markdown.js';
@@ -97,6 +98,42 @@ test('残缺或非法标记整段清理且不抛异常',()=>{
   const cut='讲到这里。<show_learn';
   assert.equal(/show_learn/.test(stripLearningMarkup(cut)),false,'截断的标记残片也要清掉');
   assert.ok(stripLearningMarkup(cut).includes('讲到这里'));
+});
+
+test('属性式标记（单引号 Python 字面量）同样还原，个别字段不合规不拖累整段',()=>{
+  const python="[{'id':'paillier-hom','type':'derivation','title':'为什么密文相乘等于明文相加','steps':[{'expression':'c_1 c_2 \\\\equiv g^{m_1} r_1^{n} \\\\pmod{n^{2}}','reason':'代入加密公式 c = g^m r^n'}],'source':{'label':'加法同态核心公式 · L87','url':'summon-file:D%3A%5CObsidian%5CPillier.md%23L87'}},{'id':'ask','type':'choices','title':'密文乘 3 解密会得到什么？','fallbackText':'请选择 3(m1+m2) 或 m1+m2+3。','options':[{'id':'a','label':'3(m1+m2)','replyText':'我选 3(m1+m2)。'}]}]";  const source=`你笔记里公式已经记全了。\n\n<show_learning schemaVersion="1" fallbackText="同态性推导：c₁c₂ ≡ g^{m₁+m₂}(r₁r₂)ⁿ，标量乘法 E(m)^k → m·k。" blocks="${python}"></show_learning>\n\n选完告诉我理由。`;
+  const spans=splitLearningLiterals(source);
+  assert.deepEqual(spans.map(span=>span.kind),['text','learning','text']);
+  assert.deepEqual(spans[1].spec.blocks.map(block=>block.type),['derivation','choices']);
+  // 块数组直接当载荷（少一层 {schemaVersion,blocks}）也要认：抢救路径补齐外壳。
+  const bare=`说明。\n\n<show_learning schemaVersion="1" fallbackText="整体降级文字" blocks="${python.replace(/%23L87/g,'#L87')}"></show_learning>`;
+  const bareSpec=splitLearningLiterals(bare).filter(span=>span.kind==='learning')[0];
+  assert.deepEqual(bareSpec.spec.blocks.map(block=>block.type),['derivation','choices']);
+  assert.ok(bareSpec.spec.fallbackText.trim(),'没有整体降级文字时按块拼一段可读文字');
+  assert.equal(spans[1].spec.fallbackText.startsWith('同态性推导'),true,`实际=${spans[1].spec.fallbackText}`);
+  assert.ok(spans[1].spec.fallbackText.includes('为什么密文相乘等于明文相加'),'标签上的整体降级文字与按块拼的文字都要保留');
+  const root=new El('div');
+  assert.equal(renderAssistantMarkdown(root,source,renderMarkdown,{}),true);
+  assert.equal(/show_learning|schemaVersion/.test(root.textContent),false);
+  assert.ok(find(root,node=>String(node.className).includes('learning-derivation')),'属性式也要渲染出推导块');
+  assert.equal(find(root,node=>String(node.className).includes('learning-choices')).querySelectorAll?.('.learning-choice')??2,2);
+});
+
+test('真实会话里的两条标记消息全部还原，不再只剩标题',async()=>{
+  const raw=await readFile(new URL('../../dist/learning-blocks-0.3.2/real-literal-messages.jsonl',import.meta.url),'utf8').catch(()=>null);
+  if(!raw)return; // 本地夹具缺失时跳过，不把缺失当通过
+  const messages=raw.split(/\r?\n/).filter(Boolean).map(line=>{try{return JSON.parse(line).message;}catch{return null;}}).filter(message=>message?.role==='assistant');
+  const literals=messages.filter(message=>(message.content||[]).some(block=>block.type==='text'&&/<show_learning/i.test(block.text||'')));
+  assert.ok(literals.length>=2,'夹具里应含两条标记消息');
+  for(const message of literals){
+    const text=message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n');
+    const specs=splitLearningLiterals(text).filter(span=>span.kind==='learning').flatMap(span=>span.spec.blocks);
+    assert.ok(specs.length>0,'真实标记消息必须还原出块');
+    const root=new El('div');
+    renderAssistantMarkdown(root,text,renderMarkdown,{});
+    assert.equal(/show_learning/i.test(root.textContent),false);
+    assert.ok(find(root,node=>String(node.className).includes('learning-block')),'至少渲染出一个块容器');
+  }
 });
 
 test('正常正文不经过恢复路径',()=>{
