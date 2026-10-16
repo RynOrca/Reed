@@ -580,7 +580,7 @@ function onEvent(event) {
       } else {
         if (!assistantRow) assistantRow = messageRow("assistant");
         assistantRow._source = (assistantRow._source || "") + (response.text || "");
-        renderMarkdown(assistantRow, assistantRow._source);
+        renderAssistant(assistantRow, assistantRow._source);
       }
       scrollToLatest(); break;
     }
