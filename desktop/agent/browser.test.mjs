@@ -64,8 +64,11 @@ test("Owned lazy Edge can read, fill, click and screenshot an isolated page",{ti
 test("owned browser reopens after idle-style shutdown without consuming stale debug port",{timeout:30000},async()=>{
  const root=await mkdtemp(join(tmpdir(),"reed-browser-reopen-")),browser=new AgentBrowser(root);
  try{
-  await browser.run({action:"snapshot"});const child=browser.child;
-  const exited=new Promise(resolve=>child.once("exit",resolve));browser.close();await exited;
+  await browser.run({action:"snapshot"});const socket=browser.socket;
+  // The msedge launcher exits right after spawning the real browser, so the CDP
+  // socket closing is the shutdown signal here, not the launcher process.
+  const closed=new Promise(resolve=>{if(!socket)resolve();else socket.addEventListener("close",resolve,{once:true});});
+  browser.close();await Promise.race([closed,new Promise(resolve=>setTimeout(resolve,3000))]);
   const reopened=await browser.run({action:"snapshot"});assert.ok(reopened.content[0].text.includes("about:blank"));
  }finally{const child=browser.child;const exited=child&&child.exitCode===null?new Promise(resolve=>child.once("exit",resolve)):Promise.resolve();browser.close();await exited;await rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
 });

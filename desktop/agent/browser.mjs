@@ -49,14 +49,17 @@ export class AgentBrowser {
     let executable; for(const path of candidates) { if(await access(path).then(()=>true,()=>false)) { executable=path; break; } }
     if(!executable) throw new Error("未找到 Microsoft Edge，请安装后使用浏览器工具");
     const profile=join(this.dir,`browser-${process.pid}-${randomUUID()}`); await mkdir(profile,{recursive:true});
+    this.profile=profile;
+    // msedge.exe hands off to a separate browser process and the launcher exits
+    // immediately on Windows. Its exit is normal, not a startup failure, and the
+    // profile must survive until the real browser has been closed.
     this.child=spawn(executable,["--headless=new","--remote-debugging-port=0",`--user-data-dir=${profile}`,"--no-first-run","--no-default-browser-check","about:blank"],{windowsHide:true,stdio:"ignore"});
     const ownedChild=this.child, generation=this.generation;
-    ownedChild.once("exit",()=>{void rm(profile,{recursive:true,force:true,maxRetries:10,retryDelay:200}).catch(()=>{});});
     let launchError; this.child.once("error",e=>{launchError=e;});
     try {
       let port;
-      for(let i=0;i<100;i++) { if(launchError) throw launchError; if(generation!==this.generation) throw new Error("浏览器操作已取消"); if(ownedChild.exitCode!==null) throw new Error("浏览器启动失败"); try { port=Number((await readFile(join(profile,"DevToolsActivePort"),"utf8")).split("\n")[0]); if(port) break; } catch {} await new Promise(r=>setTimeout(r,100)); }
-      if(!port) throw new Error("浏览器启动超时");
+      for(let i=0;i<150;i++) { if(launchError) throw launchError; if(generation!==this.generation) throw new Error("浏览器操作已取消"); try { port=Number((await readFile(join(profile,"DevToolsActivePort"),"utf8")).split("\n")[0]); if(port) break; } catch {} await new Promise(r=>setTimeout(r,100)); }
+      if(!port) throw new Error("浏览器启动超时：15 秒内没有拿到调试端口");
       const response=await fetch(`http://127.0.0.1:${port}/json/version`,{signal:AbortSignal.timeout(5000)}); const version=await response.json();
       this.socket=new WebSocket(version.webSocketDebuggerUrl);
       await new Promise((res,rej)=>{ const timer=setTimeout(()=>rej(new Error("浏览器连接超时")),5000); this.socket.addEventListener("open",()=>{clearTimeout(timer);res();},{once:true}); this.socket.addEventListener("error",()=>{clearTimeout(timer);rej(new Error("浏览器连接失败"));},{once:true}); });
@@ -151,11 +154,14 @@ export class AgentBrowser {
     clearTimeout(this.idleTimer);
     this.previewServer?.close();this.previewServer=null;this.previewPath=null;this.previewRevision=null;
     for(const req of this.pending.values()) {clearTimeout(req.timer);req.reject(new Error("浏览器已关闭"));} this.pending.clear();
-    const child=this.child, socket=this.socket;
+    const child=this.child, socket=this.socket, profile=this.profile;
     if(socket?.readyState===1) {
-      socket.send(JSON.stringify({id:++this.sequence,method:"Browser.close"}));
+      try { socket.send(JSON.stringify({id:++this.sequence,method:"Browser.close"})); } catch {}
       const fallback=setTimeout(()=>child?.kill(),2000); fallback.unref(); child?.once("exit",()=>clearTimeout(fallback));
     } else child?.kill();
+    // `this.child` is only the launcher; remove the profile after the real browser
+    // had a chance to shut down through Browser.close.
+    if(profile){ this.profile=null; const cleanup=setTimeout(()=>{void rm(profile,{recursive:true,force:true,maxRetries:10,retryDelay:200}).catch(()=>{});},2500); cleanup.unref(); }
     this.socket=null; this.child=null; this.sessionId=null;
   }
 }
