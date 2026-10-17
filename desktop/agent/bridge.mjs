@@ -15,7 +15,6 @@ import { createAbortWatchdog } from "./turn-watchdog.mjs";
 import { createReviewGate } from "./review-gate.mjs";
 import { ConversationCanvasStore, ConversationCanvasWorkflow, conversationPairs, canvasSource, messageText } from './conversation-canvas.mjs';
 import { createDiagnosticFetch, createRequestFetch } from "./stream-diagnostics.mjs";
-import { foregroundWaitPolicy } from './model-wait.mjs';
 import {createWireAttempt,createToolLedger} from './provider-wire.mjs';
 import {sampleRouterLoad} from './router-load.mjs';
 import { Agent as HttpAgent, fetch as foregroundFetch } from 'undici';
@@ -354,18 +353,16 @@ async function openSession(provider, modelId, sessionManager) {
     settingsManager.applyOverrides({retry:{enabled:false}});
     const signal=AbortSignal.any([options?.signal,turnController?.signal].filter(Boolean));
     const provider = providers.providers.find(p=>p.id===model.provider);
-    const storedModel = provider?.models?.find(item=>item.id===model.id);
     return modelRequests.stream(model, {
     signal, priority:'foreground', onWait:()=>send({type:'model_queue',state:'waiting'}),
   },async()=>{
     send({type:'model_queue',state:'running'});
     const attempt=createWireAttempt({model,taskId:`${session.sessionId}:${activeTurnId}`,index:++foregroundRequestIndex,signal,diagnostic,
-      thinking:{budgetTokens:storedModel?.thinkingBudget ?? null},
       onPhase:phase=>{if(phase==='progress'&&busy&&!signal.aborted)send({type:'request_phase',phase:'progress',attempt_id:attempt.snapshot().attempt_id});}});
     activeWireAttempt=attempt;
     const sdkStream = await streamFunction(model, context, {
       ...options, signal, maxRetries:0,
-      fetch: attempt.fetch(createDiagnosticFetch(createRequestFetch(options?.fetch || foregroundFetch, {signal,...foregroundWaitPolicy(provider),connectionMs:provider?.deployment==='local'?0:90000,dispatcher:foregroundHttp,diagnostic:entry=>{if(entry.phase==='waiting'&&busy&&!signal.aborted)send({type:'request_phase',phase:'waiting',elapsedMs:entry.elapsedMs});return diagnostic({...entry,attempt_id:attempt.snapshot().attempt_id,provider:model.provider,model:model.id,requestGroup:'foreground'});},
+      fetch: attempt.fetch(createDiagnosticFetch(createRequestFetch(options?.fetch || foregroundFetch, {signal,idleMs:0,totalMs:0,connectionMs:0,dispatcher:foregroundHttp,diagnostic:entry=>{if(entry.phase==='waiting'&&busy&&!signal.aborted)send({type:'request_phase',phase:'waiting',elapsedMs:entry.elapsedMs});return diagnostic({...entry,attempt_id:attempt.snapshot().attempt_id,provider:model.provider,model:model.id,requestGroup:'foreground'});},
         onPhase:phase=>{if(phase!=='waiting'&&busy&&!signal.aborted)send({type:'request_phase',phase});}}), diagnostic)),
     });
     return {result:async()=>attempt.attach(await sdkStream.result()),async *[Symbol.asyncIterator](){for await(const event of sdkStream){if(event.partial&&!event.partial.reedWire)attempt.attach(event.partial);if(event.message)attempt.attach(event.message);if(event.error?.role==='assistant')attempt.attach(event.error);yield event;}}};
@@ -985,7 +982,7 @@ async function handle(command) {
           const provider=providers.providers.find(p=>p.id===session?.model?.provider);
           send({type:'cancellation_state',turnId:stoppedTurn,attempt_id:attempt?.attempt_id,state:'unknown',message:'服务端状态未知，取消尚未确认'});
           loadSampler?.abort();loadSampler=new AbortController();
-          if(provider?.deployment==='local')void sampleRouterLoad({baseUrl:provider.baseUrl,model:session.model.id,signal:loadSampler.signal,
+          if(provider)void sampleRouterLoad({baseUrl:provider.baseUrl,model:session.model.id,signal:loadSampler.signal,
             emit:sample=>send({type:'cancellation_state',turnId:stoppedTurn,attempt_id:attempt?.attempt_id,...sample}),diagnostic:entry=>diagnostic({...entry,attempt_id:attempt?.attempt_id})});
         }
         abortWatchdog.arm(turn?.promptId||activeTurnId);

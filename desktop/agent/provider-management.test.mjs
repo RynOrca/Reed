@@ -5,21 +5,20 @@ import {join} from "node:path";
 import {tmpdir} from "node:os";
 import {ProviderStore,normalizeDiscoveredModel} from "./providers.mjs";
 
-test('foreground wait settings persist, preserve omitted fields and reset to deployment defaults',async()=>{
- const root=await mkdtemp(join(tmpdir(),'reed-wait-provider-'));
+test("provider save keeps name and concurrency while ignoring retired wait fields",async()=>{
+ const root=await mkdtemp(join(tmpdir(),'reed-provider-save-'));
  try{
   const crypto={protect:async x=>x,unprotect:async x=>x};
   const store=new ProviderStore(root,crypto);
   const input={template:'custom',protocol:'openai-completions',baseUrl:'http://127.0.0.1:12345/v1'};
-  const provider=await store.save({...input,deployment:'local',foregroundIdleMs:0,foregroundTotalMs:600000});
+  const provider=await store.save({...input,name:'one',parallelRequests:true,maxConcurrentRequests:3});
   await store.save({...input,providerId:provider.id,name:'renamed'});
   const reload=new ProviderStore(root,crypto);await reload.load();
-  assert.equal(reload.snapshot()[0].deployment,'local');
-  assert.equal(reload.snapshot()[0].foregroundIdleMs,0);
-  assert.equal(reload.snapshot()[0].foregroundTotalMs,600000);
-  await reload.save({...input,providerId:provider.id,foregroundTotalMs:null});
-  assert.equal(reload.snapshot()[0].foregroundTotalMs,null);
-  await assert.rejects(reload.save({...input,providerId:provider.id,foregroundIdleMs:-1}),/等待时限/);
+  assert.equal(reload.snapshot()[0].name,'renamed');
+  assert.equal(reload.snapshot()[0].parallelRequests,true);
+  assert.equal(reload.snapshot()[0].maxConcurrentRequests,3);
+  assert.equal(reload.snapshot()[0].deployment,undefined,'部署类型不再是可配置项');
+  assert.equal(reload.snapshot()[0].foregroundTotalMs,undefined,'不再保存单次生成时限');
  }finally{await rm(root,{recursive:true,force:true});}
 });
 
@@ -29,24 +28,6 @@ test("model discovery reads advertised output limits without guessing missing li
  }
  assert.equal(normalizeDiscoveredModel({id:"custom"}).maxTokens,null);
  assert.equal(normalizeDiscoveredModel({id:"custom",max_tokens:0},{maxTokens:8192}).maxTokens,8192);
-});
-
-test('thinking budget persists per model, accepts zero and rejects negatives',async()=>{
- const root=await mkdtemp(join(tmpdir(),'reed-thinking-provider-'));
- try{
-  const crypto={protect:async x=>x,unprotect:async x=>x};
-  const runtime={refresh:async()=>{},setRuntimeApiKey:async()=>{},getModel:()=>null};
-  const store=new ProviderStore(root,crypto);
-  const provider=await store.save({template:'custom',protocol:'openai-completions',baseUrl:'http://127.0.0.1:12345/v1',name:'local'});
-  await store.updateModel(provider.id,{id:'m1',maxTokens:16384,thinkingBudget:4096},runtime);
-  const stored=()=>store.snapshot()[0].models.find(model=>model.id==='m1');
-  assert.equal(stored().thinkingBudget,4096);
-  const reload=new ProviderStore(root,crypto);await reload.load();
-  assert.equal(reload.snapshot()[0].models.find(model=>model.id==='m1').thinkingBudget,4096,'重载后仍保留思考上限');
-  await reload.updateModel(provider.id,{id:'m1',thinkingBudget:0},runtime);
-  assert.equal(reload.snapshot()[0].models.find(model=>model.id==='m1').thinkingBudget,0,'0 表示不限');
-  await assert.rejects(reload.updateModel(provider.id,{id:'m1',thinkingBudget:-1},runtime),/思考上限/);
- }finally{await rm(root,{recursive:true,force:true});}
 });
 
 test("explicit output limit reaches SDK configuration and survives discovery, refresh and reload",async()=>{

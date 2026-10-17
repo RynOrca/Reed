@@ -171,10 +171,6 @@ function editProvider(template, provider = null) {
   $("provider-name").value = provider?.name || template.name;
   $("base-url").value = provider?.baseUrl || template.baseUrl || "";
   $("protocol").value = provider?.protocol || template.protocol;
-  $("model-deployment").value = provider?.deployment || 'remote';
-  $("foreground-idle").value = provider?.foregroundIdleMs == null ? '' : provider.foregroundIdleMs / 1000;
-  $("foreground-total").value = provider?.foregroundTotalMs == null ? '' : provider.foregroundTotalMs / 1000;
-  syncModelWait();
   $("parallel-requests").checked = provider?.parallelRequests === true;
   $("parallel-limit").value = provider?.maxConcurrentRequests || 2;
   syncParallelRequests();
@@ -204,7 +200,7 @@ function renderProviders() {
   }
   if (providerId) renderProviderModels(providers.find(p => p.id === providerId)?.models || []);
 }
-function modelEditor(config){$("manual-model").value=config.id;$("manual-context").value=config.contextWindow||"";$("manual-output").value=config.maxTokens||"";$("manual-thinking-budget").value=config.thinkingBudget??"";$("manual-reasoning").value=config.reasoning==null?"unknown":config.reasoning?"yes":"no";$("manual-vision").checked=config.input?.includes("image")||false;$("thinking-format").value=config.compat?.thinkingFormat||"";$("manual-levels").value=config.reasoning?config.thinkingLevels?.filter(l=>l!=="off").join(", ")||"":"";explainThinkingProtocol();document.querySelector(".advanced").open=true;$("manual-model").scrollIntoView({block:"nearest"});}
+function modelEditor(config){$("manual-model").value=config.id;$("manual-context").value=config.contextWindow||"";$("manual-reasoning").value=config.reasoning==null?"unknown":config.reasoning?"yes":"no";$("manual-vision").checked=config.input?.includes("image")||false;$("thinking-format").value=config.compat?.thinkingFormat||"";$("manual-levels").value=config.reasoning?config.thinkingLevels?.filter(l=>l!=="off").join(", ")||"":"";explainThinkingProtocol();document.querySelector(".advanced").open=true;$("manual-model").scrollIntoView({block:"nearest"});}
 function renderProviderModels(models) {
   $("discovered-models").replaceChildren();
   for (const model of models) {
@@ -212,7 +208,7 @@ function renderProviderModels(models) {
     const info = document.createElement("div"), name = document.createElement("strong"), detail = document.createElement("small");
     name.textContent = model.name || model.id;
     const source = ({ service:"服务返回", "catalog+service":"服务 / PI 目录", user:"手动补充", unknown:"服务未提供能力信息" })[model.infoSource] || "PI 目录";
-    detail.textContent = `${model.contextWindow ? model.contextWindow.toLocaleString() + " 上下文" : "上下文未知"} · ${model.maxTokens ? model.maxTokens.toLocaleString() + " 最大输出" : "输出上限沿用默认"} · ${model.thinkingBudget === 0 ? "思考不限" : model.thinkingBudget ? `思考上限 ${model.thinkingBudget.toLocaleString()}` : "思考自动上限"} · ${model.thinkingLevels?.join(" / ") || (model.reasoning === true ? "支持思考" : model.reasoning === false ? "不支持思考" : "思考能力未知")} · ${source}`;
+    detail.textContent = `${model.contextWindow ? model.contextWindow.toLocaleString() + " 上下文" : "上下文未知"} · ${model.thinkingLevels?.join(" / ") || (model.reasoning === true ? "支持思考" : model.reasoning === false ? "不支持思考" : "思考能力未知")} · ${source}`;
     info.append(name, detail);
     const use = document.createElement("button"); use.className = "secondary"; use.textContent = "获取配置";
     use.onclick = () => action(async () => {
@@ -239,16 +235,9 @@ function syncParallelRequests(){
   $("parallel-limit-row").hidden=!enabled;$("parallel-limit").disabled=!enabled;
 }
 $("parallel-requests").onchange=syncParallelRequests;
-function syncModelWait(){
-  const local=$("model-deployment").value==='local';
-  $("foreground-idle").placeholder=local?'默认不限':'默认 90 秒';
-  $("foreground-total").placeholder=local?'默认不限':'默认 300 秒';
-}
-$("model-deployment").onchange=syncModelWait;
 async function saveProvider() {
   if (!$("provider-form").reportValidity()) throw new Error("请填写必需信息");
-  const waitValue=id=>$(id).value.trim()===''?null:Number($(id).value)*1000;
-  const reply = await command("save_provider", { providerId, clientRequestId: providerDraftId, template: editing.id, name: $("provider-name").value, protocol: $("protocol").value, baseUrl: $("base-url").value, deployment:$("model-deployment").value, foregroundIdleMs:waitValue('foreground-idle'), foregroundTotalMs:waitValue('foreground-total'), parallelRequests:$("parallel-requests").checked, maxConcurrentRequests:Number($("parallel-limit").value), key: $("api-key").value });
+  const reply = await command("save_provider", { providerId, clientRequestId: providerDraftId, template: editing.id, name: $("provider-name").value, protocol: $("protocol").value, baseUrl: $("base-url").value, parallelRequests:$("parallel-requests").checked, maxConcurrentRequests:Number($("parallel-limit").value), key: $("api-key").value });
   providerId = reply.providerId; $("api-key").value = ""; $("api-key").placeholder = "已保存；留空保留当前 Key";
   return reply;
 }
@@ -262,7 +251,7 @@ $("manual-save").onclick = () => action(async () => {
   const button=$("manual-save");button.disabled=true;button.textContent="保存中…";
   try{
   await saveProvider(); const value = $("manual-reasoning").value;
-  const model = { id: $("manual-model").value.trim(), vision:$("manual-vision").checked, ...($("manual-context").value ? { contextWindow: Number($("manual-context").value) } : {}), ...($("manual-output").value ? { maxTokens: Number($("manual-output").value) } : {}), thinkingBudget: $("manual-thinking-budget").value.trim()===""?null:Number($("manual-thinking-budget").value), ...(value !== "unknown" ? { reasoning: value === "yes" } : {}), thinkingFormat: $("thinking-format").value };
+  const model = { id: $("manual-model").value.trim(), vision:$("manual-vision").checked, ...($("manual-context").value ? { contextWindow: Number($("manual-context").value) } : {}), ...(value !== "unknown" ? { reasoning: value === "yes" } : {}), thinkingFormat: $("thinking-format").value };
   if ($("manual-levels").value.trim()) model.thinkingLevels = $("manual-levels").value.split(/[,，\s]+/).filter(Boolean);
   const savedModel=await command("update_model", { providerId, model });
   document.querySelector(".advanced").open=false;$("provider-form").hidden=true;editing=null;providerId=null;providerDraftId=null;

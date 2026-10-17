@@ -19,10 +19,7 @@
 <form id="provider-form" class="card" hidden><div class="form-head"><h3 id="provider-heading">自定义</h3><button type="button" id="cancel-provider" class="icon" aria-label="取消编辑">×</button></div>
 <div class="form-grid"><label>名称<input id="provider-name" required maxlength="60"></label><label>接口协议<select id="protocol"><option value="openai-completions">OpenAI 兼容</option><option value="anthropic-messages">Anthropic 兼容</option></select></label></div>
 <label>Base URL<input id="base-url" type="url" required placeholder="https://api.example.com/v1"></label><label>API Key<input id="api-key" type="password" autocomplete="off" placeholder="无鉴权服务可留空"></label>
-<p class="hint">本地、另一台电脑和云端接口使用同一配置流程。Key 由当前 Windows 用户的凭据保护加密保存。</p>
-<label>模型部署<select id="model-deployment"><option value="remote">远程服务</option><option value="local">本地模型（含另一台电脑）</option></select></label>
-<div class="form-grid"><label>无数据超时（秒）<input id="foreground-idle" type="number" min="0" max="2147483" step="1" placeholder="沿用部署默认值"></label><label>单次生成时限（秒）<input id="foreground-total" type="number" min="0" max="2147483" step="1" placeholder="沿用部署默认值"></label></div>
-<p id="model-wait-hint" class="hint">留空沿用默认值，0 表示不限。仅影响前台对话；后台整理仍有时限。本地模型等待响应头也不限时；建立网络连接最多等待 90 秒，生成中可随时停止。</p>
+<p class="hint">本地、另一台电脑和云端接口使用同一配置流程。Key 由当前 Windows 用户的凭据保护加密保存。对话不设内置等待上限，可随时停止。</p>
 <label class="capability-label"><input id="parallel-requests" class="capability-checkbox" type="checkbox">允许并行请求（实验性）</label>
 <label id="parallel-limit-row" hidden>最大并发数<input id="parallel-limit" type="number" min="2" max="8" step="1" value="2" disabled></label>
 <p class="hint">默认串行，适用于一次只能处理一个请求的本地模型。仅在服务支持时开启；并行模式尚未经过真实服务验收。</p>
@@ -30,8 +27,6 @@
 <div id="discovered-models" class="discovered-models"></div>
 <details class="advanced"><summary>接口未提供信息？手动补充</summary><p class="hint">标准模型列表可能只返回 ID。未知能力不会被猜测；可按服务端配置补充。</p>
 <div class="form-grid"><label>Model ID<input id="manual-model"></label><label>上下文长度<input id="manual-context" type="number" min="1" placeholder="未知"></label></div>
-<label>最大输出长度（tokens）<input id="manual-output" type="number" min="1" step="1" placeholder="留空沿用模型默认值"></label><p class="hint">按服务支持的上限填写；部分接口会将思考也计入输出。与其他 Agent 对比时请保持此设置一致。</p>
-<label>思考上限（tokens）<input id="manual-thinking-budget" type="number" min="0" step="1" placeholder="留空自动：最大输出的 60%，最多 8192；0 表示不限"></label><p class="hint">思考超过上限会中止本次请求，并改为“立即执行最小一步”续接一次；设 0 只关闭上限，思考里反复复述同一句仍会被停止。</p>
 <div class="form-grid"><label>支持推理<select id="manual-reasoning"><option value="unknown">未知 / 保持原值</option><option value="yes">支持</option><option value="no">不支持</option></select></label><label>思考协议<select id="thinking-format"><option value="">保持原值</option><option value="openai">reasoning_effort</option><option value="qwen-chat-template">Qwen chat_template_kwargs</option><option value="qwen">Qwen enable_thinking</option><option value="deepseek">DeepSeek thinking</option></select></label></div><label class="capability-label"><input id="manual-vision" class="capability-checkbox" type="checkbox">支持视觉（图片输入）</label><label>支持的档位（按服务配置，逗号分隔）<input id="manual-levels" placeholder="low, medium, high；Qwen 开关不需要填写"></label><button type="button" id="manual-save" class="secondary">保存模型信息</button></details></form>
 </section>
 <section id="memory" class="page" hidden><div class="card"><h3>Agent 整理，按需召回</h3><p>Agent 在对话中记住明确的偏好和学习信息，回复结束后在后台整理。相似主题合并补充；默认只带精简摘要和资料索引。操作经验独立保存，画像关闭仍可用。新的提问会取消尚未完成的整理任务。你可以直接在对话中要求纠正记忆。</p><button id="organize" class="secondary">整理当前对话</button><span id="memory-status" class="hint"></span></div>

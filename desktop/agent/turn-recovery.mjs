@@ -4,10 +4,6 @@ import {isWireRecoverable} from './provider-wire.mjs';
 
 const recoveryHint = "The previous model request ended without a visible answer or a tool call. Continue the original user task from the valid history above. Do not repeat completed work or ask the user to repeat the task. Preserve the configured reasoning depth. Produce the next useful answer or a complete, valid tool call; split large file operations into smaller calls if needed.";
 
-// The thinking phase itself was stopped (budget or repetition). Planning again is
-// exactly what failed, so this continuation asks for one concrete action instead.
-const actionHint = "The previous attempt was stopped while still planning, before any tool call. Do not explain or restate the plan. Immediately perform the smallest concrete step now: call exactly one tool with complete valid arguments (write the smallest runnable file first, then extend it) or return the final answer. After each tool result, say one short sentence about what changed and continue with the next step.";
-
 function replayCompletedThinking(payload, message) {
   // The SDK drops Chat Completions assistants with reasoning but no content/tools.
   // Restore only a complete same-model raw reasoning block, immediately before
@@ -87,17 +83,10 @@ export function createTurnRecovery({ send, diagnostic = async () => {},currentAt
         await diagnostic({ type: "response", request: requestNumber, outcome, rawStopReason:lastMessage.rawStopReason??null, usage: lastMessage.usage });
         if (willRecover(lastMessage)) {
           attempted = true; recovering = true;
-          const needsAction = ['thinking_budget', 'thinking_repetition'].includes(outcome.code);
-          // A stopped planning loop is never replayed: replaying it would only feed
-          // the same degenerate reasoning back into the next attempt.
-          const preserveThinking = needsAction ? false : (lastMessage.reedWire?.canPreserveThinking || (outcome.status === 'empty' && outcome.stopReason === 'stop'));
-          const reason = needsAction
-            ? outcome.code === 'thinking_repetition' ? '模型在思考里反复复述计划，已停止并改为立即执行一次' : '思考达到设定上限，已停止并改为立即执行一次'
-            : outcome.status === 'error' ? `模型响应未完成（${outcome.code || 'transport_incomplete'}），保持原思考设置重试一次`
-              : isMalformedStreamError(lastMessage) ? '流式响应损坏，保持原思考设置重试一次' : '模型已结束但未产生回复或工具调用，保持原思考设置续接一次';
-          send({ type: "recovery", message: reason });
+          const preserveThinking = lastMessage.reedWire?.canPreserveThinking || (outcome.status === 'empty' && outcome.stopReason === 'stop');
+          send({ type: "recovery", message: outcome.status==='error' ? `模型响应未完成（${outcome.code||'transport_incomplete'}），保持原思考设置重试一次` : isMalformedStreamError(lastMessage) ? "流式响应损坏，保持原思考设置重试一次" : "模型已结束但未产生回复或工具调用，保持原思考设置续接一次" });
           const entries = preserveThinking ? [] : [{ type: 'context_edit', targetId: event.messageEntryId, replacement: null }];
-          entries.push({ type: 'custom_message', customType: 'reed_model_continuation', content: needsAction ? actionHint : recoveryHint, display: false, details: { reason: outcome.status, preserveThinking, ...(needsAction ? { code: outcome.code } : {}) } });
+          entries.push({ type: 'custom_message', customType: 'reed_model_continuation', content: recoveryHint, display: false, details: { reason: outcome.status, preserveThinking } });
           return { entries, continue: true };
         }
         // Avoid a second SDK compact-and-retry after our bounded recovery fails.
