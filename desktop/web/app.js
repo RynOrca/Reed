@@ -1,5 +1,6 @@
 import {renderLearning,replyText} from './learning-blocks.js';
 import {createLearningMode} from './learning-mode.js';
+import {requestStatus} from './request-status.js';
 // Transcript row structure and disclosure behavior adapted from PI-Desktop 0.16.1.
 import {createGoals} from "./goals.js";
 import {createConversationCanvas} from "./conversation-canvas.js";
@@ -607,8 +608,8 @@ function onEvent(event) {
       status("已停止（本地）");
       errorRow(response.message||"模型服务未结束上一条请求，已恢复本地输入。");
       break;
-    case "request_phase": if(running&&!stopping)status(recoveryStatus||(response.phase==='waiting'?`等待模型返回，已等待 ${Math.max(1,Math.floor((response.elapsedMs||0)/60000))} 分钟，可手动停止。`:response.phase==='connecting'?'正在连接模型服务…':response.phase==='headers'?'模型服务已连接，等待首段内容…':response.phase==='first_body'?'已收到模型数据，正在生成回复…':'正在生成回复…'));break;
-    case "model_queue": if (running&&!stopping) status(response.state === "waiting" ? (recoveryStatus ? recoveryStatus + "（等待模型服务空闲）" : "正在等待模型服务空闲…") : recoveryStatus || "正在准备模型请求…"); break;
+    case "request_phase": if(running&&!stopping)status(requestStatus(response,recoveryStatus));break;
+    case "model_queue": if (running&&!stopping) status((recoveryStatus?recoveryStatus+'；':'')+(response.state==='waiting'?'正在等待模型服务空闲…':'正在准备模型请求…')); break;
     case "delta": {
       recoveryStatus = "";
       if (running&&!stopping) status("PI 正在回复…");
