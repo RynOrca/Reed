@@ -25,7 +25,7 @@ for(const headers of [false,true])test(`foreground cancellation and settings whi
  const command=async(type,args={})=>{const id=send(type,args),event=await until(e=>e.id===id&&['ack','error','done'].includes(e.type));assert.notEqual(event.type,'error',event.message);return event;};
  try{
   await mkdir(data);await new Promise(r=>server.listen(0,'127.0.0.1',r));
-  const provider={id:'synthetic',template:'custom',name:'mock',baseUrl:`http://127.0.0.1:${server.address().port}/v1`,protocol:'openai-completions',models:[{id:'mock',contextWindow:65536,maxTokens:2048,reasoning:false}]};
+  const provider={id:'synthetic',template:'custom',deployment:'local',name:'mock',baseUrl:`http://127.0.0.1:${server.address().port}/v1`,protocol:'openai-completions',models:[{id:'mock',contextWindow:65536,maxTokens:2048,reasoning:false}]};
   await writeFile(join(data,'user-config.json'),JSON.stringify({version:1,providers:{providers:[provider]},memoryEnabled:{l1:false,l2:false,l3:false,work:false},capabilities:{vaultPath:null,skills:[],webEnabled:false,browserEnabled:false}}));
   await writeFile(join(data,'app-state.json'),JSON.stringify({provider:provider.id,modelId:'mock',projectPath:root}));
   child=spawn(process.execPath,[fileURLToPath(new URL('./bridge.mjs',import.meta.url))],{cwd:root,windowsHide:true,env:{...process.env,SUMMON_DATA_DIR:data,SUMMON_WORKSPACE:root},stdio:['pipe','pipe','pipe']});child.stderr.resume();

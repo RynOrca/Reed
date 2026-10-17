@@ -1,6 +1,7 @@
 import { readFile, writeFile, rename, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { validateWaitSettings } from './model-wait.mjs';
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { protectKey, unprotectKey, EndpointStore } from "./endpoint.mjs";
 
@@ -139,11 +140,13 @@ export class ProviderStore {
     const parallelRequests = input.parallelRequests ?? provider?.parallelRequests ?? false;
     const maxConcurrentRequests = input.maxConcurrentRequests !== undefined ? input.maxConcurrentRequests : provider?.maxConcurrentRequests ?? 2;
     if (!Number.isInteger(maxConcurrentRequests) || maxConcurrentRequests < 2 || maxConcurrentRequests > 8) throw new Error('最大并发数须为2到8的整数');
+    const waitSettings = validateWaitSettings(input, provider);
     const record = provider || { id: `summon-${randomUUID()}`, models: [] };
     if (input.key?.trim()) await this.saveKey(record.id, input.key.trim());
     const endpointChanged = record.baseUrl && (record.baseUrl !== normalizedBaseUrl || record.protocol !== input.protocol);
     if (endpointChanged) record.models = [];
     Object.assign(record, { name: String(input.name || template.name).slice(0, 60), template: template.id, protocol: input.protocol, parallelRequests, maxConcurrentRequests, baseUrl: normalizedBaseUrl, ...(input.clientRequestId ? { clientRequestId: input.clientRequestId } : {}) });
+    Object.assign(record, waitSettings);
     delete record.credentialError;
     if (!provider) this.providers.push(record);
     await this.persist(); return record;

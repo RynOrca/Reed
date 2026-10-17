@@ -15,6 +15,11 @@ import { createAbortWatchdog } from "./turn-watchdog.mjs";
 import { createReviewGate } from "./review-gate.mjs";
 import { ConversationCanvasStore, ConversationCanvasWorkflow, conversationPairs, canvasSource, messageText } from './conversation-canvas.mjs';
 import { createDiagnosticFetch, createRequestFetch } from "./stream-diagnostics.mjs";
+import { foregroundWaitPolicy } from './model-wait.mjs';
+import { Agent as HttpAgent, fetch as foregroundFetch } from 'undici';
+
+// Reed owns the request timers; disable the HTTP client's independent stream limits.
+const foregroundHttp = new HttpAgent({headersTimeout:0,bodyTimeout:0,connect:{timeout:90000}});
 import { createVisualReview, VISUAL_TOOLS } from "./visual-review.mjs";
 import { createContextPolicy } from "./context-policy.mjs";
 import { GoalStore } from "./goals.mjs";
@@ -331,14 +336,15 @@ async function openSession(provider, modelId, sessionManager) {
   const streamFunction = session.agent.streamFunction;
   session.agent.streamFunction = (model, context, options) => {
     const signal=AbortSignal.any([options?.signal,turnController?.signal].filter(Boolean));
+    const provider = providers.providers.find(p=>p.id===model.provider);
     return modelRequests.stream(model, {
     signal, priority:'foreground', onWait:()=>send({type:'model_queue',state:'waiting'}),
   },()=>{
     send({type:'model_queue',state:'running'});
     return streamFunction(model, context, {
       ...options, signal, maxRetries:0,
-      fetch: createDiagnosticFetch(createRequestFetch(options?.fetch || globalThis.fetch, {signal,diagnostic:entry=>diagnostic({...entry,provider:model.provider,model:model.id,requestGroup:'foreground'}),
-        onPhase:phase=>{if(busy&&!signal.aborted)send({type:'request_phase',phase});}}), diagnostic),
+      fetch: createDiagnosticFetch(createRequestFetch(options?.fetch || foregroundFetch, {signal,...foregroundWaitPolicy(provider),connectionMs:provider?.deployment==='local'?0:90000,dispatcher:foregroundHttp,diagnostic:entry=>{if(entry.phase==='waiting'&&busy&&!signal.aborted)send({type:'request_phase',phase:'waiting',elapsedMs:entry.elapsedMs});return diagnostic({...entry,provider:model.provider,model:model.id,requestGroup:'foreground'});},
+        onPhase:phase=>{if(phase!=='waiting'&&busy&&!signal.aborted)send({type:'request_phase',phase});}}), diagnostic),
     });
   });
   };
@@ -992,6 +998,7 @@ canvasWorkflow.close();await queue;turnController?.abort();if(session)void sessi
 memoryAgent.cancel();
 workingTools.cancel();
 capabilities.close();
+await foregroundHttp.destroy();
 learningTools.close();
 session?.dispose();
 approvalGate.cancel("Agent 进程已退出");

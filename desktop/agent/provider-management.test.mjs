@@ -5,6 +5,24 @@ import {join} from "node:path";
 import {tmpdir} from "node:os";
 import {ProviderStore,normalizeDiscoveredModel} from "./providers.mjs";
 
+test('foreground wait settings persist, preserve omitted fields and reset to deployment defaults',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'reed-wait-provider-'));
+ try{
+  const crypto={protect:async x=>x,unprotect:async x=>x};
+  const store=new ProviderStore(root,crypto);
+  const input={template:'custom',protocol:'openai-completions',baseUrl:'http://127.0.0.1:12345/v1'};
+  const provider=await store.save({...input,deployment:'local',foregroundIdleMs:0,foregroundTotalMs:600000});
+  await store.save({...input,providerId:provider.id,name:'renamed'});
+  const reload=new ProviderStore(root,crypto);await reload.load();
+  assert.equal(reload.snapshot()[0].deployment,'local');
+  assert.equal(reload.snapshot()[0].foregroundIdleMs,0);
+  assert.equal(reload.snapshot()[0].foregroundTotalMs,600000);
+  await reload.save({...input,providerId:provider.id,foregroundTotalMs:null});
+  assert.equal(reload.snapshot()[0].foregroundTotalMs,null);
+  await assert.rejects(reload.save({...input,providerId:provider.id,foregroundIdleMs:-1}),/等待时限/);
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
 test("model discovery reads advertised output limits without guessing missing limits",()=>{
  for(const metadata of [{max_output_tokens:32768},{max_completion_tokens:32768},{max_tokens:32768},{limit:{output:32768}},{metadata:{max_output_tokens:32768}},{metadata:{max_completion_tokens:32768}},{metadata:{max_tokens:32768}},{metadata:{limit:{output:32768}}}]) {
   const model=normalizeDiscoveredModel({id:"custom",...metadata});assert.equal(model.maxTokens,32768);assert.equal(model.infoSource,"service");

@@ -171,6 +171,10 @@ function editProvider(template, provider = null) {
   $("provider-name").value = provider?.name || template.name;
   $("base-url").value = provider?.baseUrl || template.baseUrl || "";
   $("protocol").value = provider?.protocol || template.protocol;
+  $("model-deployment").value = provider?.deployment || 'remote';
+  $("foreground-idle").value = provider?.foregroundIdleMs == null ? '' : provider.foregroundIdleMs / 1000;
+  $("foreground-total").value = provider?.foregroundTotalMs == null ? '' : provider.foregroundTotalMs / 1000;
+  syncModelWait();
   $("parallel-requests").checked = provider?.parallelRequests === true;
   $("parallel-limit").value = provider?.maxConcurrentRequests || 2;
   syncParallelRequests();
@@ -235,9 +239,16 @@ function syncParallelRequests(){
   $("parallel-limit-row").hidden=!enabled;$("parallel-limit").disabled=!enabled;
 }
 $("parallel-requests").onchange=syncParallelRequests;
+function syncModelWait(){
+  const local=$("model-deployment").value==='local';
+  $("foreground-idle").placeholder=local?'默认不限':'默认 90 秒';
+  $("foreground-total").placeholder=local?'默认不限':'默认 300 秒';
+}
+$("model-deployment").onchange=syncModelWait;
 async function saveProvider() {
   if (!$("provider-form").reportValidity()) throw new Error("请填写必需信息");
-  const reply = await command("save_provider", { providerId, clientRequestId: providerDraftId, template: editing.id, name: $("provider-name").value, protocol: $("protocol").value, baseUrl: $("base-url").value, parallelRequests:$("parallel-requests").checked, maxConcurrentRequests:Number($("parallel-limit").value), key: $("api-key").value });
+  const waitValue=id=>$(id).value.trim()===''?null:Number($(id).value)*1000;
+  const reply = await command("save_provider", { providerId, clientRequestId: providerDraftId, template: editing.id, name: $("provider-name").value, protocol: $("protocol").value, baseUrl: $("base-url").value, deployment:$("model-deployment").value, foregroundIdleMs:waitValue('foreground-idle'), foregroundTotalMs:waitValue('foreground-total'), parallelRequests:$("parallel-requests").checked, maxConcurrentRequests:Number($("parallel-limit").value), key: $("api-key").value });
   providerId = reply.providerId; $("api-key").value = ""; $("api-key").placeholder = "已保存；留空保留当前 Key";
   return reply;
 }
