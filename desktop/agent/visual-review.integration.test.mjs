@@ -13,7 +13,7 @@ import { AgentBrowser } from "./browser.mjs";
 
 // No external provider or real user files: SDK requests go exclusively to loopback.
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j7ioAAAAASUVORK5CYII=";
-async function fixture(t, { images = true, enabled = true, refuse = false, realBrowser = false } = {}) {
+async function fixture(t, { images = true, enabled = true, refuse = false, realBrowser = false, invalidWrite = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), "reed-visual-sdk-"));
   const agentDir = join(root, "agent"), sessionsDir = join(root, "sessions");
   await Promise.all([mkdir(agentDir), mkdir(sessionsDir)]);
@@ -33,6 +33,7 @@ async function fixture(t, { images = true, enabled = true, refuse = false, realB
     else if (requests.length === (realBrowser ? 4 : 3)) { delta = { tool_calls: [call("browser", { action: "screenshot", viewport: { width: realBrowser ? 1280 : 1200, height: 800 }, waitMs: 1000 }), call("browser", { action: "screenshot", viewport: { width: 390, height: 844 }, waitMs: 1000 }, 1)] }; finish = "tool_calls"; }
     else if (requests.length === (realBrowser ? 5 : 4)) { delta = { tool_calls: [call("visual_review", { screenshotPaths: captures.map(c => c.artifactPath), checks: [{ requirement: "桌面与窄屏布局以及动画", passed: true, evidence: "已检查两张实际截图" }], issues: [], passed: true })] }; finish = "tool_calls"; }
     else delta = { content: "VISUALLY_VERIFIED" };
+    if(invalidWrite && requests.length===1)delta.tool_calls=[call('write',{path:html,content:{invalid:'must be a string'}})];
     res.setHeader("content-type", "text/event-stream");
     const chunk = (d, finish_reason = null) => ({ id: `response-${requests.length}`, object: "chat.completion.chunk", created: 1, model: "isolated-vision", choices: [{ index: 0, delta: d, finish_reason }] });
     res.write(`data: ${JSON.stringify(chunk({ role: "assistant" }))}\n\n`);
@@ -87,6 +88,18 @@ test("真实 PI SDK 在 write 后提前 stop 时继续截图，图片进入下�
   assert.equal(f.gate.snapshot().passed, true);
   assert.equal(f.gate.snapshot().rounds, 1);
   assert.equal(f.gate.outcome({ status: "complete" }).status, "complete");
+});
+
+test('真实SDK工具参数校验失败后不能把模型的完成声明当作验收通过',{timeout:20000},async t=>{
+  const f=await fixture(t,{invalidWrite:true});
+  assert.equal(f.requests.length,2);
+  await assert.rejects(readFile(f.html),{code:'ENOENT'});
+  const result=f.gate.outcome({status:'complete'});
+  assert.equal(result.status,'unverified');
+  assert.match(result.message,/写入或编辑失败/);
+  const toolMessage=f.requests[1].messages.find(m=>m.role==='tool');
+  assert.match(JSON.stringify(toolMessage.content),/Validation failed/);
+  assert.match(JSON.stringify(f.requests[1].messages),/不能声称修改已完成/);
 });
 
 for (const options of [{ images: false }, { enabled: false }]) test(`真实 PI SDK ${options.images === false ? "无图片输入" : "浏览器禁用"}时不能假通过`, { timeout: 20000 }, async t => {

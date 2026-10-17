@@ -13,19 +13,20 @@ const text = value => ({ content: [{ type: "text", text: JSON.stringify(value) }
 // The gate keeps the artifact, screenshots and assessments tied to the same revision.
 export function createVisualReview({ scope, send = () => {}, enabled = () => true, maxRounds = 6, maxNudges = 8 }) {
   let state;
-  const reset = prompt => { state = { prompt, files: new Map(), captures: [], reviews: [], nudges: 0, lastStop: null, blocked: null, browserFailures:0, browserFailureStreak:0, browserStopped:false, changedAt: 0 }; };
+  const reset = prompt => { state = { prompt, files: new Map(), failedWrites: new Set(), toolInputs: new Map(), revisionSequence: 0, captures: [], reviews: [], nudges: 0, lastStop: null, blocked: null, browserFailures:0, browserFailureStreak:0, browserStopped:false, changedAt: 0 }; };
   reset("");
   const revisions = () => [...state.files].map(([path, hash]) => ({ path, hash }));
-  const revisionId = () => digest(JSON.stringify(revisions()));
-  const pending = () => state.files.size > 0 && !state.reviews.some(r => r.revision === revisionId() && r.passed);
+  const revisionId = () => digest(JSON.stringify({files:revisions(),sequence:state.revisionSequence}));
+  const pending = () => state.failedWrites.size > 0 || (state.files.size > 0 && !state.reviews.some(r => r.revision === revisionId() && r.passed));
   function limitReason() {
+    if (state.failedWrites.size) return '网页文件写入或编辑失败，必须先纠正失败操作，再重新截图验收；不能声称修改已完成';
     if (state.reviews.length >= maxRounds) return "视觉验收达到本轮次数上限，仍有问题需要处理";
     if (state.nudges >= maxNudges) return "视觉验收多次未取得有效进展";
     if (state.blocked) return state.blocked;
     return null;
   }
   function snapshot() {
-    return { required: state.files.size > 0, passed: state.files.size > 0 && !pending(), rounds: state.reviews.length,
+    return { required: state.files.size > 0 || state.failedWrites.size > 0, failedWrites: [...state.failedWrites], passed: state.files.size > 0 && !pending(), rounds: state.reviews.length,
       maxRounds, browserFailures:state.browserFailures, browserStopped:state.browserStopped, revisions: revisions(), screenshots: state.captures.map(c => ({ ...c })), reviews: state.reviews, reason: limitReason() };
   }
   async function refresh() {
@@ -46,10 +47,22 @@ export function createVisualReview({ scope, send = () => {}, enabled = () => tru
       return { ...base, status: "unverified", message: limitReason() || "文件已生成，但视觉验收尚未通过", visualReview: snapshot() };
     },
     extension(pi) {
+      // Schema validation failures occur before tool_result hooks. Execution
+      // lifecycle events still fire and must also invalidate completion evidence.
+      pi.on('tool_execution_start', event => {
+        if(['write','edit'].includes(event.toolName))state.toolInputs.set(event.toolCallId,event.args);
+      });
+      pi.on('tool_execution_end', event => {
+        const input=state.toolInputs.get(event.toolCallId);state.toolInputs.delete(event.toolCallId);
+        if(!event.isError || !input?.path || !visualExtensions.has(extname(input.path).toLowerCase()))return;
+        const path=resolve(input.path);
+        if(!state.failedWrites.has(path)){state.failedWrites.add(path);state.revisionSequence++;}
+      });
       pi.registerTool(defineTool({ name: "visual_review", label: "视觉验收", description: "查看本轮真实 browser 截图后提交验收：逐项记录用户需求检查、剩余问题和结论。文件修改后必须重新截图；至少桌面和窄屏，动画另有延迟截图。通过表示模型基于证据的评审，不保证没有缺陷。",
         parameters: Type.Object({ screenshotPaths: Type.Array(Type.String(), { minItems: 2, maxItems: 12 }), checks: Type.Array(Type.Object({ requirement: Type.String({ minLength: 1, maxLength: 500 }), passed: Type.Boolean(), evidence: Type.String({ minLength: 1, maxLength: 1200 }) }), { minItems: 1, maxItems: 30 }), issues: Type.Array(Type.Object({ severity: Type.Union(["critical", "major", "minor"].map(v => Type.Literal(v))), description: Type.String({ minLength: 1, maxLength: 1500 }) }), { maxItems: 30 }), passed: Type.Boolean() }),
         async execute(_id, input) {
           await refresh();
+          if(state.failedWrites.size)throw new Error(limitReason());
           if (!state.files.size) throw new Error("本轮没有已修改的网页产物需要验收");
           if (state.reviews.length >= maxRounds) throw new Error(limitReason());
           const revision = revisionId();
@@ -78,6 +91,11 @@ export function createVisualReview({ scope, send = () => {}, enabled = () => tru
       pi.on("context_with_system", event => ({ messages: [...event.messages, { role: "system", content: "", sections: { reed_visual_review: instruction() } }] }));
       pi.on("tool_result", async event => {
         if (event.isError) {
+          if(['write','edit'].includes(event.toolName) && visualExtensions.has(extname(event.input?.path || '').toLowerCase())) {
+            state.failedWrites.add(resolve(event.input.path));
+            state.revisionSequence++;
+            return {content:[...event.content,{type:'text',text:limitReason()+'。保留原错误，核对工具schema后重新调用；edit.edits必须是对象数组，不是JSON字符串。'}],isError:true};
+          }
           if(event.toolName==="browser"){
             state.browserFailures++;state.browserFailureStreak++;
             state.browserStopped=state.browserFailureStreak>=2||state.browserFailures>=3;
@@ -91,6 +109,8 @@ export function createVisualReview({ scope, send = () => {}, enabled = () => tru
         }
         if (["write", "edit"].includes(event.toolName) && visualExtensions.has(extname(event.input.path || "").toLowerCase())) {
           const path = await scope.check(event.input.path);
+          state.failedWrites.delete(resolve(event.input.path));
+          state.revisionSequence++;
           state.files.set(path, digest(await readFile(path)));
           state.changedAt = Date.now();
           if(!state.browserStopped)state.blocked = null;
