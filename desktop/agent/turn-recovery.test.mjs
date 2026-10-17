@@ -112,3 +112,23 @@ test('a late old-attempt terminal event cannot schedule recovery or replace the 
   assert.equal(await handlers.get('turn_end')({message,messageEntryId:'old'}),undefined);
   assert.equal(events.length,0);
 });
+
+test('a stopped planning loop asks for one concrete action and never replays the loop',async()=>{
+  const handlers=new Map(),events=[];
+  const recovery=createTurnRecovery({send:e=>events.push(e)});
+  recovery.extension({on:(name,fn)=>handlers.set(name,fn)});recovery.begin();
+  const message={...thinkingOnly,stopReason:'error',errorMessage:'Reed model protocol: thinking_repetition',
+    reedWire:{enforced:true,errorCode:'thinking_repetition',status:'incomplete',transportComplete:false}};
+  const boundary=await handlers.get('turn_end')({message,messageEntryId:'looped'});
+  assert.equal(boundary.continue,true);
+  assert.equal(boundary.entries[0].type,'context_edit','退化的思考不重放');
+  assert.equal(boundary.entries[1].customType,'reed_model_continuation');
+  assert.match(boundary.entries[1].content,/Immediately perform the smallest concrete step/);
+  assert.doesNotMatch(boundary.entries[1].content,/Preserve the configured reasoning depth/,'停下来的是计划，不该再要求保持原思考深度');
+  assert.equal(boundary.entries[1].details.preserveThinking,false);
+  assert.equal(boundary.entries[1].details.code,'thinking_repetition');
+  const second=await handlers.get('turn_end')({message,messageEntryId:'looped-second'});
+  assert.notEqual(second?.continue,true,'同一轮只推一次');
+  assert.equal(events.length,1);
+  assert.match(events[0].message,/立即执行/);
+});

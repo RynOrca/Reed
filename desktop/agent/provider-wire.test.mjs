@@ -104,3 +104,27 @@ test('aggregate metadata retains raw outcome without inventing a wire DONE',asyn
   assert.equal(f.wire.status,'completed');assert.equal(f.wire.done,false);assert.equal(f.wire.responseMode,'aggregate');assert.equal(f.wire.usage.inputProcessed,20);
   assert.equal(f.wire.usage.inputTotal,80);assert.equal(f.wire.usage.inputCached,60);
 });
+
+test('a planning loop is stopped locally without any time or token limit',async()=>{
+  const frames=[];
+  for(let i=0;i<400;i++)frames.push(frame(choice({reasoning_content:'Let me write it now.\n'})));
+  const looped=await fixture(frames);
+  assert.equal(looped.wire.errorCode,'thinking_repetition');
+  assert.equal(looped.wire.status,'incomplete');
+  assert.equal(looped.wire.thinkingStop.reason,'repetition');
+  assert.ok(looped.error,'the stream must error instead of completing');
+  const outcome=wireOutcome(looped.wire);
+  assert.equal(outcome.status,'error');assert.equal(outcome.code,'thinking_repetition');
+  assert.match(outcome.message,/反复复述/);
+  assert.ok(!JSON.stringify(looped.records).includes('Let me write'),'diagnostics keep no model text');
+});
+
+test('long varied reasoning and its tool call are never interrupted',async()=>{
+  const frames=[];
+  for(let i=0;i<400;i++)frames.push(frame(choice({reasoning_content:`Step ${i}: check part ${i} then continue.\n`})));
+  frames.push(frame(choice({tool_calls:[tool]},'tool_calls')),done);
+  const f=await fixture(frames);
+  assert.equal(f.wire.status,'completed');
+  assert.equal(f.wire.validToolCallCount,1);
+  assert.equal(f.wire.thinkingStop,null);
+});
