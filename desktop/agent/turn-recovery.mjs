@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { classifyAssistantOutcome, isMalformedStreamError } from "./turn-outcome.mjs";
+import {isWireRecoverable} from './provider-wire.mjs';
 
 const recoveryHint = "The previous model request ended without a visible answer or a tool call. Continue the original user task from the valid history above. Do not repeat completed work or ask the user to repeat the task. Preserve the configured reasoning depth. Produce the next useful answer or a complete, valid tool call; split large file operations into smaller calls if needed.";
 
@@ -7,7 +8,7 @@ function replayCompletedThinking(payload, message) {
   // The SDK drops Chat Completions assistants with reasoning but no content/tools.
   // Restore only a complete same-model raw reasoning block, immediately before
   // our appended continuation. Never turn reasoning into visible assistant text.
-  if(message?.api!=='openai-completions' || message.stopReason!=='stop' || payload.model!==message.model || !Array.isArray(payload.messages))return payload;
+  if(message?.api!=='openai-completions' || !(message.stopReason==='stop'||message.reedWire?.canPreserveThinking) || payload.model!==message.model || !Array.isArray(payload.messages))return payload;
   const blocks=(message.content||[]).filter(b=>b.type==='thinking'&&b.thinking?.trim());
   if(!blocks.length)return payload;
   const field=blocks[0].thinkingSignature;
@@ -40,17 +41,19 @@ export function summarizeRequest(payload) {
   };
 }
 
-export function createTurnRecovery({ send, diagnostic = async () => {} }) {
+export function createTurnRecovery({ send, diagnostic = async () => {},currentAttempt=()=>null }) {
   let active = false, attempted = false, recovering = false, requestNumber = 0;
   let lastMessage = null;
   const willRecover = message => {
+    if(message?.reedWire&&currentAttempt()&&message.reedWire.attempt_id!==currentAttempt())return false;
     const outcome = classifyAssistantOutcome(message);
-    return active && !attempted && !outcome.hasText && !outcome.hasToolCalls && (["truncated", "empty"].includes(outcome.status) || isMalformedStreamError(message));
+    return active && !attempted && outcome.status!=='aborted' && !outcome.hasText && !outcome.hasToolCalls && (["truncated", "empty"].includes(outcome.status) || isMalformedStreamError(message) || isWireRecoverable(message?.reedWire));
   };
   return {
     begin() { active = true; attempted = false; recovering = false; requestNumber = 0; lastMessage = null; },
     end() { active = false; recovering = false; },
     outcome() { return classifyAssistantOutcome(lastMessage); },
+    get continuing(){return active&&attempted;},
     willRecover,
     extension(pi) {
       pi.on('tool_result', event => {
@@ -74,20 +77,21 @@ export function createTurnRecovery({ send, diagnostic = async () => {} }) {
       });
       pi.on("turn_end", async event => {
         if (!active || event.message.role !== "assistant") return;
+        if(event.message.reedWire&&currentAttempt()&&event.message.reedWire.attempt_id!==currentAttempt())return;
         lastMessage = event.message;
         const outcome = classifyAssistantOutcome(lastMessage);
         await diagnostic({ type: "response", request: requestNumber, outcome, rawStopReason:lastMessage.rawStopReason??null, usage: lastMessage.usage });
         if (willRecover(lastMessage)) {
           attempted = true; recovering = true;
-          const preserveThinking = outcome.status === 'empty' && outcome.stopReason === 'stop';
-          send({ type: "recovery", message: isMalformedStreamError(lastMessage) ? "流式响应损坏，保持原思考设置重试一次" : "模型已结束但未产生回复或工具调用，保持原思考设置续接一次" });
+          const preserveThinking = lastMessage.reedWire?.canPreserveThinking || (outcome.status === 'empty' && outcome.stopReason === 'stop');
+          send({ type: "recovery", message: outcome.status==='error' ? `模型响应未完成（${outcome.code||'transport_incomplete'}），保持原思考设置重试一次` : isMalformedStreamError(lastMessage) ? "流式响应损坏，保持原思考设置重试一次" : "模型已结束但未产生回复或工具调用，保持原思考设置续接一次" });
           const entries = preserveThinking ? [] : [{ type: 'context_edit', targetId: event.messageEntryId, replacement: null }];
           entries.push({ type: 'custom_message', customType: 'reed_model_continuation', content: recoveryHint, display: false, details: { reason: outcome.status, preserveThinking } });
           return { entries, continue: true };
         }
         // Avoid a second SDK compact-and-retry after our bounded recovery fails.
         // The raw transcript retains the attempt for history and diagnosis.
-        if (outcome.status === "truncated") {
+        if (outcome.status === "truncated" || (lastMessage.reedWire?.enforced && outcome.status!=='complete')) {
           return { entries: [{ type: "context_edit", targetId: event.messageEntryId, replacement: null }], continue: false };
         }
       });

@@ -1,6 +1,7 @@
 import {renderLearning,replyText} from './learning-blocks.js';
 import {createLearningMode} from './learning-mode.js';
 import {requestStatus} from './request-status.js';
+import {cancellationStatus,cancellationApplies} from './cancellation-status.js';
 // Transcript row structure and disclosure behavior adapted from PI-Desktop 0.16.1.
 import {createGoals} from "./goals.js";
 import {createConversationCanvas} from "./conversation-canvas.js";
@@ -39,6 +40,7 @@ let activeTurnId=null;
 let running = false;
 let stopping = false;
 let recoveryStatus = "";
+let cancelledTurnId=null;
 let retrying = false;
 let turnErrorShown = false;
 let assistantRow = null;
@@ -249,7 +251,8 @@ function updateDisclosure(row, state) {
   row.label.textContent = state === "running" ? "运行中" : state === "error" ? "失败" : "完成";
 }
 function outcomeLabel(outcome) {
-  return { truncated: "输出被截断", empty: "未生成回复", aborted: "已停止", error: "失败", unverified: "尚未通过验收" }[outcome?.status] || "完成";
+  if(outcome?.status==='aborted'&&outcome.wire&&!outcome.wire.cancelled)return '模型服务报告取消';
+  return { truncated: "输出被截断", empty: "未生成回复", aborted: "本地已取消", error: "失败", unverified: "尚未通过验收" }[outcome?.status] || "完成";
 }
 function finishThinking(outcome) {
   if (!thinkingRow) return;
@@ -602,7 +605,8 @@ function onEvent(event) {
     case "canvas": canvasPanel.event(response); break;
     case "sessions": projectPicker.update(response.sessions||[]);renderSessions(response.sessions || []); break;
     case "history": restoreHistory(response.messages || []); status("就绪"); break;
-    case "stopping": stopping=true;$("stop-button").disabled=true;if(response.turnId)activeTurnId=response.turnId;status(response.message||"正在停止，等待请求结束…");break;
+    case "stopping": stopping=true;$("stop-button").disabled=true;if(response.turnId){activeTurnId=response.turnId;cancelledTurnId=response.turnId;}status(response.message||"正在取消本地请求…");break;
+    case 'cancellation_state': if(cancellationApplies(response,{running,stopping,cancelledTurnId}))status(cancellationStatus(response));break;
     case "turn_forced_end":
       setRunning(false);finishThinking({status:"aborted"});
       status("已停止（本地）");
@@ -640,7 +644,7 @@ function onEvent(event) {
       break;
     }
     case "compaction": $("compaction-state").textContent=response.status==="running"?"正在压缩上下文…":response.status==="error"?"压缩失败："+response.message:response.status==="skipped"?response.message:"上下文已压缩";$("compact-now").disabled=response.status==="running";break;
-    case "started": canvasPanel.foreground(); recoveryStatus = ""; retrying = false; submitted = null; turnErrorShown = false; activeTurnId = response.turnId || response.id || null; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
+    case "started": cancelledTurnId=null;canvasPanel.foreground(); recoveryStatus = ""; retrying = false; submitted = null; turnErrorShown = false; activeTurnId = response.turnId || response.id || null; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
     case "message_outcome":
       finishThinking(response.outcome);
       assistantRow = null; thinkingRow = null; break;

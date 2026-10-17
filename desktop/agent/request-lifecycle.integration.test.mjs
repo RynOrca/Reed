@@ -13,6 +13,7 @@ for(const headers of [false,true])test(`foreground cancellation and settings whi
  let child,seq=0,calls=0,held,contact,closed;
  const reached=new Promise(r=>contact=r),disconnected=new Promise(r=>closed=r),seen=[],waiters=new Set();
  const server=createServer(async(req,res)=>{
+  if(req.url==='/router/load'){res.writeHead(404);res.end();return;}
   if(req.url==='/v1/models'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({data:[{id:'mock',context_window:65536,max_tokens:2048}]}));return;}
   for await(const _chunk of req){}calls++;
   if(calls===1){held=res;res.once('close',closed);if(headers){res.writeHead(200,{'Content-Type':'text/event-stream'});res.flushHeaders();}contact();return;}

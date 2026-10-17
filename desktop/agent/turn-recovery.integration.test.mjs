@@ -138,7 +138,8 @@ test('PI bridge preserves completed thinking-only history and reasoning depth wh
 
 test('PI bridge ends repeated thinking-only stop after one continuation', {timeout:30000}, async t=>{
   const fixture=await recoveryFixture(t,true,false,true);
-  assert.equal(fixture.done.outcome.status,'empty');
+  assert.equal(fixture.done.outcome.status,'error');
+  assert.equal(fixture.done.outcome.code,'incomplete_reasoning');
   assert.equal(fixture.requests.length,2);
 });
 
@@ -158,12 +159,12 @@ test("PI bridge bounds repeated truncation and preserves failed history and orig
 test("PI bridge retries a malformed thinking-only SSE once with the original task", { timeout: 30000 }, async t => {
   const fixture = await recoveryFixture(t, false, true);
   assert.equal(fixture.done.outcome.status, "complete");
-  assert.ok(fixture.events.some(event => event.type === "message_outcome" && event.outcome.code === "malformed_sse"));
+  assert.ok(fixture.events.some(event => event.type === "message_outcome" && event.outcome.code === "transport_incomplete"));
 });
 
 test("PI bridge reports repeated malformed SSE rather than retrying indefinitely", { timeout: 30000 }, async t => {
   const fixture = await recoveryFixture(t, true, true);
   assert.equal(fixture.done.outcome.status, "error");
-  assert.equal(fixture.done.outcome.code, "malformed_sse");
+  assert.equal(fixture.done.outcome.code, "transport_incomplete");
   assert.equal(fixture.requests.length, 2);
 });

@@ -102,3 +102,13 @@ test('malformed tool placeholder is a failure with explicit non-execution guidan
   assert.match(result.content[0].text,/output ended/);
   assert.equal(handlers.get('tool_result')({toolName:'read'}),undefined);
 });
+
+test('a late old-attempt terminal event cannot schedule recovery or replace the new turn outcome',async()=>{
+  const handlers=new Map(),events=[];
+  const recovery=createTurnRecovery({send:e=>events.push(e),currentAttempt:()=> 'new'});
+  recovery.extension({on:(name,fn)=>handlers.set(name,fn)});recovery.begin();
+  const message={...thinkingOnly,reedWire:{attempt_id:'old'}};
+  assert.equal(recovery.willRecover(message),false);
+  assert.equal(await handlers.get('turn_end')({message,messageEntryId:'old'}),undefined);
+  assert.equal(events.length,0);
+});
