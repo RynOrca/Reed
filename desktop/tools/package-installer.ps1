@@ -14,12 +14,12 @@ New-Item -ItemType Directory -Path $Output | Out-Null
 # it creates inherits the directory's mandatory label. Repair it first, otherwise a
 # Low-integrity installer cannot even write its own temporary files.
 Set-ReedOutputIntegrity -Path $Output
-$portable = Join-Path $Output 'Reed-portable'
-& (Join-Path $PSScriptRoot 'package-portable.ps1') -Output $portable
+$portableStage = Join-Path $Output 'Reed-portable'
+& (Join-Path $PSScriptRoot 'package-portable.ps1') -Output $portableStage
 if ($LASTEXITCODE -gt 7) { throw 'Portable staging failed' }
 $resources = @{}
-foreach ($folder in @('agent','runtime')) { $resources[(Join-Path $portable "$folder/")] = "$folder/" }
-foreach ($file in @('LICENSE','NOTICE.md','PI-DESKTOP-LICENSE','MARKED-LICENSE','KATEX-LICENSE')) { $resources[(Join-Path $portable $file)] = $file }
+foreach ($folder in @('agent','runtime')) { $resources[(Join-Path $portableStage "$folder/")] = "$folder/" }
+foreach ($file in @('LICENSE','NOTICE.md','PI-DESKTOP-LICENSE','MARKED-LICENSE','KATEX-LICENSE')) { $resources[(Join-Path $portableStage $file)] = $file }
 $config = @{
     bundle = @{
         active = $true; useLocalToolsDir = $true; targets = @('nsis'); icon = @('icons/icon.ico')
@@ -74,7 +74,7 @@ try {
 finally { Pop-Location }
 $nsisDir = Join-Path $target 'release/nsis/x64'
 $optimized = Join-Path $nsisDir 'installer-reuse.nsi'
-& node (Join-Path $PSScriptRoot 'optimize-installer.cjs') (Join-Path $nsisDir 'installer.nsi') $portable $optimized
+& node (Join-Path $PSScriptRoot 'optimize-installer.cjs') (Join-Path $nsisDir 'installer.nsi') $portableStage $optimized
 if ($LASTEXITCODE -ne 0) { throw 'Dependency reuse preparation failed' }
 $makensis = Join-Path $target '.tauri/NSIS/makensis.exe'
 Push-Location $nsisDir
@@ -98,13 +98,13 @@ Copy-Item -LiteralPath $installer.FullName -Destination $installerPath
 Set-ReedExecutableIntegrity -Path $installerPath
 Assert-ReedStandardIntegrity -Path $installerPath
 # 暂存目录始终保留：验收脚本直接用它启动，不必等 ZIP。
-Set-ReedOutputIntegrity -Path $portable
+Set-ReedOutputIntegrity -Path $portableStage
 $version = @{ product = 'Reed'; version = $appVersion; sourceCommit = (& git -C $root rev-parse HEAD); dataDirectory = '%APPDATA%\Reed' }
-[IO.File]::WriteAllText((Join-Path $portable 'VERSION.json'), ($version | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $portableStage 'VERSION.json'), ($version | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 # 便携 ZIP 由 -Portable 显式开启：压缩上万个文件是本流程最慢的一步，
 # 而安装包已包含同一份内容，日常只发 setup 即可。
 if ($Portable) {
-    Compress-Archive -Path (Join-Path $portable '*') -DestinationPath (Join-Path $Output "Reed-$appVersion-portable.zip")
+    Compress-Archive -Path (Join-Path $portableStage '*') -DestinationPath (Join-Path $Output "Reed-$appVersion-portable.zip")
     Set-ReedOutputIntegrity -Path (Join-Path $Output "Reed-$appVersion-portable.zip")
     Assert-ReedStandardIntegrity -Path (Join-Path $Output "Reed-$appVersion-portable.zip")
 } else {

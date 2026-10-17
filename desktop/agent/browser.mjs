@@ -21,6 +21,13 @@ export class AgentBrowser {
     if(!this.scope) throw new Error("本地预览需要文件访问授权");
     const file=await realpath(await this.scope.check(path,false));
     if(![".html",".htm"].includes(extname(file).toLowerCase()) || !(await stat(file)).isFile()) throw new Error("本地预览只支持 HTML 文件");
+    // Reuse the running server for the same file. A model can keep the preview URL
+    // (with query parameters) across slow thinking turns; a fresh port/token would
+    // make that URL unreachable.
+    if(this.previewServer && this.previewPath===file){
+      this.previewRevision={path:file,mtimeMs:(await stat(file)).mtimeMs,sha256:createHash("sha256").update(await readFile(file)).digest("hex")};
+      return this.previewUrl;
+    }
     const root=dirname(file),token=randomUUID();
     this.previewServer?.close();
     const server=createServer(async(req,res)=>{
@@ -49,14 +56,17 @@ export class AgentBrowser {
     let executable; for(const path of candidates) { if(await access(path).then(()=>true,()=>false)) { executable=path; break; } }
     if(!executable) throw new Error("未找到 Microsoft Edge，请安装后使用浏览器工具");
     const profile=join(this.dir,`browser-${process.pid}-${randomUUID()}`); await mkdir(profile,{recursive:true});
+    this.profile=profile;
+    // msedge.exe hands off to a separate browser process and the launcher exits
+    // immediately on Windows. Its exit is normal, not a startup failure, and the
+    // profile must survive until the real browser has been closed.
     this.child=spawn(executable,["--headless=new","--remote-debugging-port=0",`--user-data-dir=${profile}`,"--no-first-run","--no-default-browser-check","about:blank"],{windowsHide:true,stdio:"ignore"});
     const ownedChild=this.child, generation=this.generation;
-    ownedChild.once("exit",()=>{void rm(profile,{recursive:true,force:true,maxRetries:10,retryDelay:200}).catch(()=>{});});
     let launchError; this.child.once("error",e=>{launchError=e;});
     try {
       let port;
-      for(let i=0;i<100;i++) { if(launchError) throw launchError; if(generation!==this.generation) throw new Error("浏览器操作已取消"); if(ownedChild.exitCode!==null) throw new Error("浏览器启动失败"); try { port=Number((await readFile(join(profile,"DevToolsActivePort"),"utf8")).split("\n")[0]); if(port) break; } catch {} await new Promise(r=>setTimeout(r,100)); }
-      if(!port) throw new Error("浏览器启动超时");
+      for(let i=0;i<150;i++) { if(launchError) throw launchError; if(generation!==this.generation) throw new Error("浏览器操作已取消"); try { port=Number((await readFile(join(profile,"DevToolsActivePort"),"utf8")).split("\n")[0]); if(port) break; } catch {} await new Promise(r=>setTimeout(r,100)); }
+      if(!port) throw new Error("浏览器启动超时：15 秒内没有拿到调试端口");
       const response=await fetch(`http://127.0.0.1:${port}/json/version`,{signal:AbortSignal.timeout(5000)}); const version=await response.json();
       this.socket=new WebSocket(version.webSocketDebuggerUrl);
       await new Promise((res,rej)=>{ const timer=setTimeout(()=>rej(new Error("浏览器连接超时")),5000); this.socket.addEventListener("open",()=>{clearTimeout(timer);res();},{once:true}); this.socket.addEventListener("error",()=>{clearTimeout(timer);rej(new Error("浏览器连接失败"));},{once:true}); });
@@ -78,7 +88,7 @@ export class AgentBrowser {
     if(navigation.errorText) throw new Error(navigation.errorText);
     // Page.navigate may resolve while the previous document is still visible.
     // Confirm the new loader before accepting readyState from its document.
-    const deadline=Date.now()+5000;
+    const deadline=Date.now()+20000;
     while(Date.now()<deadline) {
       const tree=await this.call("Page.getFrameTree");
       if(!navigation.loaderId || tree.frameTree.frame.loaderId===navigation.loaderId) {
@@ -86,7 +96,7 @@ export class AgentBrowser {
       }
       await new Promise(r=>setTimeout(r,50));
     }
-    throw new Error("页面加载超时，请确认本地资源或网页可访问后重试");
+    throw new Error("页面加载超时（20 秒），请确认本地资源或网页可访问后重试");
   }
   run(input,{signal}={}) {
     if(signal?.aborted)return Promise.reject(new Error("浏览器操作已取消"));
@@ -110,8 +120,6 @@ export class AgentBrowser {
     if(action==="navigate") {const u=new URL(url);if(!["http:","https:"].includes(u.protocol) || u.username || u.password) throw new Error("浏览器只接受 HTTP(S) 地址；本地 HTML 请使用 preview");destination=u.href;}
     if(action==="preview") destination=await this.preview(path);
     if(signal?.aborted)throw new Error("浏览器操作已取消");
-    clearTimeout(this.idleTimer);
-    this.idleTimer=setTimeout(()=>this.close(),60000); this.idleTimer.unref();
     await this.start();
     this.viewport=options.viewport;
     await this.call("Emulation.setDeviceMetricsOverride",{...this.viewport,deviceScaleFactor:1,mobile:false});
@@ -151,11 +159,14 @@ export class AgentBrowser {
     clearTimeout(this.idleTimer);
     this.previewServer?.close();this.previewServer=null;this.previewPath=null;this.previewRevision=null;
     for(const req of this.pending.values()) {clearTimeout(req.timer);req.reject(new Error("浏览器已关闭"));} this.pending.clear();
-    const child=this.child, socket=this.socket;
+    const child=this.child, socket=this.socket, profile=this.profile;
     if(socket?.readyState===1) {
-      socket.send(JSON.stringify({id:++this.sequence,method:"Browser.close"}));
+      try { socket.send(JSON.stringify({id:++this.sequence,method:"Browser.close"})); } catch {}
       const fallback=setTimeout(()=>child?.kill(),2000); fallback.unref(); child?.once("exit",()=>clearTimeout(fallback));
     } else child?.kill();
+    // `this.child` is only the launcher; remove the profile after the real browser
+    // had a chance to shut down through Browser.close.
+    if(profile){ this.profile=null; const cleanup=setTimeout(()=>{void rm(profile,{recursive:true,force:true,maxRetries:10,retryDelay:200}).catch(()=>{});},2500); cleanup.unref(); }
     this.socket=null; this.child=null; this.sessionId=null;
   }
 }

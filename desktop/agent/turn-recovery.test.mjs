@@ -24,55 +24,12 @@ test("malformed SSE recovery excludes visible answers, tool calls, aborts and un
 });
 
 const cases = [
-  {
-    name: "Qwen existing thinking toggles and separate budget",
-    payload: { enable_thinking: true, chat_template_kwargs: { enable_thinking: true, preserved: 7 }, thinking_budget: 8192 },
-    verify(payload) {
-      assert.equal(payload.enable_thinking, false);
-      assert.deepEqual(payload.chat_template_kwargs, { enable_thinking: false, preserved: 7 });
-      assert.equal(payload.thinking_budget, 1024);
-    },
-  },
-  {
-    name: "DeepSeek existing thinking type",
-    payload: { thinking: { type: "enabled" } },
-    verify(payload) { assert.deepEqual(payload.thinking, { type: "disabled" }); },
-  },
-  {
-    name: "Anthropic enabled budget and output effort",
-    payload: { thinking: { type: "enabled", budget_tokens: 8192 }, output_config: { effort: "high", preserved: 7 }, system: [{ type: "text", text: privateSystem }] },
-    verify(payload) {
-      assert.deepEqual(payload.thinking, { type: "enabled", budget_tokens: 1024 });
-      assert.deepEqual(payload.output_config, { effort: "low", preserved: 7 });
-      assert.equal(payload.system[0].text, privateSystem);
-      assert.equal(payload.system.length, 2);
-    },
-  },
-  {
-    name: "Anthropic adaptive thinking remains adaptive",
-    payload: { thinking: { type: "adaptive" }, output_config: { effort: "high" }, system: privateSystem },
-    verify(payload) {
-      assert.deepEqual(payload.thinking, { type: "adaptive" });
-      assert.equal(payload.output_config.effort, "low");
-    },
-  },
-  {
-    name: "Responses effort with string input",
-    payload: { reasoning: { effort: "high", summary: "auto" }, instructions: privateSystem, input: privateUser, max_output_tokens: 8192 },
-    verify(payload) {
-      assert.deepEqual(payload.reasoning, { effort: "low", summary: "auto" });
-      assert.equal(payload.input, privateUser);
-      assert.equal(payload.max_output_tokens, 8192);
-    },
-  },
-  {
-    name: "Chat completions reasoning effort",
-    payload: { reasoning_effort: "medium", max_completion_tokens: 16384 },
-    verify(payload) {
-      assert.equal(payload.reasoning_effort, "low");
-      assert.equal(payload.max_completion_tokens, 16384);
-    },
-  },
+  {name:'Qwen toggles and budget',payload:{enable_thinking:true,chat_template_kwargs:{enable_thinking:true,preserved:7},thinking_budget:8192}},
+  {name:'DeepSeek thinking',payload:{thinking:{type:'enabled'}}},
+  {name:'Anthropic budget and effort',payload:{thinking:{type:'enabled',budget_tokens:8192},output_config:{effort:'medium',preserved:7},system:[{type:'text',text:privateSystem}]}},
+  {name:'Anthropic adaptive thinking',payload:{thinking:{type:'adaptive'},output_config:{effort:'medium'},system:privateSystem}},
+  {name:'Responses string input',payload:{reasoning:{effort:'medium',summary:'auto'},instructions:privateSystem,input:privateUser,max_output_tokens:8192}},
+  {name:'Chat completions effort',payload:{reasoning_effort:'medium',max_completion_tokens:16384}},
 ];
 
 for (const scenario of cases) {
@@ -89,11 +46,13 @@ for (const scenario of cases) {
     recovery.begin();
     assert.strictEqual(await handlers.get("before_provider_request")({ payload }), payload);
     const boundary = await handlers.get("turn_end")({ message: thinkingOnly, messageEntryId: "isolated-failure" });
-    assert.deepEqual(boundary, { entries: [{ type: "context_edit", targetId: "isolated-failure", replacement: null }], continue: true });
+    assert.equal(boundary.continue,true);
+    assert.deepEqual(boundary.entries[0],{type:'context_edit',targetId:'isolated-failure',replacement:null});
+    assert.equal(boundary.entries[1].customType,'reed_model_continuation');
     const lowered = await handlers.get("before_provider_request")({ payload });
-    scenario.verify(lowered);
+    assert.strictEqual(lowered,payload,'续接不得改变原始请求任何字段');
     assert.deepEqual(payload, snapshot, "重试不得修改调用方的原始请求对象或嵌套字段");
-    assert.strictEqual(await handlers.get("before_provider_request")({ payload }), payload, "恢复仅改变一次请求；后续工具轮不得继续降档或插入提示");
+    assert.strictEqual(await handlers.get("before_provider_request")({ payload }), payload, "后续工具轮同样保持请求字段不变");
     const secondBoundary = await handlers.get("turn_end")({ message: thinkingOnly, messageEntryId: "isolated-second-failure" });
     assert.equal(secondBoundary.continue, false);
     assert.equal(events.filter(event => event.type === "recovery").length, 1);
@@ -116,4 +75,60 @@ test("request summary accepts Responses string input and exposes only user lengt
   assert.equal(summary.userMessages[0].length, privateUser.length);
   assert.match(summary.userMessages[0].hash, /^[0-9a-f]{64}$/);
   assert.ok(!JSON.stringify(summary).includes(privateUser));
+});
+
+test('completed thinking-only stop is retained and continuation is bounded, cancellation never resumes',async()=>{
+  const handlers=new Map(),events=[];
+  const recovery=createTurnRecovery({send:e=>events.push(e)});
+  recovery.extension({on:(name,fn)=>handlers.set(name,fn)});recovery.begin();
+  const message={...thinkingOnly,stopReason:'stop'};
+  const boundary=await handlers.get('turn_end')({message,messageEntryId:'complete-thinking'});
+  assert.equal(boundary.entries.length,1);
+  assert.equal(boundary.entries[0].type,'custom_message');
+  assert.equal(boundary.entries[0].details.preserveThinking,true);
+  assert.ok(!/降低|降档/.test(events[0].message));
+  await handlers.get('before_provider_request')({payload:{}});
+  assert.equal(await handlers.get('turn_end')({message,messageEntryId:'second'}),undefined);
+  assert.equal(events.length,1);
+  recovery.end();assert.equal(recovery.willRecover(message),false);
+  recovery.begin();assert.equal(await handlers.get('turn_end')({message:{...message,stopReason:'aborted'},messageEntryId:'cancelled'}),undefined);
+});
+
+test('malformed tool placeholder is a failure with explicit non-execution guidance',()=>{
+  const handlers=new Map();createTurnRecovery({send(){}}).extension({on:(name,fn)=>handlers.set(name,fn)});
+  const result=handlers.get('tool_result')({toolName:'malformed_tool_call',input:{error:'output ended before tool call closed'}});
+  assert.equal(result.isError,true);
+  assert.match(result.content[0].text,/未执行/);
+  assert.match(result.content[0].text,/output ended/);
+  assert.equal(handlers.get('tool_result')({toolName:'read'}),undefined);
+});
+
+test('a late old-attempt terminal event cannot schedule recovery or replace the new turn outcome',async()=>{
+  const handlers=new Map(),events=[];
+  const recovery=createTurnRecovery({send:e=>events.push(e),currentAttempt:()=> 'new'});
+  recovery.extension({on:(name,fn)=>handlers.set(name,fn)});recovery.begin();
+  const message={...thinkingOnly,reedWire:{attempt_id:'old'}};
+  assert.equal(recovery.willRecover(message),false);
+  assert.equal(await handlers.get('turn_end')({message,messageEntryId:'old'}),undefined);
+  assert.equal(events.length,0);
+});
+
+test('a stopped planning loop asks for one concrete action and never replays the loop',async()=>{
+  const handlers=new Map(),events=[];
+  const recovery=createTurnRecovery({send:e=>events.push(e)});
+  recovery.extension({on:(name,fn)=>handlers.set(name,fn)});recovery.begin();
+  const message={...thinkingOnly,stopReason:'error',errorMessage:'Reed model protocol: thinking_repetition',
+    reedWire:{enforced:true,errorCode:'thinking_repetition',status:'incomplete',transportComplete:false}};
+  const boundary=await handlers.get('turn_end')({message,messageEntryId:'looped'});
+  assert.equal(boundary.continue,true);
+  assert.equal(boundary.entries[0].type,'context_edit','退化的思考不重放');
+  assert.equal(boundary.entries[1].customType,'reed_model_continuation');
+  assert.match(boundary.entries[1].content,/Immediately perform the smallest concrete step/);
+  assert.doesNotMatch(boundary.entries[1].content,/Preserve the configured reasoning depth/,'停下来的是计划，不该再要求保持原思考深度');
+  assert.equal(boundary.entries[1].details.preserveThinking,false);
+  assert.equal(boundary.entries[1].details.code,'thinking_repetition');
+  const second=await handlers.get('turn_end')({message,messageEntryId:'looped-second'});
+  assert.notEqual(second?.continue,true,'同一轮只推一次');
+  assert.equal(events.length,1);
+  assert.match(events[0].message,/立即执行/);
 });

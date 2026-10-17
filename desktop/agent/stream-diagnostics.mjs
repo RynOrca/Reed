@@ -118,28 +118,32 @@ export function createDiagnosticFetch(fetchImpl, diagnostic) {
 
 // Bound both connection/headers and a stalled response body. Retain no payloads,
 // credentials, query strings or user text in diagnostics.
-export function createRequestFetch(fetchImpl, { signal, diagnostic=()=>{}, onPhase=()=>{}, idleMs=90000, totalMs=300000 }={}) {
+export function createRequestFetch(fetchImpl, { signal, diagnostic=()=>{}, onPhase=()=>{}, idleMs=90000, totalMs=300000, connectionMs=90000, noticeMs=90000, dispatcher }={}) {
   return async (input, init={}) => {
     const controller=new AbortController(), started=Date.now(),requestId=++requestSequence;
     const combined=AbortSignal.any([controller.signal, ...[signal,init.signal].filter(Boolean)]);
-    let idle, total, reader, output, closed=false, first=true;
+    let idle, total, connection, notice, reader, output, closed=false, first=true, lastData=started;
     const record=(phase,extra={})=>{try{Promise.resolve(diagnostic({type:'request_phase',requestId,phase,elapsedMs:Date.now()-started,...extra})).catch(()=>{});onPhase(phase);}catch{}};
-    const timeout=()=>controller.abort(new Error('模型服务长时间未返回数据，请停止后重试，或检查服务与网络。'));
-    const touch=()=>{clearTimeout(idle);idle=setTimeout(timeout,idleMs);};
-    const cleanup=()=>{if(closed)return;closed=true;clearTimeout(idle);clearTimeout(total);combined.removeEventListener('abort',aborted);};
+    const timeout=(phase)=>controller.abort(Object.assign(new Error(phase==='total'?'模型生成超过单次生成时限，可在提供商设置调整。':phase==='connection'?'连接模型服务超时，请检查服务与网络。':'模型服务长时间未返回数据，可在提供商设置调整无数据超时。'),{name:'ModelRequestTimeoutError',phase}));
+    const touch=()=>{lastData=Date.now();clearTimeout(idle);if(idleMs>0)idle=setTimeout(()=>timeout('idle'),idleMs);};
+    const cleanup=()=>{if(closed)return;closed=true;clearTimeout(idle);clearTimeout(total);clearTimeout(connection);clearInterval(notice);combined.removeEventListener('abort',aborted);};
     // Error the consumer immediately; an upstream cancel/read promise may never settle.
     const aborted=()=>{record(controller.signal.aborted?'timeout':'cancelled');try{output?.error(combined.reason);}catch{}void reader?.cancel(combined.reason).catch(()=>{});cleanup();};
-    combined.addEventListener('abort',aborted,{once:true});touch();total=setTimeout(timeout,totalMs);
+    combined.addEventListener('abort',aborted,{once:true});
+    touch();
+    if(connectionMs>0)connection=setTimeout(()=>timeout('connection'),connectionMs);
+    if(totalMs>0)total=setTimeout(()=>timeout('total'),totalMs);
+    if(noticeMs>0){notice=setInterval(()=>{if(Date.now()-lastData>=noticeMs)record('waiting',{silentMs:Date.now()-lastData});},noticeMs);notice.unref?.();}
     record('connecting');
     try {
       combined.throwIfAborted();
       let rejectAbort;
       const abortPromise=new Promise((_,reject)=>{rejectAbort=()=>reject(combined.reason);combined.addEventListener('abort',rejectAbort,{once:true});if(combined.aborted)rejectAbort();});
       let response;
-      try{response=await Promise.race([fetchImpl(input,{...init,signal:combined}),abortPromise]);}
+      try{response=await Promise.race([fetchImpl(input,{...init,...(dispatcher?{dispatcher}:{}),signal:combined}),abortPromise]);}
       finally{combined.removeEventListener('abort',rejectAbort);}
       combined.throwIfAborted();
-      record('headers',{status:response.status});touch();
+      clearTimeout(connection);record('headers',{status:response.status});touch();
       if(!response.body){cleanup();return response;}
       reader=response.body.getReader();
       const body=new ReadableStream({

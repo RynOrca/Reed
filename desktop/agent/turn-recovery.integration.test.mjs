@@ -15,7 +15,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function recoveryFixture(t, secondTruncated, malformed = false) {
+async function recoveryFixture(t, secondTruncated, malformed = false, thinkingStop = false, repetition = false) {
   const root = await mkdtemp(join(tmpdir(), "reed-turn-recovery-"));
   const requests = [], events = [];
   const recoveryRequest = deferred(), releaseRecovery = deferred();
@@ -40,9 +40,17 @@ async function recoveryFixture(t, secondTruncated, malformed = false) {
     response.setHeader("content-type", "text/event-stream");
     const chunk = (delta, finish_reason = null) => ({ id: `recovery-${index}`, object: "chat.completion.chunk", created: 1, model: "recovery-model", choices: [{ index: 0, delta, finish_reason }] });
     response.write(`data: ${JSON.stringify(chunk({ role: "assistant" }))}\n\n`);
+    if (repetition && index === 1) {
+      // A planning loop: the model repeats one short line and never calls a tool.
+      try {
+        for (let i = 0; i < 400; i += 1) response.write(`data: ${JSON.stringify(chunk({ reasoning_content: "Let me write it now.\n" }))}\n\n`);
+      } catch {}
+      try { response.end("data: [DONE]\n\n"); } catch {}
+      return;
+    }
     response.write(`data: ${JSON.stringify(chunk(truncated ? { reasoning_content: `ISOLATED_THINKING_ATTEMPT_${index}` } : { content: "RECOVERY_VISIBLE_SUCCESS" }))}\n\n`);
     if (malformed && truncated) { response.end('data: {"choices":\n\n'); return; }
-    response.write(`data: ${JSON.stringify(chunk({}, truncated ? "length" : "stop"))}\n\n`);
+    response.write(`data: ${JSON.stringify(chunk({}, truncated && !thinkingStop ? "length" : "stop"))}\n\n`);
     response.write(`data: ${JSON.stringify({ ...chunk({}), choices: [], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } })}\n\n`);
     response.end("data: [DONE]\n\n");
   });
@@ -105,11 +113,14 @@ async function recoveryFixture(t, secondTruncated, malformed = false) {
   assert.ok(!events.slice(start).some(event => ["done", "settled"].includes(event.type)), "恢复请求未返回时不能显示完成");
   if (malformed) assert.ok(!events.slice(start).some(event => event.type === "error"), "可恢复的首次流错误不能提前结束 UI 或留下最终错误提示");
   assert.equal(requests[0].reasoning_effort, "medium");
-  assert.equal(requests[1].reasoning_effort, "low");
+  assert.equal(requests[1].reasoning_effort, "medium");
+  assert.deepEqual(requests[1].messages.filter(m=>['system','developer'].includes(m.role)),requests[0].messages.filter(m=>['system','developer'].includes(m.role)), '续接不能改写system前缀');
+  assert.deepEqual(requests[1].tools,requests[0].tools,'续接不能改写工具schema');
   for (const request of requests) {
     assert.equal(request.messages.filter(message => message.role === "user" && JSON.stringify(message.content).includes(task)).length, 1, "恢复应保留原任务且不能重复输入");
   }
-  assert.ok(!JSON.stringify(requests[1].messages).includes("ISOLATED_THINKING_ATTEMPT_1"), "失败思考不能再次送入模型上下文");
+  assert.equal(JSON.stringify(requests[1].messages).includes('ISOLATED_THINKING_ATTEMPT_1'),thinkingStop,'仅完整stop思考保留，损坏或截断思考不复用');
+  assert.ok(JSON.stringify(requests[1].messages.at(-1)).includes(repetition ? 'Immediately perform' : 'Continue the original user task'), '续接指令应在上下文末尾');
   releaseRecovery.resolve();
   const done = await pending;
   if (malformed) {
@@ -128,6 +139,18 @@ test("PI bridge recovers a thinking-only length stop without premature completio
   assert.ok(fixture.events.slice(fixture.start).some(event => event.type === "delta" && event.kind === "text" && event.text === "RECOVERY_VISIBLE_SUCCESS"));
 });
 
+test('PI bridge preserves completed thinking-only history and reasoning depth when continuing', {timeout:30000}, async t=>{
+  const fixture=await recoveryFixture(t,false,false,true);
+  assert.equal(fixture.done.outcome.status,'complete');
+});
+
+test('PI bridge ends repeated thinking-only stop after one continuation', {timeout:30000}, async t=>{
+  const fixture=await recoveryFixture(t,true,false,true);
+  assert.equal(fixture.done.outcome.status,'error');
+  assert.equal(fixture.done.outcome.code,'incomplete_reasoning');
+  assert.equal(fixture.requests.length,2);
+});
+
 test("PI bridge bounds repeated truncation and preserves failed history and original task", { timeout: 30000 }, async t => {
   const fixture = await recoveryFixture(t, true);
   assert.equal(fixture.done.outcome.status, "truncated");
@@ -136,7 +159,7 @@ test("PI bridge bounds repeated truncation and preserves failed history and orig
   assert.equal(history.filter(message => message.role === "assistant" && message.stopReason === "length").length, 2, "历史应保留两次截断，而非只显示投影上下文");
   await fixture.command("prompt", { text: "RECOVERY_FOLLOW_UP：刚才为何停止？" });
   assert.equal(fixture.requests.length, 3);
-  assert.equal(fixture.requests[2].reasoning_effort, "medium", "恢复降档不能改变用户的后续思考设置");
+  assert.equal(fixture.requests[2].reasoning_effort, "medium", "续接不能改变用户的后续思考设置");
   assert.equal(fixture.requests[2].messages.filter(message => message.role === "user" && JSON.stringify(message.content).includes(fixture.task)).length, 1, "追问必须仍包含原始任务");
   assert.ok(!JSON.stringify(fixture.requests[2].messages).includes("ISOLATED_THINKING_ATTEMPT_"));
 });
@@ -144,12 +167,21 @@ test("PI bridge bounds repeated truncation and preserves failed history and orig
 test("PI bridge retries a malformed thinking-only SSE once with the original task", { timeout: 30000 }, async t => {
   const fixture = await recoveryFixture(t, false, true);
   assert.equal(fixture.done.outcome.status, "complete");
-  assert.ok(fixture.events.some(event => event.type === "message_outcome" && event.outcome.code === "malformed_sse"));
+  assert.ok(fixture.events.some(event => event.type === "message_outcome" && event.outcome.code === "transport_incomplete"));
 });
 
 test("PI bridge reports repeated malformed SSE rather than retrying indefinitely", { timeout: 30000 }, async t => {
   const fixture = await recoveryFixture(t, true, true);
   assert.equal(fixture.done.outcome.status, "error");
-  assert.equal(fixture.done.outcome.code, "malformed_sse");
+  assert.equal(fixture.done.outcome.code, "transport_incomplete");
   assert.equal(fixture.requests.length, 2);
+});
+
+test("PI bridge stops a degenerate planning loop and continues with one concrete action", { timeout: 30000 }, async t => {
+  const fixture = await recoveryFixture(t, false, false, false, true);
+  assert.equal(fixture.done.outcome.status, "complete", "续接成功应得到完整结果");
+  assert.ok(fixture.events.slice(fixture.start).some(event => event.type === "recovery" && /反复复述/.test(event.message)), "UI 应看到思考被判为复读");
+  assert.ok(JSON.stringify(fixture.requests[1].messages.at(-1)).includes("Immediately perform"), "续接指令应要求立即执行最小一步");
+  assert.ok(!JSON.stringify(fixture.requests[1].messages).includes("Let me write it now"), "退化的思考不得重放");
+  assert.equal(fixture.requests.length, 2, "同一轮最多请求一次恢复");
 });

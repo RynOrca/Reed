@@ -200,7 +200,7 @@ function renderProviders() {
   }
   if (providerId) renderProviderModels(providers.find(p => p.id === providerId)?.models || []);
 }
-function modelEditor(config){$("manual-model").value=config.id;$("manual-context").value=config.contextWindow||"";$("manual-output").value=config.maxTokens||"";$("manual-reasoning").value=config.reasoning==null?"unknown":config.reasoning?"yes":"no";$("manual-vision").checked=config.input?.includes("image")||false;$("thinking-format").value=config.compat?.thinkingFormat||"";$("manual-levels").value=config.reasoning?config.thinkingLevels?.filter(l=>l!=="off").join(", ")||"":"";explainThinkingProtocol();document.querySelector(".advanced").open=true;$("manual-model").scrollIntoView({block:"nearest"});}
+function modelEditor(config){$("manual-model").value=config.id;$("manual-context").value=config.contextWindow||"";$("manual-reasoning").value=config.reasoning==null?"unknown":config.reasoning?"yes":"no";$("manual-vision").checked=config.input?.includes("image")||false;$("thinking-format").value=config.compat?.thinkingFormat||"";$("manual-levels").value=config.reasoning?config.thinkingLevels?.filter(l=>l!=="off").join(", ")||"":"";explainThinkingProtocol();document.querySelector(".advanced").open=true;$("manual-model").scrollIntoView({block:"nearest"});}
 function renderProviderModels(models) {
   $("discovered-models").replaceChildren();
   for (const model of models) {
@@ -208,7 +208,7 @@ function renderProviderModels(models) {
     const info = document.createElement("div"), name = document.createElement("strong"), detail = document.createElement("small");
     name.textContent = model.name || model.id;
     const source = ({ service:"服务返回", "catalog+service":"服务 / PI 目录", user:"手动补充", unknown:"服务未提供能力信息" })[model.infoSource] || "PI 目录";
-    detail.textContent = `${model.contextWindow ? model.contextWindow.toLocaleString() + " 上下文" : "上下文未知"} · ${model.maxTokens ? model.maxTokens.toLocaleString() + " 最大输出" : "输出上限沿用默认"} · ${model.thinkingLevels?.join(" / ") || (model.reasoning === true ? "支持思考" : model.reasoning === false ? "不支持思考" : "思考能力未知")} · ${source}`;
+    detail.textContent = `${model.contextWindow ? model.contextWindow.toLocaleString() + " 上下文" : "上下文未知"} · ${model.thinkingLevels?.join(" / ") || (model.reasoning === true ? "支持思考" : model.reasoning === false ? "不支持思考" : "思考能力未知")} · ${source}`;
     info.append(name, detail);
     const use = document.createElement("button"); use.className = "secondary"; use.textContent = "获取配置";
     use.onclick = () => action(async () => {
@@ -251,7 +251,7 @@ $("manual-save").onclick = () => action(async () => {
   const button=$("manual-save");button.disabled=true;button.textContent="保存中…";
   try{
   await saveProvider(); const value = $("manual-reasoning").value;
-  const model = { id: $("manual-model").value.trim(), vision:$("manual-vision").checked, ...($("manual-context").value ? { contextWindow: Number($("manual-context").value) } : {}), ...($("manual-output").value ? { maxTokens: Number($("manual-output").value) } : {}), ...(value !== "unknown" ? { reasoning: value === "yes" } : {}), thinkingFormat: $("thinking-format").value };
+  const model = { id: $("manual-model").value.trim(), vision:$("manual-vision").checked, ...($("manual-context").value ? { contextWindow: Number($("manual-context").value) } : {}), ...(value !== "unknown" ? { reasoning: value === "yes" } : {}), thinkingFormat: $("thinking-format").value };
   if ($("manual-levels").value.trim()) model.thinkingLevels = $("manual-levels").value.split(/[,，\s]+/).filter(Boolean);
   const savedModel=await command("update_model", { providerId, model });
   document.querySelector(".advanced").open=false;$("provider-form").hidden=true;editing=null;providerId=null;providerDraftId=null;

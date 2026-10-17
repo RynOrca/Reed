@@ -1,35 +1,30 @@
 import { createHash } from "node:crypto";
 import { classifyAssistantOutcome, isMalformedStreamError } from "./turn-outcome.mjs";
+import {isWireRecoverable} from './provider-wire.mjs';
 
-const recoveryHint = "The previous request ended without visible text or a tool call. Continue the original user task now. Keep reasoning brief, then produce a visible answer or call the required tool. Do not ask the user to repeat the task.";
+const recoveryHint = "The previous model request ended without a visible answer or a tool call. Continue the original user task from the valid history above. Do not repeat completed work or ask the user to repeat the task. Preserve the configured reasoning depth. Produce the next useful answer or a complete, valid tool call; split large file operations into smaller calls if needed.";
 
-function recoveryPayload(payload) {
-  const next = { ...payload };
-  // Change only this request; leave the user's persisted thinking preference intact.
-  if (typeof next.reasoning_effort === "string") next.reasoning_effort = "low";
-  if (next.reasoning?.effort) next.reasoning = { ...next.reasoning, effort: "low" };
-  if (next.output_config?.effort) next.output_config = { ...next.output_config, effort: "low" };
-  if (typeof next.enable_thinking === "boolean") next.enable_thinking = false;
-  if (typeof next.chat_template_kwargs?.enable_thinking === "boolean") next.chat_template_kwargs = { ...next.chat_template_kwargs, enable_thinking: false };
-  for (const field of ["thinking_budget", "thinking_token_budget"]) {
-    if (Number.isFinite(next[field])) next[field] = Math.min(next[field], 1024);
-  }
-  if (next.thinking?.type === "enabled" && Number.isFinite(next.thinking.budget_tokens)) {
-    next.thinking = { ...next.thinking, budget_tokens: Math.min(next.thinking.budget_tokens, 1024) };
-  } else if (next.thinking?.type === "enabled") {
-    next.thinking = { ...next.thinking, type: "disabled" };
-  }
-  // A transient instruction is safer than persisting artificial user messages.
-  if (typeof next.instructions === "string") next.instructions += `\n\n${recoveryHint}`;
-  else if (typeof next.system === "string") next.system += `\n\n${recoveryHint}`;
-  else if (Array.isArray(next.system)) next.system = [...next.system, { type: "text", text: recoveryHint }];
-  else if (Array.isArray(next.messages)) {
-    next.messages = next.messages.map(message => ({ ...message }));
-    const head = next.messages.find(message => ["system", "developer"].includes(message.role));
-    if (head && typeof head.content === "string") head.content += `\n\n${recoveryHint}`;
-    else next.messages.unshift({ role: "system", content: recoveryHint });
-  }
-  return next;
+// The model looped in its thinking phase and never reached a tool call. Planning
+// again is exactly what failed, so this continuation asks for one concrete action
+// instead of resuming the plan. It adds no time or token limit.
+const actionHint = "The previous attempt was stopped because it kept repeating the same plan line without any tool call. Do not explain or restate the plan. Immediately perform the smallest concrete step now: call exactly one tool with complete valid arguments (write the smallest runnable file first, then extend it) or return the final answer. After each tool result, say one short sentence about what changed and continue with the next step.";
+
+function replayCompletedThinking(payload, message) {
+  // The SDK drops Chat Completions assistants with reasoning but no content/tools.
+  // Restore only a complete same-model raw reasoning block, immediately before
+  // our appended continuation. Never turn reasoning into visible assistant text.
+  if(message?.api!=='openai-completions' || !(message.stopReason==='stop'||message.reedWire?.canPreserveThinking) || payload.model!==message.model || !Array.isArray(payload.messages))return payload;
+  const blocks=(message.content||[]).filter(b=>b.type==='thinking'&&b.thinking?.trim());
+  if(!blocks.length)return payload;
+  const field=blocks[0].thinkingSignature;
+  if(!['reasoning_content','reasoning'].includes(field)||blocks.some(b=>b.thinkingSignature!==field))return payload;
+  const thinking=blocks.map(b=>b.thinking).join('\n');
+  if(payload.messages.some(m=>m.role==='assistant'&&(m[field]===thinking||m.content===thinking||(Array.isArray(m.content)&&m.content.filter(b=>b.type==='text').map(b=>b.text).join('\n\n')===thinking))))return payload;
+  const messages=[...payload.messages];
+  const tail=messages.at(-1);
+  if(tail?.role!=='user'||!JSON.stringify(tail.content).includes(recoveryHint))return payload;
+  messages.splice(messages.length-1,0,{role:'assistant',content:'',[field]:thinking});
+  return {...payload,messages};
 }
 
 export function summarizeRequest(payload) {
@@ -51,19 +46,25 @@ export function summarizeRequest(payload) {
   };
 }
 
-export function createTurnRecovery({ send, diagnostic = async () => {} }) {
+export function createTurnRecovery({ send, diagnostic = async () => {},currentAttempt=()=>null }) {
   let active = false, attempted = false, recovering = false, requestNumber = 0;
   let lastMessage = null;
   const willRecover = message => {
+    if(message?.reedWire&&currentAttempt()&&message.reedWire.attempt_id!==currentAttempt())return false;
     const outcome = classifyAssistantOutcome(message);
-    return active && !attempted && !outcome.hasText && !outcome.hasToolCalls && (["truncated", "empty"].includes(outcome.status) || isMalformedStreamError(message));
+    return active && !attempted && outcome.status!=='aborted' && !outcome.hasText && !outcome.hasToolCalls && (["truncated", "empty"].includes(outcome.status) || isMalformedStreamError(message) || isWireRecoverable(message?.reedWire));
   };
   return {
     begin() { active = true; attempted = false; recovering = false; requestNumber = 0; lastMessage = null; },
     end() { active = false; recovering = false; },
     outcome() { return classifyAssistantOutcome(lastMessage); },
+    get continuing(){return active&&attempted;},
     willRecover,
     extension(pi) {
+      pi.on('tool_result', event => {
+        if(event.toolName !== 'malformed_tool_call')return;
+        return {isError:true,content:[{type:'text',text:`不完整工具调用未执行。${event.input?.error || '工具参数在输出结束时尚未闭合。'} 请核对工具schema并重新发起完整调用；大文件分成较小的操作，不得声称这次写入已完成。`}]};
+      });
       // Agent core ignores turn_end continuation for errors. The session's public
       // settlement boundary can resume from the preserved user message instead.
       pi.on("agent_before_settle", () => {
@@ -73,23 +74,36 @@ export function createTurnRecovery({ send, diagnostic = async () => {} }) {
         if (!active) return;
         const isRecovery = recovering;
         recovering = false;
-        const payload = isRecovery ? recoveryPayload(event.payload) : event.payload;
+        // Continuation is an appended internal message. Never rewrite the cached
+        // system prefix, tool schema, reasoning settings or output budget.
+        const payload = isRecovery ? replayCompletedThinking(event.payload,lastMessage) : event.payload;
         await diagnostic({ type: "request", request: ++requestNumber, recovery: isRecovery, ...summarizeRequest(payload) });
         return payload;
       });
       pi.on("turn_end", async event => {
         if (!active || event.message.role !== "assistant") return;
+        if(event.message.reedWire&&currentAttempt()&&event.message.reedWire.attempt_id!==currentAttempt())return;
         lastMessage = event.message;
         const outcome = classifyAssistantOutcome(lastMessage);
-        await diagnostic({ type: "response", request: requestNumber, outcome, usage: lastMessage.usage });
+        await diagnostic({ type: "response", request: requestNumber, outcome, rawStopReason:lastMessage.rawStopReason??null, usage: lastMessage.usage });
         if (willRecover(lastMessage)) {
           attempted = true; recovering = true;
-          send({ type: "recovery", message: isMalformedStreamError(lastMessage) ? "流式响应损坏，正在保留原任务并降低思考强度重试一次" : "模型未产生回复或工具调用，正在保留原任务并降低思考强度重试一次" });
-          return { entries: [{ type: "context_edit", targetId: event.messageEntryId, replacement: null }], continue: true };
+          const needsAction = outcome.code === 'thinking_repetition';
+          // A looped planning stream is never replayed: replaying it would feed the
+          // same degenerate reasoning back into the next attempt.
+          const preserveThinking = needsAction ? false : (lastMessage.reedWire?.canPreserveThinking || (outcome.status === 'empty' && outcome.stopReason === 'stop'));
+          const reason = needsAction
+            ? '模型在思考里反复复述计划，已停止并改为立即执行一次'
+            : outcome.status === 'error' ? `模型响应未完成（${outcome.code || 'transport_incomplete'}），保持原思考设置重试一次`
+              : isMalformedStreamError(lastMessage) ? '流式响应损坏，保持原思考设置重试一次' : '模型已结束但未产生回复或工具调用，保持原思考设置续接一次';
+          send({ type: "recovery", message: reason });
+          const entries = preserveThinking ? [] : [{ type: 'context_edit', targetId: event.messageEntryId, replacement: null }];
+          entries.push({ type: 'custom_message', customType: 'reed_model_continuation', content: needsAction ? actionHint : recoveryHint, display: false, details: { reason: outcome.status, preserveThinking, ...(needsAction ? { code: outcome.code } : {}) } });
+          return { entries, continue: true };
         }
         // Avoid a second SDK compact-and-retry after our bounded recovery fails.
         // The raw transcript retains the attempt for history and diagnosis.
-        if (outcome.status === "truncated") {
+        if (outcome.status === "truncated" || (lastMessage.reedWire?.enforced && outcome.status!=='complete')) {
           return { entries: [{ type: "context_edit", targetId: event.messageEntryId, replacement: null }], continue: false };
         }
       });

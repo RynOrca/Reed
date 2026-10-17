@@ -40,6 +40,26 @@ test("visual completion requires actual screenshots and rejects inconsistent pas
   assert.equal(f.entries.length, 1);
 });
 
+test('failed HTML edit invalidates a prior pass until corrected and freshly reviewed',async t=>{
+  const f=await fixture(t);
+  await f.capture(1280,'desktop.png');await f.capture(390,'mobile.png');
+  await f.tool.execute('first',f.input());
+  assert.equal(f.review.outcome({status:'complete'}).status,'complete');
+  const error=await f.handlers.tool_result({toolName:'edit',input:{path:f.file},isError:true,content:[{type:'text',text:'edits.0 must be object'}]});
+  assert.equal(error.isError,true);
+  assert.match(error.content[0].text,/must be object/);
+  assert.match(error.content[1].text,/对象数组/);
+  assert.equal(f.review.outcome({status:'complete'}).status,'unverified');
+  await assert.rejects(f.tool.execute('invalid',f.input()),/写入或编辑失败/);
+  await f.changed();
+  // Even a successful same-content write must require fresh visual evidence.
+  assert.equal(f.review.outcome({status:'complete'}).status,'unverified');
+  await assert.rejects(f.tool.execute('stale',f.input()),/修改后请重新截图/);
+  await f.capture(1280,'fixed-desktop.png');await f.capture(390,'fixed-mobile.png');
+  await f.tool.execute('fixed',f.input());
+  assert.equal(f.review.outcome({status:'complete'}).status,'complete');
+});
+
 test("new edits invalidate both reviews and screenshots, including stale loaded page captures", async t => {
   const f = await fixture(t);
   await f.capture(1280, "desktop.png"); await f.capture(390, "mobile.png");
