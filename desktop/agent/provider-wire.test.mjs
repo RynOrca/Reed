@@ -6,9 +6,9 @@ const frame=obj=>`data: ${JSON.stringify(obj)}\n\n`;
 const choice=(delta={},finish_reason=null)=>({choices:[{index:0,delta,finish_reason}]});
 const done='data: [DONE]\n\n';
 const tool={index:0,id:'call-1',type:'function',function:{name:'write',arguments:'{"path":"test.txt","content":"合成"}'}};
-async function fixture(parts,{signal,status=200,contentType='text/event-stream',readError=false}={}){
+async function fixture(parts,{signal,status=200,contentType='text/event-stream',readError=false,thinking=null}={}){
   const records=[];
-  const attempt=createWireAttempt({taskId:'test-task',index:1,model:{id:'test-model',api:'openai-completions'},signal,diagnostic:e=>records.push(e)});
+  const attempt=createWireAttempt({taskId:'test-task',index:1,model:{id:'test-model',api:'openai-completions'},signal,thinking,diagnostic:e=>records.push(e)});
   let pos=0;
   const response=await attempt.fetch(async()=>new Response(new ReadableStream({pull(c){if(pos<parts.length)c.enqueue(typeof parts[pos]==='string'?new TextEncoder().encode(parts[pos++]):parts[pos++]);else if(readError)c.error(new Error('reader failed'));else c.close();}}),{status,headers:{'content-type':contentType,'x-request-id':'req-1'}}))('http://fixture',{body:JSON.stringify({model:'test-model',reasoning_effort:'medium',max_completion_tokens:16384,tools:[{type:'function',function:{name:'write'}}]})});
   let text='',error;
@@ -48,6 +48,9 @@ test('SSE error followed by DONE is still incomplete; HTTP 502 retains error cod
   assert.ok(!JSON.stringify(f.records).includes('PRIVATE_'));
   const http=await fixture([JSON.stringify(data)],{status:502,contentType:'application/json'});assert.equal(http.wire.errorCode,'incomplete_response');assert.equal(http.wire.httpStatus,502);
   const badStatus=await fixture([frame(choice({tool_calls:[tool]},'tool_calls')),done],{status:502});assert.notEqual(badStatus.wire.status,'completed');assert.ok(!badStatus.text.includes('call-1'));
+  const auth=await fixture([JSON.stringify({error:{message:'isolated authentication failure',type:'authentication_error'}})],{status:401,contentType:'application/json'});
+  assert.equal(auth.wire.errorCode,'authentication_error','只有 error.type 时也要保留真实错误码');
+  assert.match(wireOutcome(auth.wire).message,/authentication_error/);
 });
 
 test('legacy reasoning-only stop is incomplete; cancelled raw stop never succeeds',async()=>{
@@ -104,3 +107,34 @@ test('aggregate metadata retains raw outcome without inventing a wire DONE',asyn
   assert.equal(f.wire.status,'completed');assert.equal(f.wire.done,false);assert.equal(f.wire.responseMode,'aggregate');assert.equal(f.wire.usage.inputProcessed,20);
   assert.equal(f.wire.usage.inputTotal,80);assert.equal(f.wire.usage.inputCached,60);
 });
+
+test('thinking guard stops a planning loop before any tool call and names the local brake',async()=>{
+  const frames=[];
+  for(let i=0;i<40;i++)frames.push(frame(choice({reasoning_content:'Let me write it now.\n'})));
+  const repeated=await fixture(frames,{thinking:{budgetTokens:0,repetition:{repeatLimit:5,minTokensForRepetition:20}}});
+  assert.equal(repeated.wire.errorCode,'thinking_repetition');
+  assert.equal(repeated.wire.status,'incomplete');
+  assert.equal(repeated.wire.thinkingStop.reason,'repetition');
+  assert.ok(repeated.error,'the stream must error instead of completing');
+  const repeatedOutcome=wireOutcome(repeated.wire);
+  assert.equal(repeatedOutcome.status,'error');assert.equal(repeatedOutcome.code,'thinking_repetition');
+  assert.match(repeatedOutcome.message,/反复复述/);
+  assert.ok(!JSON.stringify(repeated.records).includes('Let me write'),'diagnostics keep no model text');
+
+  const long=[];
+  for(let i=0;i<20;i++)long.push(frame(choice({reasoning_content:'x'.repeat(400),content:''})));
+  const budget=await fixture(long,{thinking:{budgetTokens:100}});
+  assert.equal(budget.wire.errorCode,'thinking_budget');
+  assert.equal(budget.wire.thinkingStop.limit,100);
+  assert.equal(wireOutcome(budget.wire).code,'thinking_budget');
+  assert.match(wireOutcome(budget.wire).message,/思考达到上限/);
+});
+
+test('thinking guard leaves a short reasoning turn and its tool call untouched',async()=>{
+  const f=await fixture([frame(choice({reasoning_content:'计划：先写最小文件。\n'})),frame(choice({tool_calls:[tool]},'tool_calls')),done],{thinking:{budgetTokens:100}});
+  assert.equal(f.wire.status,'completed');
+  assert.equal(f.wire.validToolCallCount,1);
+  assert.equal(f.wire.thinkingStop,null);
+  assert.equal(f.wire.thinkingBudget,100);
+});
+

@@ -2,6 +2,7 @@ import { randomUUID,createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import {readFileSync} from 'node:fs';
 import { EventSourceStream } from 'undici/lib/web/eventsource/eventsource-stream.js';
+import { createThinkingGuard, thinkingBudgetFor } from "./thinking-guard.mjs";
 
 const encoder = new TextEncoder();
 const encode = value => encoder.encode(`data: ${JSON.stringify(value)}\n\n`);
@@ -9,13 +10,17 @@ const number = value => Number.isFinite(value) && value >= 0 ? value : null;
 const code = value => typeof value === 'string' && /^[a-zA-Z0-9_.:-]{1,128}$/.test(value) ? value : null;
 const toolId = value => createHash('sha256').update(String(value)).digest('hex');
 const terminalRaw = new Set(['stop_token','stop_string','output_limit','context_capacity','cancelled']);
-const incompleteCodes = new Set(['incomplete_response','incomplete_reasoning','upstream_incomplete','upstream_failure','transport_incomplete','malformed_tool_call','invalid_tool_call','unknown_terminal']);
+const incompleteCodes = new Set(['incomplete_response','incomplete_reasoning','upstream_incomplete','upstream_failure','transport_incomplete','malformed_tool_call','invalid_tool_call','unknown_terminal','thinking_budget','thinking_repetition']);
 const installedVersions=Object.fromEntries([['piAi','@earendil-works/pi-ai'],['piCodingAgent','@earendil-works/pi-coding-agent'],['undici','undici']].map(([key,path])=>{try{return [key,JSON.parse(readFileSync(new URL(`./node_modules/${path}/package.json`,import.meta.url),'utf8')).version];}catch{return [key,'unknown'];}}));
 
 export function wireOutcome(wire, base = {}) {
   if (!wire?.enforced) return base;
   const extra = { ...base, wire, code:wire.serverErrorCode || wire.errorCode || wire.rawFinishReason || wire.finishReason };
   if (wire.cancelled || wire.status==='cancelled' || wire.rawFinishReason === 'cancelled') return {...extra,status:'aborted',message:wire.cancelled?'本地已取消；服务端取消状态尚未确认':'模型服务报告取消；引擎是否空闲尚未确认'};
+  // Reed stopped the stream itself: say what happened and what to change, never
+  // blame the service for a local brake.
+  if (wire.errorCode === 'thinking_budget') return {...extra,status:'error',code:'thinking_budget',message:'模型思考达到上限仍未调用工具，已停止本次请求（可在模型设置调整思考上限）'};
+  if (wire.errorCode === 'thinking_repetition') return {...extra,status:'error',code:'thinking_repetition',message:'模型在思考里反复复述同一句、没有调用工具，已停止本次请求'};
   if (!wire.transportComplete) return {...extra,status:'error',message:`模型响应传输未完成（${wire.errorCode || 'transport_incomplete'}），未执行本次工具调用`};
   if (wire.errorCode) return {...extra,status:'error',message:`模型服务返回 ${wire.errorCode}，本次响应未完成`};
   if (wire.status === 'limited') return {...extra,status:'truncated',code:wire.limitReason,message:`模型生成达到长度限制（${wire.limitReason}），本次工具未执行`};
@@ -30,12 +35,12 @@ export function isWireRecoverable(wire) {
 }
 
 // One instance per actual foreground request. Never shared with the next attempt.
-export function createWireAttempt({taskId, index, model, signal, diagnostic=()=>{}, onPhase=()=>{}, sdkVersion=installedVersions,requestGroup='foreground'} = {}) {
+export function createWireAttempt({taskId, index, model, signal, diagnostic=()=>{}, onPhase=()=>{}, sdkVersion=installedVersions,requestGroup='foreground',thinking=null} = {}) {
   const started=performance.now(), tools=new Map(), buffered=[], allowed=new Set();
-  let reader, output, forwarded=0, parserError, bufferBytes=0, errorSeen=false, finished=false;
+  let reader, output, forwarded=0, parserError, bufferBytes=0, errorSeen=false, finished=false, guard=null;
   const state={enforced:model?.api==='openai-completions',agent_task_id:taskId,agent_model_request_index:index,attempt_id:randomUUID(),sdkVersion,model:model?.id,requestGroup,
     phase:'sending',status:'incomplete',responseMode:null,httpStatus:null,requestId:null,finishReason:null,finishReasons:[],rawFinishReason:null,rawFinishReasons:[],responseStatus:null,errorCode:null,serverErrorCode:null,done:false,
-    contentBytes:0,reasoningBytes:0,toolCallCount:0,toolCallIds:[],validToolCallCount:0,malformedTools:0,transportComplete:false,cancelled:false,canPreserveThinking:false,
+    contentBytes:0,reasoningBytes:0,toolCallCount:0,toolCallIds:[],validToolCallCount:0,malformedTools:0,transportComplete:false,cancelled:false,canPreserveThinking:false,thinkingStop:null,thinkingBudget:null,
     times:{sent:{utc:new Date().toISOString(),monotonicMs:started}},usage:{}};
   const snapshot=()=>structuredClone(state);
   const stamp=name=>{state.times[name]??={utc:new Date().toISOString(),monotonicMs:performance.now()};};
@@ -55,7 +60,10 @@ export function createWireAttempt({taskId, index, model, signal, diagnostic=()=>
       inputCached:number(u.prompt_tokens_details?.cached_tokens??u.input_tokens_details?.cached_tokens??u.cached_tokens),
       inputProcessed:number(u.processed_prompt_tokens??u.prompt_tokens_processed??u.processed_tokens),completion:number(u.completion_tokens??u.output_tokens),
       reasoning:number(u.completion_tokens_details?.reasoning_tokens??u.output_tokens_details?.reasoning_tokens??n?.reasoning_tokens)};
-    if(obj.error){errorSeen=true;state.serverErrorCode=code(obj.error.code)||'upstream_failure';failure(state.serverErrorCode);}
+    // OpenAI-compatible services sometimes send only error.type (for example
+    // authentication_error on 401). Keep it instead of flattening to upstream_failure
+    // so the UI can tell the user what actually failed.
+    if(obj.error){errorSeen=true;state.serverErrorCode=code(obj.error.code)||code(obj.error.type)||'upstream_failure';failure(state.serverErrorCode);}
   }
   function observeTools(parts) {
     for(const part of parts||[]){
@@ -83,6 +91,10 @@ export function createWireAttempt({taskId, index, model, signal, diagnostic=()=>
       state.contentBytes+=typeof d.content==='string'?Buffer.byteLength(d.content):0;
       const reasoning=d.reasoning_content||d.reasoning;
       state.reasoningBytes+=typeof reasoning==='string'?Buffer.byteLength(reasoning):0;
+      if(typeof reasoning==='string'&&reasoning&&guard){
+        const verdict=guard.push(reasoning);
+        if(verdict){state.thinkingStop=verdict;failure(verdict.reason==='budget'?'thinking_budget':'thinking_repetition');state.phase='thinking_stopped';}
+      }
       if(d.content||reasoning||d.tool_calls?.length){const first=!state.times.firstDelta;stamp('firstDelta');if(first)onPhase('progress');}
       if(d.tool_calls?.length){hasTools=true;observeTools(d.tool_calls);}
     }
@@ -144,6 +156,10 @@ export function createWireAttempt({taskId, index, model, signal, diagnostic=()=>
         state.requestedMaxCompletionTokens=number(payload.max_completion_tokens??payload.max_tokens);
         for(const tool of payload.tools||[])if(tool.function?.name)allowed.add(tool.function.name);
       }catch{}
+      // The bound is local and per attempt: the next attempt (a bounded recovery)
+      // gets a fresh budget instead of inheriting a spent one.
+      state.thinkingBudget=thinkingBudgetFor(thinking?.budgetTokens, state.requestedMaxCompletionTokens);
+      guard=createThinkingGuard({budgetTokens:state.thinkingBudget,...(thinking?.repetition||{})});
       signal?.addEventListener('abort',aborted,{once:true});
       try{
         signal?.throwIfAborted();state.phase='waiting_headers';
@@ -154,14 +170,17 @@ export function createWireAttempt({taskId, index, model, signal, diagnostic=()=>
         state.responseMode=sse?'sse':'aggregate';
         if(!sse){
           const body=await response.text();signal?.throwIfAborted();stamp('firstByte');
+          let tripped=null;
           try{
             const obj=JSON.parse(body);metadata(obj);
             if(response.ok){
               event({type:'message',options:{data:JSON.stringify({...obj,choices:obj.choices?.map(c=>({...c,delta:c.message}))})}});
-              state.transportComplete=true;
+              tripped=state.thinkingStop;
+              if(!tripped)state.transportComplete=true;
             }else{errorSeen=true;failure('upstream_failure');state.transportComplete=true;}
           }catch{failure('transport_incomplete');}
           finalize();cleanup();
+          if(tripped)throw error();
           return new Response(body,{status:response.status,statusText:response.statusText,headers:response.headers});
         }
         if(!response.body){failure('transport_incomplete');finalize();cleanup();throw error();}
@@ -188,7 +207,7 @@ export function createWireAttempt({taskId, index, model, signal, diagnostic=()=>
                   return;
                 }
                 stamp('firstByte');try{utf8.decode(chunk.value,{stream:true});}catch{failure('transport_incomplete');}parser.write(Buffer.from(chunk.value));
-                if(parserError||state.errorCode==='transport_incomplete'){void reader.cancel().catch(()=>{});finalize();cleanup();parser.destroy();out.error(error());return;}
+                if(parserError||state.errorCode==='transport_incomplete'||state.thinkingStop){void reader.cancel().catch(()=>{});finalize();cleanup();parser.destroy();out.error(error());return;}
                 // Already enqueued visible deltas; give the consumer a chance to render.
                 if(forwarded>delivered)return;
               }

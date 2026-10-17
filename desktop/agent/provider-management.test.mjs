@@ -31,6 +31,24 @@ test("model discovery reads advertised output limits without guessing missing li
  assert.equal(normalizeDiscoveredModel({id:"custom",max_tokens:0},{maxTokens:8192}).maxTokens,8192);
 });
 
+test('thinking budget persists per model, accepts zero and rejects negatives',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'reed-thinking-provider-'));
+ try{
+  const crypto={protect:async x=>x,unprotect:async x=>x};
+  const runtime={refresh:async()=>{},setRuntimeApiKey:async()=>{},getModel:()=>null};
+  const store=new ProviderStore(root,crypto);
+  const provider=await store.save({template:'custom',protocol:'openai-completions',baseUrl:'http://127.0.0.1:12345/v1',name:'local'});
+  await store.updateModel(provider.id,{id:'m1',maxTokens:16384,thinkingBudget:4096},runtime);
+  const stored=()=>store.snapshot()[0].models.find(model=>model.id==='m1');
+  assert.equal(stored().thinkingBudget,4096);
+  const reload=new ProviderStore(root,crypto);await reload.load();
+  assert.equal(reload.snapshot()[0].models.find(model=>model.id==='m1').thinkingBudget,4096,'重载后仍保留思考上限');
+  await reload.updateModel(provider.id,{id:'m1',thinkingBudget:0},runtime);
+  assert.equal(reload.snapshot()[0].models.find(model=>model.id==='m1').thinkingBudget,0,'0 表示不限');
+  await assert.rejects(reload.updateModel(provider.id,{id:'m1',thinkingBudget:-1},runtime),/思考上限/);
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
 test("explicit output limit reaches SDK configuration and survives discovery, refresh and reload",async()=>{
  const root=await mkdtemp(join(tmpdir(),"summon-output-limit-"));
  try {

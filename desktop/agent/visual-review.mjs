@@ -35,8 +35,12 @@ export function createVisualReview({ scope, send = () => {}, enabled = () => tru
       catch { state.blocked = "产物文件无法读取，不能确认最新版本的视觉验收"; }
     }
   }
-  function instruction() {
-    return `browser失败时先核对参数和错误，只允许一次纠正后重试；连续两次或本轮累计三次失败必须停止浏览器验收并如实报告，不能反复换参数重试或声称验收通过。网页产物验收规则：写入/修改网页后，必须使用 browser 预览，再 screenshot 获取真实图片；桌面宽度至少 900px、窄屏宽度至多 480px各一次。动画还需等待至少 1000ms后再次截图。仔细查看图片，按用户要求检查裁切、布局、可读性、运动和交互，调用 visual_review 记录逐项检查与问题。发现问题应修复并重新截图；修改后旧截图无效。最多 ${maxRounds} 次评审，停滞时明确报告剩余问题。不得把写文件成功或未经截图的猜测当作验收通过。当前验收状态：${JSON.stringify(snapshot())}`;
+  function instruction(prompt = "") {
+    if (!enabled()) return "浏览器能力已在设置中关闭：不要尝试 browser 或 visual_review，也不要声称网页产物已通过视觉验收；如实说明尚未验收。";
+    const short = "网页产物验收：写入或修改网页文件后，先调用 browser 工具（action=preview 打开本地文件，或 action=navigate 打开网址）预览，再调用同一个 browser 工具（action=screenshot）截图（桌面宽度至少 900px、窄屏至多 480px 各一次），最后调用 visual_review 提交逐项检查。修改后旧截图作废，需重新截图。注意：不存在名为 screenshot 的独立工具，截图是 browser 的 action。";
+    const relevant = state.files.size > 0 || state.failedWrites.size > 0 || /html|网页|页面|站点|网站|css|jsx|tsx|vue|svelte|svg|动画|animation|预览|截图|screenshot|landing/i.test(prompt || "");
+    if (!relevant) return short;
+    return `browser失败时先核对参数和错误，只允许一次纠正后重试；连续两次或本轮累计三次失败必须停止浏览器验收并如实报告，不能反复换参数重试或声称验收通过。网页产物验收规则：写入/修改网页后，先调用 browser 工具（action=preview 或 action=navigate）预览，再调用同一个 browser 工具（action=screenshot）获取真实图片；桌面宽度至少 900px、窄屏宽度至多 480px各一次。动画还需等待至少 1000ms后再次截图。仔细查看图片，按用户要求检查裁切、布局、可读性、运动和交互，调用 visual_review 记录逐项检查与问题。发现问题应修复并重新截图；修改后旧截图无效。最多 ${maxRounds} 次评审，停滞时明确报告剩余问题。不得把写文件成功或未经截图的猜测当作验收通过。不存在名为 screenshot 的独立工具——截图是 browser 工具的 action=screenshot。当前验收状态：${JSON.stringify(snapshot())}`;
   }
   return {
     begin: reset,
@@ -81,14 +85,18 @@ export function createVisualReview({ scope, send = () => {}, enabled = () => tru
           return text({ ...review, next: input.passed ? "可以总结已验证的结果" : "修复问题后重新截图与评审；如无法解决，明确报告剩余问题" });
         } }));
       pi.on("before_agent_start", event => {
-        event.systemPromptOptions.sections.reed_visual_review = instruction();
+        event.systemPromptOptions.sections.reed_visual_review = instruction(event.prompt);
       });
       pi.on("input", event => { if (event.streamingBehavior && event.text) state.prompt += `\n用户补充：${event.text}`; });
       pi.on("tool_call", event => {
         if(event.toolName==="browser" && state.browserStopped)return {block:true,terminate:true,reason:state.blocked};
         if (pending() && state.reviews.length >= maxRounds) return { block: true, terminate: true, reason: limitReason() };
       });
-      pi.on("context_with_system", event => ({ messages: [...event.messages, { role: "system", content: "", sections: { reed_visual_review: instruction() } }] }));
+      pi.on("context_with_system", event => {
+        const user = event.messages.findLast?.(message => message.role === "user");
+        const prompt = typeof user?.content === "string" ? user.content : (user?.content || []).filter(block => block.type === "text").map(block => block.text).join("\n");
+        return { messages: [...event.messages, { role: "system", content: "", sections: { reed_visual_review: instruction(prompt) } }] };
+      });
       pi.on("tool_result", async event => {
         if (event.isError) {
           if(['write','edit'].includes(event.toolName) && visualExtensions.has(extname(event.input?.path || '').toLowerCase())) {

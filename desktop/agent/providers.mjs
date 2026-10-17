@@ -190,6 +190,7 @@ export class ProviderStore {
     const provider = this.providers.find((item) => item.id === providerId);
     if (!provider) throw new Error("找不到该提供商");
     if (input.maxTokens !== undefined && (!Number.isSafeInteger(input.maxTokens) || input.maxTokens <= 0)) throw new Error("最大输出长度必须是正整数");
+    if (input.thinkingBudget !== undefined && input.thinkingBudget !== null && (!Number.isSafeInteger(input.thinkingBudget) || input.thinkingBudget < 0)) throw new Error("思考上限必须是非负整数（0 表示不限）");
     let model = provider.models.find((item) => item.id === input.id);
     if (!model) { model = normalizeDiscoveredModel({ id: input.id }); if (!model) throw new Error("Model ID 无效"); provider.models.push(model); }
     if (input.enabled !== undefined) {
@@ -198,6 +199,7 @@ export class ProviderStore {
     }
     if (input.contextWindow !== undefined) model.contextWindow = positive(input.contextWindow);
     if (input.maxTokens !== undefined) model.maxTokens = input.maxTokens;
+    if (input.thinkingBudget !== undefined) model.thinkingBudget = input.thinkingBudget;
     if (typeof input.vision === "boolean") model.input=["text",...(input.vision?["image"]:[])];
     if (typeof input.reasoning === "boolean") model.reasoning = input.reasoning;
     const previousFormat=model.compat?.thinkingFormat;
@@ -214,7 +216,7 @@ export class ProviderStore {
     }
     if(typeof input.reasoning==="boolean")model.reasoning=input.reasoning;
     model.overrides={...model.overrides};
-    for(const key of ["contextWindow","maxTokens","reasoning","thinkingLevels","compat"])if(input[key]!==undefined || (["compat","thinkingLevels"].includes(key)&&input.thinkingFormat))model.overrides[key]=model[key];
+    for(const key of ["contextWindow","maxTokens","thinkingBudget","reasoning","thinkingLevels","compat"])if(input[key]!==undefined || (["compat","thinkingLevels"].includes(key)&&input.thinkingFormat))model.overrides[key]=model[key];
     if(typeof input.vision==="boolean")model.overrides.input=model.input;
     model.infoSource = "user";
     await this.persist(); await this.install(runtime);

@@ -104,3 +104,27 @@ test("one corrected failure can recover but accumulated failures cannot be bypas
  await failure();await success();assert.equal(f.review.snapshot().reason,null);assert.equal(f.handlers.tool_call({toolName:"browser"}),undefined);
  await failure();await success();await failure();assert.equal(f.handlers.tool_call({toolName:"browser"}).terminate,true);
 });
+
+test('review instruction names the real browser actions and disappears when the capability is off',()=>{
+ const handlers={};
+ const review=createVisualReview({scope:{check:async path=>path}});
+ review.begin('x');
+ review.extension({on:(name,handler)=>handlers[name]=handler,registerTool(){},appendEntry(){}});
+ const full={sections:{}};
+ handlers.before_agent_start({prompt:'帮我写一个网页动画',systemPromptOptions:full});
+ const fullSection=full.sections.reed_visual_review;
+ assert.match(fullSection,/action=screenshot/,'截图必须指向 browser 的 action，而不是不存在的 screenshot 工具');
+ assert.match(fullSection,/不存在名为 screenshot 的独立工具/);
+ const short={sections:{}};
+ handlers.before_agent_start({prompt:'解一道数学题',systemPromptOptions:short});
+ assert.match(short.sections.reed_visual_review,/action=screenshot/,'无关轮次也要给出可执行的一行规则');
+ assert.doesNotMatch(short.sections.reed_visual_review,/当前验收状态/,'无关轮次不携带完整验收策略');
+ const offHandlers={};
+ const off=createVisualReview({scope:{check:async path=>path},enabled:()=>false});
+ off.begin('x');
+ off.extension({on:(name,handler)=>offHandlers[name]=handler,registerTool(){},appendEntry(){}});
+ const offOptions={sections:{}};
+ offHandlers.before_agent_start({prompt:'帮我写一个网页',systemPromptOptions:offOptions});
+ assert.match(offOptions.sections.reed_visual_review,/浏览器能力已在设置中关闭/);
+ assert.doesNotMatch(offOptions.sections.reed_visual_review,/action=screenshot/,'能力关闭时不要再让模型去调用不存在的路径');
+});

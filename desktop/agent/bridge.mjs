@@ -354,11 +354,13 @@ async function openSession(provider, modelId, sessionManager) {
     settingsManager.applyOverrides({retry:{enabled:false}});
     const signal=AbortSignal.any([options?.signal,turnController?.signal].filter(Boolean));
     const provider = providers.providers.find(p=>p.id===model.provider);
+    const storedModel = provider?.models?.find(item=>item.id===model.id);
     return modelRequests.stream(model, {
     signal, priority:'foreground', onWait:()=>send({type:'model_queue',state:'waiting'}),
   },async()=>{
     send({type:'model_queue',state:'running'});
     const attempt=createWireAttempt({model,taskId:`${session.sessionId}:${activeTurnId}`,index:++foregroundRequestIndex,signal,diagnostic,
+      thinking:{budgetTokens:storedModel?.thinkingBudget ?? null},
       onPhase:phase=>{if(phase==='progress'&&busy&&!signal.aborted)send({type:'request_phase',phase:'progress',attempt_id:attempt.snapshot().attempt_id});}});
     activeWireAttempt=attempt;
     const sdkStream = await streamFunction(model, context, {
