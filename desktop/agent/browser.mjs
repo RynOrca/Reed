@@ -21,6 +21,13 @@ export class AgentBrowser {
     if(!this.scope) throw new Error("本地预览需要文件访问授权");
     const file=await realpath(await this.scope.check(path,false));
     if(![".html",".htm"].includes(extname(file).toLowerCase()) || !(await stat(file)).isFile()) throw new Error("本地预览只支持 HTML 文件");
+    // Reuse the running server for the same file. A model can keep the preview URL
+    // (with query parameters) across slow thinking turns; a fresh port/token would
+    // make that URL unreachable.
+    if(this.previewServer && this.previewPath===file){
+      this.previewRevision={path:file,mtimeMs:(await stat(file)).mtimeMs,sha256:createHash("sha256").update(await readFile(file)).digest("hex")};
+      return this.previewUrl;
+    }
     const root=dirname(file),token=randomUUID();
     this.previewServer?.close();
     const server=createServer(async(req,res)=>{
@@ -81,7 +88,7 @@ export class AgentBrowser {
     if(navigation.errorText) throw new Error(navigation.errorText);
     // Page.navigate may resolve while the previous document is still visible.
     // Confirm the new loader before accepting readyState from its document.
-    const deadline=Date.now()+5000;
+    const deadline=Date.now()+20000;
     while(Date.now()<deadline) {
       const tree=await this.call("Page.getFrameTree");
       if(!navigation.loaderId || tree.frameTree.frame.loaderId===navigation.loaderId) {
@@ -89,7 +96,7 @@ export class AgentBrowser {
       }
       await new Promise(r=>setTimeout(r,50));
     }
-    throw new Error("页面加载超时，请确认本地资源或网页可访问后重试");
+    throw new Error("页面加载超时（20 秒），请确认本地资源或网页可访问后重试");
   }
   run(input,{signal}={}) {
     if(signal?.aborted)return Promise.reject(new Error("浏览器操作已取消"));
@@ -113,8 +120,6 @@ export class AgentBrowser {
     if(action==="navigate") {const u=new URL(url);if(!["http:","https:"].includes(u.protocol) || u.username || u.password) throw new Error("浏览器只接受 HTTP(S) 地址；本地 HTML 请使用 preview");destination=u.href;}
     if(action==="preview") destination=await this.preview(path);
     if(signal?.aborted)throw new Error("浏览器操作已取消");
-    clearTimeout(this.idleTimer);
-    this.idleTimer=setTimeout(()=>this.close(),60000); this.idleTimer.unref();
     await this.start();
     this.viewport=options.viewport;
     await this.call("Emulation.setDeviceMetricsOverride",{...this.viewport,deviceScaleFactor:1,mobile:false});

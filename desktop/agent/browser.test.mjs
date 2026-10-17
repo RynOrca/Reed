@@ -89,3 +89,21 @@ test("active screenshot delay cancels promptly and owned browser can recover",{t
   assert.ok((await browser.run({action:"snapshot"})).content[0].text.includes("about:blank"));
  }finally{const child=browser.child;const exited=child&&child.exitCode===null?new Promise(resolve=>child.once("exit",resolve)):Promise.resolve();browser.close();await exited;await rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
 });
+
+test('preview keeps one server per file so a slow turn can reuse the URL',async()=>{
+ const root=await mkdtemp(join(tmpdir(),"reed-preview-reuse-"));
+ try{
+  await writeFile(join(root,"index.html"),"<h1>one</h1>");
+  await writeFile(join(root,"other.html"),"<h1>two</h1>");
+  const scope={async check(path){return path;}};
+  const browser=new AgentBrowser(root,{scope});
+  const first=await browser.preview(join(root,"index.html"));
+  const again=await browser.preview(join(root,"index.html"));
+  assert.equal(again,first,'同一文件重复 preview 必须复用同一个地址');
+  assert.equal(await (await fetch(again+"?cam=1")).text(),"<h1>one</h1>");
+  const other=await browser.preview(join(root,"other.html"));
+  assert.notEqual(other,first);
+  await assert.rejects(fetch(first),'换成另一个文件后旧地址失效');
+  browser.close();
+ }finally{await rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
+});
