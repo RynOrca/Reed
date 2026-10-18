@@ -4,6 +4,7 @@ import {requestStatus} from './request-status.js';
 import {cancellationStatus,cancellationApplies} from './cancellation-status.js';
 // Transcript row structure and disclosure behavior adapted from PI-Desktop 0.16.1.
 import {createGoals} from "./goals.js";
+import {createOutline} from "./reading-outline.js";
 import {createConversationCanvas} from "./conversation-canvas.js";
 import {createProjectPicker} from "./project-picker.js";
 import {createMessageNavigation} from "./message-navigation.js";
@@ -92,7 +93,16 @@ const pending = new Map();
 const queuedTexts = new Map();
 let attachments = [];
 let followLatest = true;
-const goalsPanel = createGoals({command});
+let goalsPanel = null;
+const outlinePanel = createOutline({transcript, messages, onOpenGoals: () => goalsPanel?.open()});
+goalsPanel = createGoals({command, onChange: summary => {
+  const button = $("goals-button");
+  button.hidden = !summary.enabled;
+  outlinePanel.setGoal(summary);
+}});
+$("goals-button").append(icon("book"));
+$("goals-button").onclick = () => goalsPanel.open();
+
 const projectPicker=createProjectPicker({button:$('workspace-button'),command,tauri,isRunning:()=>running,onError:errorRow,onSelect:()=>{closeHistory();prompt.focus();}});
 const canvasPanel = createConversationCanvas({command,tauri,prompt,isRunning:()=>running,reportError:errorRow,onUnavailable:()=>{
   const role=roles.find(item=>item.id===activeRoleId);
@@ -112,9 +122,11 @@ createMessageNavigation({messages,transcript,onNavigate:()=>{followLatest=false;
 transcript.addEventListener("scroll",()=>{followLatest=transcript.scrollHeight-transcript.clientHeight-transcript.scrollTop<65;},{passive:true});
 
 function status(text) {
+  const state = $("composer-state");
   $("status").textContent = text;
-  $("status").parentElement.classList.toggle("is-busy", /正在|连接/.test(text));
-  $("status").parentElement.classList.toggle("is-error", /断开|出错|失败|截断|未生成/.test(text));
+  state.title = text;
+  state.classList.toggle("is-busy", /正在|连接/.test(text));
+  state.classList.toggle("is-error", /断开|出错|失败|截断|未生成/.test(text));
 }
 function updateSendAvailability() { $("send-button").disabled = (!prompt.value.trim() && !attachments.length); }
 function scrollToLatest() { if(followLatest)transcript.scrollTop = transcript.scrollHeight; }
@@ -458,7 +470,7 @@ let chosenModel=null,activeModelKey="",activeThinking="off",statusModelResponse=
 function updateStatusModel(){const role=roles.find(r=>r.id===activeRoleId);$("status-model").textContent=[role?.name||statusModelResponse.roleName||"Agent",statusModelResponse.model?$("model-label").textContent:null,statusModelResponse.model?activeThinking:null].filter(Boolean).join(" · ");$("status-model").title=$("status-model").textContent;$("status-model").hidden=false;}
 const thinkingNames={off:"思考关闭",minimal:"最少",low:"低",medium:"中等",high:"高",xhigh:"很高",max:"最高"};
 function thinkingName(level,format){return level!=="off" && ["qwen","qwen-chat-template"].includes(format)?"思考开启":thinkingNames[level]||level;}
-function updateModelChip(response){statusModelResponse=response;activeModelKey=response.model||"";activeThinking=response.thinkingLevel||"off";$("model-label").textContent=response.model?response.modelName||response.model:"选择模型";const name=thinkingName(activeThinking,response.thinkingFormat);$("model-thinking").textContent=/思考/.test(name)?name:`思考·${name}`;$("model-thinking").hidden=!response.model;$("model-button").title=response.model?`${$("model-label").textContent} · ${$("model-thinking").textContent}`:"选择模型";$("status-model").textContent=response.model?`${$("model-label").textContent} · ${activeThinking}`:"";$("status-model").title=$("status-model").textContent;$("status-model").hidden=!response.model;updateStatusModel();}
+function updateModelChip(response){statusModelResponse=response;activeModelKey=response.model||"";activeThinking=response.thinkingLevel||"off";$("model-label").textContent=response.model?response.modelName||response.model:"选择模型";const name=thinkingName(activeThinking,response.thinkingFormat);$("model-thinking").textContent=/思考/.test(name)?name:`思考·${name}`;$("model-thinking").hidden=!response.model||activeThinking==="off";$("model-button").title=response.model?`${$("model-label").textContent} · ${$("model-thinking").textContent}`:"选择模型";$("status-model").textContent=response.model?`${$("model-label").textContent} · ${activeThinking}`:"";$("status-model").title=$("status-model").textContent;$("status-model").hidden=!response.model;updateStatusModel();}
 function resetModelStep(){chosenModel=null;$("model-step").hidden=false;$("thinking-step").hidden=true;$("model-step-title").textContent="选择模型";$("model-error").hidden=true;}
 function chooseModel(model){chosenModel=model;$("model-step").hidden=true;$("thinking-step").hidden=false;$("model-step-title").textContent="选择思考档位";$("chosen-model-name").textContent=model.name||model.id;$("chosen-model-info").textContent=`${model.providerName||model.provider} · ${model.contextWindow?model.contextWindow.toLocaleString()+" 上下文":"上下文未知"}`;const format=model.compat?.thinkingFormat;renderThinkingLevels(model.thinkingLevels||["off"],activeModelKey===`${model.provider}/${model.id}`?activeThinking:"off",{thinkingFormat:format,reasoningKnown:model.reasoning!=null});$("thinking-hint").textContent=["qwen","qwen-chat-template"].includes(format)?"当前配置为 Qwen 思考开关，只发送开启/关闭，不区分深度。若服务支持 reasoning_effort，请在设置中选择该协议并配置档位。":model.thinkingDefaults?"服务未返回档位，使用默认五档；实际思考效果由模型服务决定，可在设置中调整协议。":model.reasoning===false?"此模型不支持思考。":"仅展示当前模型支持的选项。";$("thinking-level").focus();}
 function renderModels() {
@@ -944,6 +956,11 @@ function showPinned(value){$("pin-button").setAttribute("aria-pressed",String(va
 $("pin-button").onclick=async()=>{const button=$("pin-button");button.disabled=true;try{showPinned(await tauri.core.invoke("set_window_pinned",{pinned:button.getAttribute("aria-pressed")!=="true"}));}catch(e){errorRow(String(e));}finally{button.disabled=false;}};
 if(tauri)void tauri.core.invoke("window_pinned").then(showPinned).catch(console.error);
 $("hide-button").onclick = () => void tauri?.core.invoke("dismiss");
+const canvasEntry = $("canvas-button");
+if (canvasEntry) {
+  canvasEntry.classList.add("header-canvas-button");
+  $("goals-button").before(canvasEntry);
+}
 const activityOpen = new Set();
 function renderActivity() {
   for(const row of $("activity-list").querySelectorAll(".tool-row")) { if(row.classList.contains("open")) activityOpen.add(row.dataset.recordId); else activityOpen.delete(row.dataset.recordId); }

@@ -8,6 +8,7 @@ export function createConversationCanvas({command,tauri,prompt,isRunning,onJump,
   const pane=document.createElement('section');pane.className='canvas-pane';pane.hidden=true;pane.setAttribute('aria-label','对话画布');
   pane.innerHTML='<header class="canvas-header" data-drag-region><div class="canvas-heading"><span data-cv="mark"></span><div><h2 data-cv="title">对话画布</h2><div class="canvas-meta"><span class="canvas-status" role="status" aria-live="polite"><i></i><span data-cv="status">正在读取…</span><button data-cv="retry" hidden>重试</button></span><span data-cv="counts"></span></div></div></div><div class="canvas-actions"><button data-cv="omitted" title="查看未收录或已隐藏的问答">未收录</button><button data-cv="arrange" title="自动排版" aria-label="自动排版">排版</button><button data-cv="close" class="icon-button" title="收起画布" aria-label="收起画布"></button></div></header><div class="canvas-viewport" data-cv="viewport" tabindex="0" aria-label="问题关系图，拖动空白平移，滚轮缩放"><div class="canvas-help">实线是追问或作答，虚线是跨问题关联</div><div class="canvas-world" data-cv="world"><svg class="canvas-edges" data-cv="edges" aria-hidden="true"></svg><div data-cv="nodes"></div></div><div class="canvas-empty" data-cv="empty" hidden><span data-cv="empty-icon"></span><h3>思路，从一个问题开始</h3><p>有价值的问题会整理在这里；未收录的问答可手动添加。</p></div><div class="canvas-zoom"><button data-cv="minus" title="缩小" aria-label="缩小">−</button><button data-cv="zoom" title="恢复100%缩放">100%</button><button data-cv="plus" title="放大" aria-label="放大">+</button><span></span><button data-cv="fit" title="适应全部节点" aria-label="适应全部节点"></button></div><button class="canvas-minimap" data-cv="minimap" title="回到全图" aria-label="缩略图：回到全图"><svg data-cv="map" aria-hidden="true"></svg></button></div>';
   workspace.append(pane,shell);const q=name=>pane.querySelector(`[data-cv="${name}"]`);
+  const splitter=document.createElement('div');splitter.className='canvas-splitter';splitter.tabIndex=-1;splitter.setAttribute('role','separator');splitter.setAttribute('aria-orientation','vertical');splitter.setAttribute('aria-label','调整画布与对话宽度');splitter.setAttribute('aria-valuemin','25');splitter.setAttribute('aria-valuemax','75');splitter.title='拖动调整画布与对话宽度；双击恢复默认';workspace.append(splitter);
   q('mark').append(icon('graph'));q('empty-icon').append(icon('graph'));q('close').append(icon('chevron'));q('fit').append(icon('fit'));
   const handle=document.createElement('button');handle.id='canvas-button';handle.className='canvas-handle';handle.type='button';handle.hidden=true;handle.title='展开对话画布';handle.setAttribute('aria-label','展开对话画布');handle.setAttribute('aria-expanded','false');handle.append(icon('graph'));body.append(handle);
   const source=document.createElement('aside');source.className='canvas-source';source.hidden=true;source.setAttribute('aria-label','节点问答原文');
@@ -17,11 +18,78 @@ export function createConversationCanvas({command,tauri,prompt,isRunning,onJump,
   const rename=document.createElement('dialog');rename.className='settings-dialog canvas-rename';rename.innerHTML='<form method="dialog"><h2>修改问题标题</h2><label>画布标题<input name="title" maxlength="100" required></label><p>只修改卡片标题，问答原文保持不变。</p><div><button type="button" data-rename="cancel">取消</button><button type="submit">保存</button></div></form>';document.body.append(rename);
   const candidates=document.createElement('dialog');candidates.className='settings-dialog canvas-candidates';candidates.innerHTML='<header class="settings-head"><h2>未收录问答</h2><button type="button" aria-label="关闭未收录问答">关闭</button></header><p>暂缓、未收录和手动隐藏的问答都保留原文，可随时收录。</p><div class="canvas-candidate-list"></div><p class="canvas-candidates-error" role="status"></p>';document.body.append(candidates);candidates.querySelector('header button').onclick=()=>candidates.close();
   let sessionId='',available=false,opened=false,transitioning=false,epoch=0,graph=null,selected=null,reference=null,sourceValue=null,sourceEpoch=0;
+  let splitDrag=null,splitRatio=0;
+  const splitKey='reed-canvas-split';
   let scale=1,pan={x:0,y:0},viewTouched=false,gesture=null,zoomTimer=null,saveQueue=Promise.resolve(),dirtyView=null,dirtyNodes=new Map(),saveFailure=false,state='ready';
   let windowQueue=Promise.resolve(),deferredGraph=null;
   function nativeWindow(expanded){const task=windowQueue.then(()=>tauri.core.invoke('set_canvas_window',{expanded}));windowQueue=task.catch(()=>{});return task;}
   const ns='http://www.w3.org/2000/svg',nodeElements=new Map();
   function setStatus(text,next=state){state=next;q('status').textContent=text;q('retry').hidden=next!=='error';pane.dataset.state=next;}
+  function clampSplit(width){
+    const total=workspace.clientWidth;
+    if(!total)return width;
+    return Math.max(total*.25,Math.min(total*.75,width));
+  }
+  function setSplit(width,{save=false}={}){
+    const total=workspace.clientWidth;
+    if(!total)return;
+    const next=clampSplit(width);
+    workspace.style.setProperty('--canvas-chat-width',`${next}px`);
+    const percent=Math.round(next/total*100);
+    splitter.setAttribute('aria-valuenow',String(percent));
+    splitter.setAttribute('aria-valuetext',`对话占 ${percent}%`);
+    if(save){try{localStorage.setItem(splitKey,String(next/total));}catch{}}
+  }
+  function endSplit(event){
+    if(!splitDrag)return;
+    if(event&&event.pointerId!==splitDrag.pointer)return;
+    splitDrag=null;workspace.classList.remove('canvas-resizing');
+    if(event&&splitter.hasPointerCapture(event.pointerId))splitter.releasePointerCapture(event.pointerId);
+    if(splitRatio){try{localStorage.setItem(splitKey,String(splitRatio));}catch{}}
+  }
+  splitter.addEventListener('pointerdown',event=>{
+    if(!opened||event.button!==0)return;
+    event.preventDefault();
+    splitDrag={pointer:event.pointerId,startX:event.clientX,startWidth:shell.getBoundingClientRect().width};
+    workspace.classList.add('canvas-resizing');
+    splitter.setPointerCapture(event.pointerId);
+    splitter.focus({preventScroll:true});
+  });
+  splitter.addEventListener('pointermove',event=>{
+    if(!splitDrag||event.pointerId!==splitDrag.pointer)return;
+    const total=workspace.clientWidth;
+    const width=splitDrag.startWidth-(event.clientX-splitDrag.startX);
+    if(total)splitRatio=clampSplit(width)/total;
+    setSplit(width);
+  });
+  splitter.addEventListener('pointerup',endSplit);
+  splitter.addEventListener('pointercancel',endSplit);
+  splitter.addEventListener('keydown',event=>{
+    if(!opened)return;
+    const total=workspace.clientWidth;
+    const current=shell.getBoundingClientRect().width;
+    let next=null;
+    if(event.key==='ArrowLeft')next=current+24;
+    else if(event.key==='ArrowRight')next=current-24;
+    else if(event.key==='Home')next=total*.25;
+    else if(event.key==='End')next=total*.75;
+    if(next===null)return;
+    event.preventDefault();
+    splitRatio=clampSplit(next)/total;
+    setSplit(next,{save:true});
+  });
+  splitter.addEventListener('dblclick',()=>{
+    if(!opened)return;
+    const total=workspace.clientWidth;
+    const next=clampSplit(420);
+    splitRatio=next/total;
+    setSplit(next,{save:true});
+  });
+  new ResizeObserver(()=>{
+    if(!opened||!splitRatio)return;
+    const total=workspace.clientWidth;
+    if(total)setSplit(total*splitRatio);
+  }).observe(workspace);
   function closeSource(){sourceEpoch++;source.hidden=true;sourceValue=null;transcript.inert=false;transcript.removeAttribute('aria-hidden');}
   function clearReference(){reference=null;chip.hidden=true;chipText.textContent='';}
   function showReference(node){if(isRunning()){setStatus('请等待当前回复结束后追问');return;}reference={sessionId,nodeId:node.id,title:node.title};chipText.textContent='围绕：'+node.title;chip.hidden=false;closeSource();prompt.focus();}
@@ -92,16 +160,19 @@ export function createConversationCanvas({command,tauri,prompt,isRunning,onJump,
     transitioning=true;const ticket=++epoch,id=sessionId;
     try{
       if(value){
-        workspace.style.setProperty('--canvas-chat-width',shell.getBoundingClientRect().width+'px');workspace.classList.add('canvas-expanded');pane.hidden=false;opened=true;handle.setAttribute('aria-expanded','true');handle.title='收起对话画布';setStatus('正在读取画布…','loading');
-        let native;try{native=await nativeWindow(true);}catch(error){opened=false;pane.hidden=true;workspace.classList.remove('canvas-expanded');handle.setAttribute('aria-expanded','false');reportError(error.message);throw error;}if(ticket!==epoch||!available||sessionId!==id)return;
-        workspace.style.setProperty('--canvas-chat-width',native.chatWidth+'px');
+        workspace.style.setProperty('--canvas-chat-width',shell.getBoundingClientRect().width+'px');workspace.classList.add('canvas-expanded');pane.hidden=false;opened=true;splitter.tabIndex=0;handle.setAttribute('aria-expanded','true');handle.title='收起对话画布';setStatus('正在读取画布…','loading');
+        let native;try{native=await nativeWindow(true);}catch(error){opened=false;pane.hidden=true;workspace.classList.remove('canvas-expanded');splitter.tabIndex=-1;handle.setAttribute('aria-expanded','false');reportError(error.message);throw error;}if(ticket!==epoch||!available||sessionId!==id)return;
+        const total=workspace.clientWidth;
+        let stored=0;try{stored=Number(localStorage.getItem(splitKey))||0;}catch{}
+        splitRatio=stored>=.25&&stored<=.75?stored:Math.min(.75,Math.max(.25,native.chatWidth/Math.max(1,total)));
+        setSplit(total*splitRatio);
         const result=await command('canvas_open',{sessionId:id},true);if(ticket!==epoch||sessionId!==id)return;
         viewTouched=result.graph.view.saved===true;if(viewTouched){scale=result.graph.view.scale;pan={x:result.graph.view.x,y:result.graph.view.y};}applyGraph(result.graph);
         if(state==='loading')setStatus('已整理当前对话','ready');
       }else{
         await flush();if(saveFailure&&!force){setStatus('布局尚未保存，请重试后收起','error');return;}
         await command('canvas_close',{sessionId:id},true);await nativeWindow(false);if(ticket!==epoch)return;
-        opened=false;pane.hidden=true;workspace.classList.remove('canvas-expanded');handle.setAttribute('aria-expanded','false');handle.title='展开对话画布';closeSource();clearReference();
+        opened=false;splitter.tabIndex=-1;splitDrag=null;workspace.classList.remove('canvas-resizing');pane.hidden=true;workspace.classList.remove('canvas-expanded');handle.setAttribute('aria-expanded','false');handle.title='展开对话画布';closeSource();clearReference();
       }
     }catch(error){if(ticket===epoch){setStatus(error.message,'error');if(!value)reportError(error.message);if(value&&state==='error'&&!graph)q('empty').hidden=false;}}
     finally{if(ticket===epoch)transitioning=false;}
@@ -135,7 +206,7 @@ export function createConversationCanvas({command,tauri,prompt,isRunning,onJump,
       shell.classList.toggle('canvas-available',entryEnabled===true);
       if(next===sessionId&&enabled===available){if(opened&&!backendOpen&&!transitioning){try{await command('canvas_open',{sessionId},true);}catch(error){setStatus(error.message,'error');}}return;}
       const wasOpen=opened;epoch++;sourceEpoch++;clearTimeout(zoomTimer);available=false;closeSource();clearReference();rename.close();candidates.close();graph=null;deferredGraph=null;gesture=null;selected=null;dirtyNodes.clear();dirtyView=null;saveFailure=false;viewTouched=false;nodeElements.clear();q('nodes').replaceChildren();q('edges').replaceChildren();
-      opened=false;transitioning=false;pane.hidden=true;workspace.classList.remove('canvas-expanded');handle.setAttribute('aria-expanded','false');sessionId=next||'';available=enabled===true;
+      opened=false;transitioning=false;splitter.tabIndex=-1;splitDrag=null;splitRatio=0;workspace.classList.remove('canvas-resizing');pane.hidden=true;workspace.classList.remove('canvas-expanded');handle.setAttribute('aria-expanded','false');sessionId=next||'';available=enabled===true;
       if(wasOpen){try{await nativeWindow(false);}catch(error){reportError(error.message);}}
     },
     event(event){if(event.sessionId!==sessionId||!available||!opened)return;if(event.graph)applyGraph(event.graph);if(saveFailure)return;if(event.state==='organizing')setStatus('正在整理本轮问答…','organizing');else if(event.state==='error')setStatus(event.message||'本轮整理未完成，已有画布已保留','error');else if(event.state==='ready')setStatus('已整理当前对话','ready');},
