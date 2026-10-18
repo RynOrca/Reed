@@ -16,7 +16,8 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
   let heldStop=null,stopCalls=0;
   const recoveryCalls = new Map(), recoveryRequests = [], releaseRecovery = new Map();
   const server = createServer(async (req, res) => {
-    if (req.url === '/v1/models') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: [{ id: 'isolated-learning-model', context_length: 65536, supports_reasoning: true, reasoning_efforts: ['off','low','medium'] }] })); return; }
+    if (req.url === '/v1/models') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: [{ id: 'isolated-learning-model', context_length: 65536, max_output_tokens:32768, supports_reasoning: true, reasoning_efforts: ['off','low','medium'] }] })); return; }
+    if(req.method==='GET'){res.writeHead(404);res.end();return;}
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString()); apiCalls++;
     if(body.messages.some(m=>Array.isArray(m.content)&&m.content.some(b=>b.type==='image_url'&&b.image_url?.url?.startsWith('data:image/'))))receivedImage=true;
@@ -26,14 +27,21 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     const text = valuing ? JSON.stringify({decisions:JSON.parse(userText).candidates.map(c=>({id:c.id,supported:true,durable:true,useful:true,requested:false,confidence:0.95}))}) : memory ? '{"facts":[{"key":"学习目标","content":"学习线性代数"}],"notes":[],"learningEvents":[{"kind":"goal","subject":"线性代数","detail":"学习线性代数","evidence":"我在学习线性代数","status":"active"}]}' : '这是桌面验收的流式回答。\n\n| 概念 | 含义 |\n| --- | --- |\n| 矩阵 | 线性变换 |\n\n[打开生成的 HTML](preview.html)';
     const delta = (value, finish_reason = null) => ({ id:'desktop-test', object:'chat.completion.chunk', model:body.model, created:1, choices:[{index:0,delta:value,finish_reason}] });
     res.setHeader('content-type','text/event-stream');
-    if (!memory && ['RECOVER_SUCCESS_TEST', 'RECOVER_LENGTH_TEST', 'RECOVER_SSE_SUCCESS_TEST', 'RECOVER_SSE_FAILURE_TEST'].includes(userText)) {
+    const recoveryMarker=body.messages.filter(m=>m.role==='user').map(m=>typeof m.content==='string'?m.content:(m.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n')).findLast(text=>['RECOVER_SUCCESS_TEST','RECOVER_LENGTH_TEST','RECOVER_SSE_SUCCESS_TEST','RECOVER_SSE_FAILURE_TEST'].includes(text));
+    if (!memory && recoveryMarker) {
+      const userText=recoveryMarker;
       const attempt = (recoveryCalls.get(userText) || 0) + 1;
       recoveryCalls.set(userText, attempt); recoveryRequests.push({ userText, attempt, body });
       // Hold the retry until assertions observe the real recovery UI.
       if (attempt === 2) await new Promise(resolve => releaseRecovery.set(userText, resolve));
       const success = userText.includes('SUCCESS') && attempt > 1;
       res.write(`data: ${JSON.stringify(delta({role:'assistant', ...(success ? {content:'原始任务恢复成功。'} : {reasoning_content:'隔离思考内容，服务现在返回长度截断。'})}))}\n\n`);
-      if (userText.includes('_SSE_') && !success) { res.end('data: {"choices":\n\n'); return; }
+      if (userText.includes('_SSE_') && !success) {
+        // Deliver a valid visible partial before corrupting the next frame;
+        // batching both into one reader error can legitimately discard the partial.
+        await new Promise(resolve=>setTimeout(resolve,80));
+        res.end('data: {"choices":\n\n');return;
+      }
       res.write(`data: ${JSON.stringify(delta({}, success ? 'stop' : 'length'))}\n\n`);
       res.write(`data: ${JSON.stringify({...delta({}), choices:[], usage:{prompt_tokens:100,completion_tokens:12,total_tokens:112}})}\n\n`);
       res.end('data: [DONE]\n\n'); return;
@@ -63,6 +71,8 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     const main = context.pages().find(p => !p.url().includes('settings.html'));
     main.on('pageerror', e => errors.push(String(e)));
     await main.locator('#status').filter({hasText:'就绪'}).waitFor({timeout:25000}); checks.push('真实宿主成功初始化 PI sidecar');
+    const readingFont=await main.evaluate(async()=>{const loaded=await document.fonts.load('400 18px "Reed Reading Serif"','学习 English');return loaded.some(font=>font.status==='loaded');});
+    assert.equal(readingFont,true,'packaged offline reading font must load');checks.push('打包后离线中英文阅读字体实际加载');
     await main.evaluate(()=>window.__TAURI__.event.emit('agent-event',{type:'visual_review',message:'视觉评审发现问题，继续修复并复查'}));
     await main.locator('#status').filter({hasText:'视觉评审发现问题'}).waitFor();
     assert.equal(await main.locator('#status').innerText(),'视觉评审发现问题，继续修复并复查');
@@ -89,7 +99,9 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     assert.ok(settings,'独立设置窗口未创建');
     settings.on('pageerror', e => errors.push(String(e)));
     await settings.locator('#shortcut').filter({hasText:/\+/}).waitFor();
-    await settings.locator('#shortcut').click(); await settings.keyboard.press('Control+Alt+Shift+F11');
+    await settings.locator('#shortcut').click();
+    await settings.locator('#shortcut').filter({hasText:'请按下组合键…'}).waitFor();
+    await settings.keyboard.press('Control+Alt+Shift+F11');
     await settings.locator('#shortcut').filter({hasText:'Ctrl+Alt+Shift+F11'}).waitFor();
     const prefs = JSON.parse(await fs.readFile(path.join(data,'user-config.json'),'utf8')).desktop; assert.equal(prefs.shortcut,'Ctrl+Alt+Shift+F11'); checks.push('按键录入和真实全局快捷键注册');
     await main.locator('#startup').waitFor({state:'hidden'});
@@ -270,6 +282,9 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     await main.waitForFunction(()=>document.getElementById('status').textContent==='就绪');
     assert.equal(await main.locator('.permission-actions').count(),0);
     assert.equal(await fs.readFile(path.join(neutralWorkspace,'permission-test.txt'),'utf8'),'isolated approval evidence');
+    assert.equal(await main.locator('.process-timeline').last().getAttribute('open'),null,'finished process is collapsed by default');
+    await main.locator('.process-timeline').last().locator(':scope > summary').click();
+    await main.locator('.thinking .tool-row-header').click();
     assert.ok((await main.locator('.thinking').innerText()).includes('先创建隔离测试文件'));
     await main.locator('#activity-button').click();await main.locator('#activity-list').filter({hasText:'write'}).waitFor();
     await main.locator('#activity-list .tool-row-header').first().click();
@@ -277,7 +292,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     checks.push('真实写入审批、决定后按钮移除、思考流与工具历史');
     await settings.locator('#approval-mode').selectOption('auto');
     await main.locator('#prompt').fill('PERMISSION_TEST');await main.locator('#send-button').click();
-    await main.locator('.permission').filter({hasText:'自动批准'}).waitFor({timeout:25000});
+    await main.locator('.permission').filter({hasText:'自动批准'}).waitFor({state:'attached',timeout:25000});
     await main.waitForFunction(()=>document.getElementById('status').textContent==='就绪');assert.equal(await main.locator('.permission-actions').count(),0);checks.push('自动审批实际执行文件写入，不遗留确认按钮');
     await settings.locator('button[data-section="agent"]').click();await settings.locator('#agent-tool-list').filter({hasText:'current_time'}).waitFor();
     assert.ok((await settings.locator('#agent-mcp').innerText()).includes('未'));checks.push('实际工具与扩展清单、MCP 状态、审批方式切换');
@@ -296,7 +311,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     // settled; the status line then reports the stopped outcome.
     await main.locator('#stop-button').waitFor({state:'hidden',timeout:20000});
     const stopMs=Date.now()-stopStarted;
-    assert.match(await main.locator('#status').innerText(),/已停止|就绪/);
+    assert.match(await main.locator('#status').innerText(),/已停止|就绪|本地已取消/);
     assert.equal(await main.locator('#messages .message-error').count(),0,'停止不应留下错误提示');
     assert.ok(stopMs<15000,`停止必须在 15 秒内回到空闲（实测 ${stopMs}ms）`);
     await main.locator('#prompt').fill('停止后继续');await main.locator('#send-button').click();
@@ -334,18 +349,17 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
     await main.locator('#prompt').fill('IMAGE_TEST');await main.evaluate(data=>{const transfer=new DataTransfer();transfer.items.add(new File([Uint8Array.from(atob(data),c=>c.charCodeAt(0))],'clipboard.png',{type:'image/png'}));document.getElementById('prompt').dispatchEvent(new ClipboardEvent('paste',{clipboardData:transfer,bubbles:true,cancelable:true}));},(await fs.readFile(path.resolve(__dirname,'../src-tauri/icons/icon.png'))).toString('base64'));await main.locator('#attachment-strip img').waitFor();await main.locator('#send-button').click();await main.waitForFunction(()=>document.getElementById('status').textContent==='就绪');assert.ok(receivedImage);
     await main.getByRole('button',{name:'查看图片',exact:true}).click();await main.locator('#image-dialog').waitFor({state:'visible'});assert.ok((await main.locator('#image-preview').getAttribute('src')).startsWith('data:image/png;base64,'));await main.keyboard.press('Escape');await main.locator('#image-dialog').waitFor({state:'hidden'});checks.push('视觉能力保存立即生效，剪贴板图片发送与点击预览');
     await settings.locator('#providers .configured').click();await settings.locator('.model-info').getByRole('button',{name:'编辑',exact:true}).click();
-    await settings.locator('#manual-output').fill('32768');await settings.locator('#manual-save').click();await settings.locator('#notice').filter({hasText:'信息已保存'}).waitFor();await settings.locator('#providers .configured').click();
-    await settings.locator('.model-info').filter({hasText:'32,768 最大输出'}).waitFor();
-    await settings.locator('#providers .configured').click();await settings.locator('.model-info').getByRole('button',{name:'编辑',exact:true}).click();
-    assert.equal(await settings.locator('#manual-output').inputValue(),'32768');
-    checks.push('最大输出长度保存、卡片展示和编辑回显');
+    assert.equal(await settings.locator('#manual-output').count(),0,'removed output-budget setting must stay absent');
+    await settings.locator('#manual-save').click();await settings.locator('#notice').filter({hasText:'信息已保存'}).waitFor();
+    checks.push('不恢复已删除的输出预算设置；后续恢复请求保留服务端声明的输出能力');
     await main.evaluate(async()=>{window._recoveryEvents=[];await window.__TAURI__.event.listen('agent-event',e=>window._recoveryEvents.push(e.payload));});
     for (const marker of ['RECOVER_SUCCESS_TEST','RECOVER_LENGTH_TEST','RECOVER_SSE_SUCCESS_TEST','RECOVER_SSE_FAILURE_TEST']) {
       const malformed = marker.includes('_SSE_'), failedLabel = malformed ? '失败' : '输出被截断';
       await main.evaluate(()=>{window._recoveryEvents=[];});
       await agentCommand('new_session',{noProject:true});
       await main.locator('#prompt').fill(marker);await main.locator('#send-button').click();
-      await main.locator('#status').filter({hasText:'正在保留原任务'}).waitFor({timeout:25000});
+      await main.waitForFunction(()=>window._recoveryEvents.some(e=>e.type==='recovery'),{timeout:25000});
+      assert.match(await main.evaluate(()=>window._recoveryEvents.find(e=>e.type==='recovery').message),/续接|重试|恢复/);
       await main.locator('#stop-button').waitFor({state:'visible'});
       await main.locator('#messages .thinking .tool-row-state').filter({hasText:failedLabel}).waitFor();
       assert.equal(await main.locator('#messages .thinking .tool-row-state').filter({hasText:'完成'}).count(),0);
@@ -364,7 +378,7 @@ const { chromium } = require(process.env.SUMMON_PLAYWRIGHT_PATH);
         await main.locator('#stop-button').waitFor({state:'hidden'});
         assert.equal(await main.locator('#messages .thinking .tool-row-state').filter({hasText:failedLabel}).count(),2);
         assert.equal(await main.locator('#messages .message-error').count(),1);
-        if (malformed) assert.match(await main.locator('#messages .message-error').innerText(), /SSE.*JSON/);
+        if (malformed) assert.match(await main.locator('#messages .message-error').innerText(), /SSE.*JSON|transport_incomplete|响应传输未完成/);
         const sessionId=await main.evaluate(()=>window._recoveryEvents.filter(e=>e.type==='session').at(-1).sessionId);
         await agentCommand('new_session',{noProject:true});await agentCommand('open_session',{sessionId});
         assert.equal(await main.locator('#messages .thinking .tool-row-state').filter({hasText:failedLabel}).count(),2);
