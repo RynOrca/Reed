@@ -300,17 +300,19 @@ const abortWatchdog = createAbortWatchdog({
 async function forceLocalTurnEnd(turnId) {
   const controller = turnController;
   if (!turnId || controller?.promptId !== turnId) return;
+  const forcedSessionId=session?.sessionId;
   const previousModel = session?.model, previousManager = session?.sessionManager;
   turnController = null; activeTurnId = null; busy = false;
   try { session?.dispose(); } catch {}
   session = undefined;
-  send({type:'session_sync',busy:false,turnId,forced:true});
-  send({type:'done',id:turnId,turnId,outcome:{status:'aborted',message:'已停止（本地）',forced:true}});
-  send({type:'turn_forced_end',turnId,message:'模型服务未在预期时间内结束上一条请求，已恢复本地输入；服务端可能仍在处理，下一条消息会重建会话。'});
+  send({type:'session_sync',sessionId:forcedSessionId,busy:false,turnId,forced:true});
+  send({type:'done',sessionId:forcedSessionId,id:turnId,turnId,outcome:{status:'aborted',message:'已停止（本地）',forced:true}});
+  send({type:'turn_forced_end',sessionId:forcedSessionId,turnId,message:'模型服务未在预期时间内结束上一条请求，已恢复本地输入；服务端可能仍在处理，下一条消息会重建会话。'});
   try {
     await openSession(previousModel?.provider==='unknown'?undefined:previousModel?.provider,previousModel?.provider==='unknown'?undefined:previousModel?.id,previousManager);
     await emitState();
-  } catch (error) { send({type:'error',message:`停止后重建会话失败：${error.message}，请重新选择模型或新建会话`}); }
+    drainSessionPrompts();
+  } catch (error) { send({type:'error',sessionId:forcedSessionId,message:`停止后重建会话失败：${error.message}，请重新选择模型或新建会话`}); }
 }
 
 async function openSession(provider, modelId, sessionManager) {
@@ -633,11 +635,14 @@ async function dispatch(command){
 function launchPrompt(command){
   const activation=viewRecord(command.sessionId||visibleSessionId).then(activateView);
   activePrompt=activation.then(()=>handle(command)).catch(error=>send({type:'error',id:command.id,commandType:'prompt',sessionId:command.sessionId,message:error.message}));
-  void activePrompt.finally(()=>{queue=queue.then(async()=>{
+  void activePrompt.finally(drainSessionPrompts);
+  return activation.catch(()=>{});
+}
+function drainSessionPrompts(){
+  queue=queue.then(async()=>{
     if(busy||!pendingSessionPrompts.size)return;
     const [id,next]=pendingSessionPrompts.entries().next().value;pendingSessionPrompts.delete(id);return launchPrompt(next);
-  });});
-  return activation.catch(()=>{});
+  });
 }
 
 async function handle(command) {
@@ -1084,6 +1089,7 @@ async function handle(command) {
           await contextPolicy.preparePrompt(command.text, images);
           controller.signal.throwIfAborted();
           await session.prompt(command.text, { images });
+          controller.signal.throwIfAborted();
           emitTelemetry();
           const outcome = controller.signal.aborted?{status:'aborted',message:'用户已停止回复'}:progressGuard.outcome(visualReview.outcome(turnRecovery.outcome()));
           {
@@ -1100,7 +1106,7 @@ async function handle(command) {
           if(controller.signal.aborted||turnController!==controller)completedOutcome={status:'aborted',message:'用户已停止回复'};
           else throw error;
         } finally {
-          turnRecovery.end();progressGuard.end();
+          if(turnController===controller){turnRecovery.end();progressGuard.end();}
           if(turnController===controller)session.sessionManager.appendCustomEntry("reed_turn_timing",{turnId:id,startedAt:controller.startedAt,endedAt:Date.now(),userEntryId:session.sessionManager.getBranch().find(e=>e.type==='message'&&e.message.role==='user'&&!priorUserIds.has(e.id))?.id});
           abortWatchdog.disarm(id);
           // Only the turn that still owns the lifecycle may publish terminal events,
