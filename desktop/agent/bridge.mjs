@@ -530,7 +530,10 @@ async function viewRecord(id=visibleSessionId){
   const info=(await SessionManager.listAll(sessionsDir)).find(item=>item.id===id);
   if(!info)throw Error('找不到该会话');
   const saved=metadata[id]||{},project=saved.projectPath??((info.cwd===neutralWorkspace||info.cwd===process.env.SUMMON_WORKSPACE)?null:info.cwd);
-  const record={...saved,id,projectPath:project,roleId:saved.roleId||'agent',manager:SessionManager.open(info.path,sessionsDir,project||neutralWorkspace),name:info.name||''};
+  const manager=SessionManager.open(info.path,sessionsDir,project||neutralWorkspace),branch=manager.getBranch();
+  const previousModel=branch.findLast(entry=>entry.type==='model_change');
+  const previousThinking=branch.findLast(entry=>entry.type==='thinking_level_change');
+  const record={...saved,id,projectPath:project,roleId:saved.roleId||roles.activeId,provider:saved.provider||previousModel?.provider,modelId:saved.modelId||previousModel?.modelId,thinkingLevel:saved.thinkingLevel??previousThinking?.thinkingLevel,manager,name:info.name||''};
   viewRecords.set(id,record);return record;
 }
 async function showView(record){
