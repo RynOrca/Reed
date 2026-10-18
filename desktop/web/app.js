@@ -45,6 +45,27 @@ let retrying = false;
 let turnErrorShown = false;
 let assistantRow = null;
 let thinkingRow = null;
+let processTimeline=null,processStartedAt=null;
+const sessionDrafts=new Map();
+function processBody(){
+  if(!processTimeline){
+    const root=document.createElement('details');root.className='process-timeline';root.open=true;
+    const summary=document.createElement('summary');summary.hidden=true;
+    const body=document.createElement('div');body.className='process-timeline-body';root.append(summary,body);messages.append(root);
+    processTimeline={root,summary,body,startedAt:processStartedAt};
+  }
+  return processTimeline.body;
+}
+function finishProcess(outcome,timing={}){
+  if(!processTimeline)return;
+  const start=timing.startedAt??processTimeline.startedAt,end=timing.endedAt??Date.now();
+  const seconds=Number.isFinite(start)&&end>=start?Math.floor((end-start)/1000):null;
+  const duration=seconds===null?'执行过程':`用时 ${seconds>=60?Math.floor(seconds/60)+'m ':''}${seconds%60}s`;
+  const suffix=outcome?.status&&outcome.status!=='complete'?` · ${outcomeLabel(outcome)}`:'';
+  processTimeline.summary.textContent=duration+suffix;
+  processTimeline.summary.hidden=false;processTimeline.root.open=false;
+  processTimeline=null;processStartedAt=null;
+}
 let submitted = null;
 const toolRows = new Map();
 const learningRows=new Map();
@@ -236,7 +257,7 @@ function disclosure({ kind, title, summary = "", detail = "", state = "done", id
   const body = document.createElement("div"); body.className = "tool-row-body"; body.hidden = true;
   if (id) body.id = `detail-${id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const content = document.createElement("div"); content.className = "tool-row-content"; content.textContent = detail;
-  body.append(content); row.append(head, body); messages.append(row);
+  body.append(content); row.append(head, body); processBody().append(row);
   head.addEventListener("click", () => {
     body.hidden = !body.hidden;
     row.classList.toggle("open", !body.hidden);
@@ -333,17 +354,20 @@ function permissionRequest(event) {
   deny.addEventListener("click", () => void decide("deny"));
   permissionRows.set(event.requestId, { ...row, allow, deny });
 }
-function restoreHistory(history) {
+function restoreHistory(history,timings=[]) {
   followLatest=true;
   learningStates.clear();for(const m of history){if(m.role==='user'&&m.learningReply){const r=m.learningReply;learningStates.set(learningStateKey(activeSessionId,r.toolCallId,r.blockId),{...r,status:'answered'});}}
-  messages.replaceChildren(); learningRows.clear(); learningCandidate=null; toolRows.clear(); permissionRows.clear(); assistantRow = null; thinkingRow = null;
+  messages.replaceChildren(); processTimeline=null;processStartedAt=null;learningRows.clear(); learningCandidate=null; toolRows.clear(); permissionRows.clear(); assistantRow = null; thinkingRow = null;
+  let turnTiming=null,lastOutcome=null;
   for (const message of history) {
+    if(message.role==='user'){finishProcess(lastOutcome,turnTiming||{});turnTiming=timings.find(t=>t.userEntryId===message.messageId)||null;processStartedAt=turnTiming?.startedAt??null;lastOutcome=null;}
     if (message.role === "toolResult") {
       toolEnd({ id: message.toolCallId, isError: message.isError, result: {content:message.content,details:message.details} });
       continue;
     }
     if (message.role !== "user" && message.role !== "assistant") continue;
     const outcome = message.role === "assistant" ? historyOutcome(message) : null;
+    if(outcome)lastOutcome=outcome;
     let content = null;
     for (const block of message.content || []) {
       if (block.type === "text") {
@@ -381,7 +405,7 @@ function restoreHistory(history) {
     }
     if (outcome?.status === "unverified") errorRow(outcome.message || "产物尚未通过视觉验收");
   }
-  updateLearningAvailability();refreshEmpty(); scrollToLatest();
+  finishProcess(lastOutcome,turnTiming||{});updateLearningAvailability();refreshEmpty(); scrollToLatest();
 }
 function closeHistory() {
   historyDrawer.hidden = true;
@@ -509,7 +533,7 @@ function renderRoles() {
 }
 async function newSession() {
   try {
-    await command("new_session", { noProject: true }, true);
+    await command("new_session", {}, true);
     closeHistory();
     prompt.focus();
   } catch (error) {
@@ -524,8 +548,13 @@ function onEvent(event) {
     const { resolve, reject, timer } = pending.get(response.id); clearTimeout(timer); pending.delete(response.id);
     response.type === "error" ? reject(new Error(response.message)) : resolve(response);
   }
+  if(response.sessionId&&activeSessionId&&response.sessionId!==activeSessionId&&!['session','sessions'].includes(response.type))return;
   if(response.type==="ack"&&response.stale){stopping=false;$("stop-button").disabled=false;status(running?"这一轮已结束，正在等待 Agent 同步…":"已停止");}
   switch (response.type) {
+    case 'restore_user':{
+      const message=response.message||{};const content=messageRow('user',(message.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n'));
+      attachmentPreview(content,(message.content||[]).filter(b=>b.type==='image').map(b=>({...b,kind:'image'})));break;
+    }
     case 'learning_answer':{
       if(response.sessionId!==activeSessionId)break;
       learningStates.set(learningStateKey(response.sessionId,response.toolCallId,response.blockId),{...response,status:'answered'});
@@ -554,13 +583,17 @@ function onEvent(event) {
       void goalsPanel.session(response.workspace || null, response.learningGoalsEnabled === true);
       $("model-label").textContent = response.modelName || response.model || "选择模型";
       $("model-button").title = response.model || "选择模型";
-      if(activeSessionId!==(response.sessionId||"")){learningCandidate=null;updateLearningAvailability();}
+      if(activeSessionId!==(response.sessionId||"")){
+        sessionDrafts.set(activeSessionId,{text:prompt.value,attachments:[...attachments]});
+        const draft=sessionDrafts.get(response.sessionId);prompt.value=draft?.text||'';attachments=draft?.attachments||[];renderAttachments();
+        submitted=null;recoveredPending=null;queuedTexts.clear();activePromptId=null;cancelledTurnId=null;setRunning(false);learningCandidate=null;updateLearningAvailability();
+      }
       activeSessionId = response.sessionId || "";
       activeSessionName = response.sessionName || "";
       void canvasPanel.session(activeSessionId,response.canvasEnabled===true,response.canvasOpen===true,activeSessionName,response.learningModeEnabled===true||response.learningGoalsEnabled===true);
       updateModelChip(response);$("compaction-state").textContent=response.autoCompaction?"自动压缩已开启":"自动压缩已关闭";
-      $("workspace-label").textContent = (response.workspace || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "无项目";
-      $("workspace-button").title = response.workspace || "切换工作目录";
+      $("workspace-label").textContent = (response.workspace || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "默认工作区";
+      $("workspace-button").title = response.workspace || response.defaultWorkspace || "默认工作区";
       if (response.roleId) { activeRoleId = response.roleId; renderRoles(); }
       void command("list_sessions");
       break;
@@ -604,7 +637,7 @@ function onEvent(event) {
     case "memory_status": if (!running) status(response.status === "organizing" ? "Agent 正在整理记忆…" : "就绪"); break;
     case "canvas": canvasPanel.event(response); break;
     case "sessions": projectPicker.update(response.sessions||[]);renderSessions(response.sessions || []); break;
-    case "history": restoreHistory(response.messages || []); status("就绪"); break;
+    case "history": restoreHistory(response.messages || [],response.timings||[]);status("就绪");for(const replay of response.replay||[])onEvent({payload:replay});break;
     case "stopping": stopping=true;$("stop-button").disabled=true;if(response.turnId){activeTurnId=response.turnId;cancelledTurnId=response.turnId;}status(response.message||"正在取消本地请求…");break;
     case 'cancellation_state': if(cancellationApplies(response,{running,stopping,cancelledTurnId}))status(cancellationStatus(response));break;
     case "turn_forced_end":
@@ -618,7 +651,7 @@ function onEvent(event) {
       recoveryStatus = "";
       if (running&&!stopping) status("PI 正在回复…");
       if (response.kind === "thinking") {
-        if (!thinkingRow) { thinkingRow = disclosure({ kind: "thinking", title: "思考过程", state: "running" }); thinkingRow.head.click(); }
+        if (!thinkingRow) { thinkingRow = disclosure({ kind: "thinking", title: "思考过程", state: "running" }); }
         thinkingRow.content.textContent += response.text || "";
         thinkingRow.brief.textContent = thinkingRow.content.textContent.replace(/\s+/g, " ").slice(0, 120);
       } else {
@@ -644,7 +677,7 @@ function onEvent(event) {
       break;
     }
     case "compaction": $("compaction-state").textContent=response.status==="running"?"正在压缩上下文…":response.status==="error"?"压缩失败："+response.message:response.status==="skipped"?response.message:"上下文已压缩";$("compact-now").disabled=response.status==="running";break;
-    case "started": cancelledTurnId=null;canvasPanel.foreground(); recoveryStatus = ""; retrying = false; submitted = null; turnErrorShown = false; activeTurnId = response.turnId || response.id || null; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
+    case "started": processStartedAt=response.startedAt??null;cancelledTurnId=null;canvasPanel.foreground(); recoveryStatus = ""; retrying = false; submitted = null; turnErrorShown = false; activeTurnId = response.turnId || response.id || null;activePromptId=activeTurnId; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
     case "message_outcome":
       finishThinking(response.outcome);
       assistantRow = null; thinkingRow = null; break;
@@ -661,6 +694,7 @@ function onEvent(event) {
       if (response.final === false) break;
       if (!turnMatches(response)) break;
       setRunning(false); finishThinking(response.outcome);
+      finishProcess(response.outcome,response);
       if(response.outcome?.status==='complete')canvasPanel.clearReference();
       // 恢复出来的题目：本轮成功结束后记成已回答，并把题干一起存下来供历史重放。
       // 这里不依赖 submitted（它可能在别的分支里已被清掉），而是按轮次配对。
@@ -693,6 +727,7 @@ function onEvent(event) {
         break;
       }
       finishThinking({ status: "error" });
+      finishProcess({status:'error'});
       const failedLearningReply=submitted?.learningReply;
       const failedRecovered=submitted?.recoveredReply;
       if (submitted) {
@@ -749,7 +784,7 @@ async function command(type, args = {}, awaitReply = false) {
   const id = `${commandPrefix}${++sequence}`;
   if(type==='prompt')activePromptId=id;
   const response = awaitReply ? new Promise((resolve, reject) => { const timer = setTimeout(() => { pending.delete(id); reject(new Error("操作超时，请检查 Agent 连接")); }, type==="compact"?180000:type==="abort"?15000:30000); pending.set(id, { resolve, reject, timer }); }) : Promise.resolve();
-  tauri.core.invoke("agent_command", { command: { id, type, ...args } }).catch((error) => {
+  tauri.core.invoke("agent_command", { command: { id, type, sessionId:activeSessionId,...args } }).catch((error) => {
     if (pending.has(id)) { clearTimeout(pending.get(id).timer); pending.get(id).reject(error); pending.delete(id); }
     else onEvent({payload:{type:'error',id,commandType:type,message:String(error)}});
   });

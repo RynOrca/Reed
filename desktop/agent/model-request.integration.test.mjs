@@ -12,6 +12,7 @@ for(const parallel of [false,true])test(`real bridge uses unified model slots: $
  const root=await mkdtemp(join(tmpdir(),'reed-model-slots-')),data=join(root,'profile'),vault=join(root,'vault');let child,seq=0,active=0,peak=0;const requests=[],seen=[],waiters=new Set();let releaseFirst;
  const finish=res=>{if(res.destroyed)return;res.write(`data: ${JSON.stringify({id:'synthetic',object:'chat.completion.chunk',choices:[{index:0,delta:{role:'assistant',content:'# 隔离模型回复'},finish_reason:null}]})}\n\n`);res.end(`data: ${JSON.stringify({id:'synthetic',object:'chat.completion.chunk',choices:[{index:0,delta:{},finish_reason:'stop'}]})}\n\ndata: [DONE]\n\n`);};
  const server=createServer(async(req,res)=>{
+  if(req.method==='GET'){res.writeHead(404);res.end();return;}
   const chunks=[];for await(const chunk of req)chunks.push(chunk);const input=JSON.parse(Buffer.concat(chunks));requests.push(input);active++;peak=Math.max(peak,active);res.on('close',()=>active--);res.writeHead(200,{'content-type':'text/event-stream'});res.flushHeaders();
   if(requests.length===1)releaseFirst=()=>finish(res);else finish(res);
  });

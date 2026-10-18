@@ -23,6 +23,7 @@ async function retryFixture(t, { recoverOn = 2,holdRecovery=false } = {}) {
   let child, sequence = 0, stderr = "", waiters = [];
   let releaseRecovery;const held=new Promise(r=>releaseRecovery=r);
   const server = createServer(async (request, response) => {
+    if(request.method==='GET'&&request.url!=='/v1/models'){response.writeHead(404);response.end();return;}
     if (request.url === "/v1/models") {
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ data: [{ id: "retry-model", context_length: 65536, supports_reasoning: true, reasoning_efforts: ["off", "low", "medium"] }] }));
