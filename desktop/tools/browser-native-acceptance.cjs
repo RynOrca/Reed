@@ -87,6 +87,10 @@ try{
     assert.deepEqual(await native('preview','visibility'),{exists:true,visible:false});
     assert.equal((await native('preview','ensure')).reused,true);checks.push('未点击HTML即已后台预热，实例存在且原生窗口隐藏');
     assert.notEqual(await page.locator('#browser-button svg').innerHTML(),await page.locator('#goals-button svg').innerHTML());checks.push('浏览器图标与学习目标图标不同');
+    await page.locator('#browser-button').click();await page.locator('[data-browser=empty]').waitFor({state:'visible'});
+    assert.equal((await native('preview','visibility')).visible,false);
+    await page.locator('[data-browser=close]').click();await page.locator('.browser-pane').waitFor({state:'hidden'});
+    assert.equal((await native('preview','visibility')).visible,false);checks.push('首次点击空浏览器入口及关闭均不将原生网页浮在聊天上');
     await command('change_workspace',{path:project});
     const provider=await command('save_provider',{template:'custom',name:'内置浏览器隔离验收',baseUrl:`http://127.0.0.1:${server.address().port}/v1`,protocol:'openai-completions'});
     await command('discover_models',{providerId:provider.providerId});
