@@ -89,7 +89,7 @@ try{
     assert.notEqual(await page.locator('#browser-button svg').innerHTML(),await page.locator('#goals-button svg').innerHTML());checks.push('浏览器图标与学习目标图标不同');
     await page.locator('#browser-button').click();await page.locator('[data-browser=empty]').waitFor({state:'visible'});
     assert.equal((await native('preview','visibility')).visible,false);
-    await page.locator('[data-browser=close]').click();await page.locator('.browser-pane').waitFor({state:'hidden'});
+    await page.locator('[data-browser=close]').click();await page.locator('.browser-pane:not(.workspace-outgoing)').waitFor({state:'hidden'});await page.waitForFunction(()=>!document.querySelector('.reed-workspace').classList.contains('workspace-moving'));
     assert.equal((await native('preview','visibility')).visible,false);checks.push('首次点击空浏览器入口及关闭均不将原生网页浮在聊天上');
     await command('change_workspace',{path:project});
     const provider=await command('save_provider',{template:'custom',name:'内置浏览器隔离验收',baseUrl:`http://127.0.0.1:${server.address().port}/v1`,protocol:'openai-completions'});
@@ -100,7 +100,7 @@ try{
     await command('prompt',{text:'NATIVE_OPEN_TEST'});
     const link=page.locator('a[data-local-file]').filter({hasText:'在内置浏览器打开 HTML'});await link.waitFor();
     const opening=Date.now();await link.click();
-    await page.waitForFunction(()=>document.querySelector('.browser-pane')?.dataset.state==='ready'&&!document.querySelector('[data-browser=read]').disabled,{timeout:30000});timings.openPreviewMs=Date.now()-opening;
+    await page.waitForFunction(()=>document.querySelector('.browser-pane:not(.workspace-outgoing)')?.dataset.state==='ready'&&!document.querySelector('[data-browser=read]').disabled,{timeout:30000});timings.openPreviewMs=Date.now()-opening;
     assert.equal(await evaluate('document.title'),'Reed 原生浏览器合成验收');
     assert.equal(await evaluate("getComputedStyle(document.body).backgroundColor"),'rgb(246, 242, 229)');checks.push('聊天HTML链接在独立原生预览打开，CSS/JS资源加载');
     await evaluate("document.getElementById('counter').click();true");assert.equal(await evaluate("document.getElementById('value').textContent"),'1');checks.push('HTML交互真实执行');
@@ -125,9 +125,9 @@ try{
     await evaluate("document.getElementById('next').click();true");
     await page.waitForTimeout(250);assert.ok((await command('browser_action',{action:'snapshot'})).result.content[0].text.includes('第二页'));
     await page.locator('[data-browser=back]').click();await page.waitForTimeout(250);assert.equal(await evaluate('document.title'),'Reed 原生浏览器合成验收');checks.push('本地页面跳转与后退导航');
-    await page.locator('[data-browser=address]').fill(`http://127.0.0.1:${server.address().port}/external.html`);await page.locator('[data-browser=address]').press('Enter');
-    await page.waitForFunction(()=>document.querySelector('.browser-pane')?.dataset.state==='ready'&&!document.querySelector('[data-browser=read]').disabled);
-    assert.equal(await evaluate('document.title'),'合成外部网页');await page.locator('[data-browser=back]').click();await page.waitForTimeout(200);assert.equal(await evaluate('document.title'),'Reed 原生浏览器合成验收');
+    await page.locator('[data-browser=address]').fill(`127.0.0.1:${server.address().port}/external.html`);await page.locator('[data-browser=address]').press('Enter');
+    await page.waitForFunction(()=>document.querySelector('.browser-pane:not(.workspace-outgoing)')?.dataset.state==='ready'&&!document.querySelector('[data-browser=read]').disabled);
+    assert.equal(await evaluate('document.title'),'合成外部网页');assert.ok((await page.locator('[data-browser=address]').inputValue()).startsWith('http://127.0.0.1:'));await page.locator('[data-browser=address]').press('Escape');await page.keyboard.press('Control+l');assert.equal(await page.locator('[data-browser=address]').evaluate(el=>el.selectionEnd-el.selectionStart), (await page.locator('[data-browser=address]').inputValue()).length);await page.locator('[data-browser=address]').press('Escape');checks.push('裸本地域名自动补HTTP并真实加载，Ctrl+L全选与Escape恢复');await page.locator('[data-browser=back]').click();await page.waitForTimeout(200);assert.equal(await evaluate('document.title'),'Reed 原生浏览器合成验收');
     await page.locator('[data-browser=forward]').click();await page.waitForTimeout(200);assert.equal(await evaluate('document.title'),'合成外部网页');checks.push('本地HTML与HTTP网页之间后退/前进，历史本地服务保持可用');
     await command('browser_preview',{path:fixture});
     const warmStart=Date.now();await command('browser_prewarm');timings.reusedEnsureMs=Date.now()-warmStart;checks.push('预热与已有实例复用');
@@ -149,26 +149,48 @@ try{
     assert.ok((await page.locator('#prompt').inputValue()).includes('网页阅读.md'));checks.push('读取整页按钮将正文和真实图片加入草稿附件，不自动发送');
     while(await page.locator('#attachment-strip .attachment-chip button').count())await page.locator('#attachment-strip .attachment-chip button').first().click();
     await resizeOwnedWindow(child.pid,0,0,path.join(out,'window-browser-native.png'));
-    await page.locator('[data-browser=close]').click();await page.locator('.browser-pane').waitFor({state:'hidden'});
+    await page.locator('[data-browser=close]').click();await page.locator('.browser-pane:not(.workspace-outgoing)').waitFor({state:'hidden'});await page.waitForFunction(()=>!document.querySelector('.reed-workspace').classList.contains('workspace-moving'));
     assert.equal((await native('preview','visibility')).visible,false);
     await page.locator('#prompt').click();assert.equal(await page.evaluate(()=>document.activeElement.id),'prompt');
     await resizeOwnedWindow(child.pid,0,0,path.join(out,'window-chat-closed-native.png'));checks.push('关闭后原生HWND确实隐藏，真实鼠标可点击聊天输入框');
     for(let i=0;i<3;i++){
-      await page.locator('#browser-button').click();await page.waitForFunction(()=>document.querySelector('.browser-pane').hidden===false);
-      await page.waitForTimeout(80);assert.equal((await native('preview','visibility')).visible,true);
-      await page.locator('#canvas-button').click();await page.waitForFunction(()=>document.querySelector('.canvas-pane').hidden===false);
-      assert.equal((await native('preview','visibility')).visible,false);assert.equal(await page.locator('.browser-pane').isVisible(),false);
+      await page.locator('#browser-button').click();await page.waitForFunction(()=>document.querySelector('.browser-pane:not(.workspace-outgoing)').hidden===false&&!document.querySelector('.reed-workspace').classList.contains('workspace-moving'));
+      await page.waitForFunction(()=>!document.querySelector('.reed-workspace').classList.contains('workspace-moving'));await page.waitForTimeout(80);assert.equal((await native('preview','visibility')).visible,true);
+      await page.locator('#canvas-button').click();await page.waitForFunction(()=>document.querySelector('.canvas-pane:not(.workspace-outgoing)').hidden===false&&!document.querySelector('.reed-workspace').classList.contains('workspace-moving'));
+      assert.equal((await native('preview','visibility')).visible,false);assert.equal(await page.locator('.browser-pane:not(.workspace-outgoing)').isVisible(),false);
       if(i===0)await resizeOwnedWindow(child.pid,0,0,path.join(out,'window-canvas-native.png'));
-      await page.locator('#browser-button').click();await page.waitForFunction(()=>document.querySelector('.browser-pane').hidden===false);
-      assert.equal(await page.locator('.canvas-pane').isVisible(),false);
-      await page.locator('[data-browser=close]').click();await page.waitForFunction(()=>document.querySelector('.browser-pane').hidden);
+      await page.locator('#browser-button').click();await page.waitForFunction(()=>document.querySelector('.browser-pane:not(.workspace-outgoing)').hidden===false&&!document.querySelector('.reed-workspace').classList.contains('workspace-moving'));
+      assert.equal(await page.locator('.canvas-pane:not(.workspace-outgoing)').isVisible(),false);
+      await page.locator('[data-browser=close]').click();await page.waitForFunction(()=>document.querySelector('.browser-pane:not(.workspace-outgoing)').hidden&&!document.querySelector('.reed-workspace').classList.contains('workspace-moving'));
       assert.equal((await native('preview','visibility')).visible,false);
     }
     checks.push('浏览器画布连续往返切换三轮互斥，关闭后无网页残留');
     await page.evaluate(()=>{for(let i=0;i<6;i++)document.getElementById('browser-button').click();});
-    await page.waitForTimeout(800);assert.equal((await native('preview','visibility')).visible,false);assert.equal(await page.locator('.browser-pane').isVisible(),false);checks.push('快速六次切换最终关闭，不接受过期显示请求');
+    await page.waitForTimeout(800);assert.equal((await native('preview','visibility')).visible,false);assert.equal(await page.locator('.browser-pane:not(.workspace-outgoing)').isVisible(),false);checks.push('快速六次切换最终关闭，不接受过期显示请求');
     await page.locator('#browser-button').click();
-    await page.waitForTimeout(150);assert.equal(await evaluate('document.getElementById("value").textContent'),'0');checks.push('关闭再展开保留已加载页面');
+    await page.waitForFunction(()=>!document.querySelector('.reed-workspace').classList.contains('workspace-moving'));await page.waitForTimeout(80);assert.equal(await evaluate('document.getElementById("value").textContent'),'0');checks.push('关闭再展开保留已加载页面');
+    await page.locator('[data-browser=close]').click();await page.waitForFunction(()=>document.querySelector('.browser-pane:not(.workspace-outgoing)').hidden&&!document.querySelector('.reed-workspace').classList.contains('workspace-moving'));
+    const collapsedWidth=await page.evaluate(()=>innerWidth);
+    const reversal=await page.evaluate(async()=>{
+      const frames=[],start=performance.now();let sampling=true;
+      const sample=()=>{frames.push({ms:performance.now()-start,width:innerWidth,chat:document.querySelector('.chat-shell').getBoundingClientRect().width,moving:document.querySelector('.reed-workspace').classList.contains('workspace-moving')});if(sampling)requestAnimationFrame(sample);};sample();
+      const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+      document.getElementById('browser-button').click();await pause(85);
+      document.getElementById('browser-button').click();await pause(35);
+      document.getElementById('canvas-button').click();await pause(45);
+      document.getElementById('browser-button').click();await pause(40);
+      document.getElementById('browser-button').click();await pause(1400);sampling=false;
+      return frames;
+    });
+    await page.waitForFunction(()=>!document.querySelector('.reed-workspace').classList.contains('workspace-moving'));
+    await fs.writeFile(path.join(out,'reversal.json'),JSON.stringify({collapsedWidth,frames:reversal,final:await page.evaluate(()=>({width:innerWidth,browser:document.querySelector('.browser-pane:not(.workspace-outgoing)').hidden,canvas:document.querySelector('.canvas-pane:not(.workspace-outgoing)').hidden}))},null,2));
+    assert.ok(Math.abs(await page.evaluate(()=>innerWidth)-collapsedWidth)<3,'Reversal did not restore collapsed width: '+collapsedWidth+' -> '+await page.evaluate(()=>innerWidth));
+    assert.equal(await page.locator('.browser-pane:not(.workspace-outgoing)').isVisible(),false);assert.equal(await page.locator('.canvas-pane:not(.workspace-outgoing)').isVisible(),false);assert.equal((await native('preview','visibility')).visible,false);
+    assert.ok(new Set(reversal.map(frame=>frame.width)).size>2,'No intermediate window widths during reversal');
+    assert.equal(await page.locator('.workspace-outgoing,.browser-motion-image').count(),0);
+checks.push('动画中五次反向/跨面板点击仅落实最后关闭目标，原尺寸恢复且无残留');
+    await page.emulateMedia({reducedMotion:'reduce'});await page.locator('#browser-button').click();await page.waitForFunction(()=>!document.querySelector('.reed-workspace').classList.contains('workspace-moving'));
+    assert.equal((await native('preview','visibility')).visible,true);await page.emulateMedia({reducedMotion:'no-preference'});checks.push('减少动态效果模式可直接切换且原生页面正常显示');
     if(process.env.SUMMON_TEST_TRANSITIONS==='1'){
       await page.evaluate(()=>{
         // Tauri's exported invoke is read-only. Observe actual IPC fetches,
@@ -185,10 +207,13 @@ try{
       const summaries=[];
       async function recordTransition(name,selector,handoff=false){
         const directory=path.join(out,name);await fs.mkdir(directory,{recursive:true});
-        const task=execute('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',path.join(root,'desktop/tools/workspace-transition-probe.ps1'),'-OwnerPid',String(child.pid),'-Output',directory],{windowsHide:true,timeout:15000}).then(()=>({}),error=>({error}));
+        const task=execute('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',path.join(root,'desktop/tools/workspace-transition-probe.ps1'),'-OwnerPid',String(child.pid),'-Output',directory,'-Duration','2600'],{windowsHide:true,timeout:15000}).then(()=>({}),error=>({error}));
         for(let i=0;i<100;i++){if(await fs.access(path.join(directory,'ready')).then(()=>true,()=>false))break;await page.waitForTimeout(50);}
         assert.ok(await fs.access(path.join(directory,'ready')).then(()=>true,()=>false),'Native frame recorder did not start');
-        await page.evaluate(()=>{window.__windowTransitions=[];});await page.locator(selector).click();
+        await page.evaluate(()=>{
+          window.__windowTransitions=[];window.__layoutFrames=[];window.__samplingLayout=true;
+          const sample=()=>{const root=document.querySelector('.reed-workspace').getBoundingClientRect(),chat=document.querySelector('.chat-shell').getBoundingClientRect();window.__layoutFrames.push({ms:performance.now(),width:root.width,chat:chat.width,right:root.right-chat.right});if(window.__samplingLayout)requestAnimationFrame(sample);};sample();
+        });await page.locator(selector).click();
         const completed=await task;if(completed.error)throw Error('Native frame recording failed: '+completed.error.stderr);
         const frames=JSON.parse(await fs.readFile(path.join(directory,'samples.json'),'utf8'));
         assert.ok(frames.length>=20,'Insufficient native transition samples');
@@ -196,8 +221,13 @@ try{
         assert.ok(maxGap<250,'Native sampling gap too large');
         assert.ok(frames.filter(frame=>frame.rightOwned).length>=20,'Insufficient owned chat-area samples');
         assert.equal(frames.filter(frame=>frame.rightOwned&&frame.rightWhite>.85).length,0,'White flash in owned native chat patch');
+        const layout=await page.evaluate(()=>{window.__samplingLayout=false;return window.__layoutFrames;});
+        await fs.writeFile(path.join(directory,'layout.json'),JSON.stringify(layout,null,2));
+        assert.ok(layout.every(frame=>Math.abs(frame.right)<3),'Chat lost its right anchor during motion');
+        if(handoff)assert.ok(new Set(layout.map(frame=>Math.round(frame.chat))).size>=3,'Split layout switched without intermediate widths');
         const calls=await page.evaluate(()=>window.__windowTransitions);
         assert.ok(calls.length>0,'Transition produced no observed geometry IPC');
+        if(!handoff)assert.ok(new Set(frames.map(frame=>frame.width)).size>=3,'Window changed without intermediate native widths');
         if(handoff){assert.equal(new Set(frames.map(frame=>frame.width)).size,1,'Panel handoff resized native window');assert.ok(calls.every(call=>call.expanded===true),'Panel handoff collapsed before expansion');}
         summaries.push({name,frames:frames.length,ownedChatSamples:frames.filter(frame=>frame.rightOwned).length,maxGapMs:maxGap,widths:[...new Set(frames.map(frame=>frame.width))],calls,modes:[...new Set(frames.map(frame=>frame.mode))],whiteFlashSamples:0});
       }

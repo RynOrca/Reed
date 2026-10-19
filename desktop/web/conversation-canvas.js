@@ -23,7 +23,7 @@ export function createConversationCanvas({command,tauri,prompt,panels,isRunning,
   const splitKey='reed-canvas-split';
   let scale=1,pan={x:0,y:0},viewTouched=false,gesture=null,zoomTimer=null,saveQueue=Promise.resolve(),dirtyView=null,dirtyNodes=new Map(),saveFailure=false,state='ready';
   let windowQueue=Promise.resolve(),deferredGraph=null;
-  function nativeWindow(expanded){const task=windowQueue.then(()=>tauri.core.invoke('set_canvas_window',{expanded}));windowQueue=task.catch(()=>{});return task;}
+  function nativeWindow(expanded){const task=windowQueue.then(()=>tauri.core.invoke('set_canvas_window',{expanded,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:160}));windowQueue=task.catch(()=>{});return task;}
   const ns='http://www.w3.org/2000/svg',nodeElements=new Map();
   function setStatus(text,next=state){state=next;q('status').textContent=text;q('retry').hidden=next!=='error';pane.dataset.state=next;}
   function clampSplit(width){
@@ -162,7 +162,11 @@ export function createConversationCanvas({command,tauri,prompt,panels,isRunning,
     try{
       if(value){
         workspace.style.setProperty('--canvas-chat-width',shell.getBoundingClientRect().width+'px');workspace.classList.add('canvas-expanded');pane.hidden=false;opened=true;splitter.tabIndex=0;handle.setAttribute('aria-expanded','true');handle.title='收起对话画布';setStatus('正在读取画布…','loading');
-        let native;try{native=await nativeWindow(true);}catch(error){opened=false;pane.hidden=true;workspace.classList.remove('canvas-expanded');splitter.tabIndex=-1;handle.setAttribute('aria-expanded','false');reportError(error.message);throw error;}if(ticket!==epoch||!available||sessionId!==id)return;
+        // Pure DOM pane: slide and fade it in while the window snaps wider.
+        pane.style.transition='opacity 160ms ease, transform 160ms ease';
+        pane.style.opacity='0';pane.style.transform='translateX(-14px)';
+        requestAnimationFrame(()=>{pane.style.opacity='1';pane.style.transform='translateX(0)';});
+        let native;try{native=await nativeWindow(true);}catch(error){opened=false;pane.hidden=true;pane.style.opacity='1';pane.style.transform='';workspace.classList.remove('canvas-expanded');splitter.tabIndex=-1;handle.setAttribute('aria-expanded','false');reportError(error.message);throw error;}if(ticket!==epoch||!available||sessionId!==id)return;
         const total=workspace.clientWidth;
         let stored=0;try{stored=Number(localStorage.getItem(splitKey))||0;}catch{}
         splitRatio=stored>=.25&&stored<=.75?stored:Math.min(.75,Math.max(.25,native.chatWidth/Math.max(1,total)));
@@ -173,8 +177,12 @@ export function createConversationCanvas({command,tauri,prompt,panels,isRunning,
       }else{
         await flush();if(saveFailure&&!force){setStatus('布局尚未保存，请重试后收起','error');return;}
         await command('canvas_close',{sessionId:id},true);if(ticket!==epoch)return;
-        opened=false;splitter.tabIndex=-1;splitDrag=null;workspace.classList.remove('canvas-resizing');pane.hidden=true;workspace.classList.remove('canvas-expanded');handle.setAttribute('aria-expanded','false');handle.title='展开对话画布';closeSource();clearReference();
-        if(!keepExpanded){await paintWorkspace();await nativeWindow(false);}
+        pane.style.transition='opacity 160ms ease, transform 160ms ease';
+        pane.style.opacity='0';pane.style.transform='translateX(-14px)';
+        await new Promise(resolve=>setTimeout(resolve,160));
+        if(ticket!==epoch)return;
+        opened=false;splitter.tabIndex=-1;splitDrag=null;workspace.classList.remove('canvas-resizing');pane.hidden=true;pane.style.opacity='1';pane.style.transform='';workspace.classList.remove('canvas-expanded');handle.setAttribute('aria-expanded','false');handle.title='展开对话画布';closeSource();clearReference();
+        if(!keepExpanded){await paintWorkspace();}
       }
     }catch(error){if(ticket===epoch){setStatus(error.message,'error');if(!value)reportError(error.message);if(value&&state==='error'&&!graph)q('empty').hidden=false;}}
     finally{if(ticket===epoch)transitioning=false;}

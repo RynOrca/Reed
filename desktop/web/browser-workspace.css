@@ -15,3 +15,12 @@
 @media(max-width:500px){.reed-workspace.browser-expanded{display:block!important}.browser-expanded>.browser-pane{height:100%;display:none}.browser-expanded>.chat-shell{height:100%}.browser-expanded.browser-mobile-page>.browser-pane{display:flex}.browser-expanded.browser-mobile-page>.chat-shell{display:none}.browser-expanded .browser-footer button{display:block}}
 @media(prefers-reduced-motion:reduce){.browser-pane *{scroll-behavior:auto!important}}
 .html-preview-link{display:inline-flex;align-items:center;gap:8px;border:1px solid #85947b44;border-radius:6px;padding:5px 10px;text-decoration:none!important;background:#85947b0a}.html-preview-link::before{content:"HTML";font:9px system-ui;letter-spacing:.06em;opacity:.55}
+
+/* Override responsive grids during motion: chat stays anchored to the right. */
+.reed-workspace.workspace-moving{display:block!important;position:relative!important}
+.reed-workspace.workspace-moving>.chat-shell{position:absolute!important;top:0;bottom:0;right:0;width:min(var(--motion-chat-width),100%)!important;display:flex!important;min-width:0!important;contain:layout paint;will-change:width}
+.reed-workspace.workspace-moving>.browser-pane:not([hidden]),.reed-workspace.workspace-moving>.canvas-pane:not([hidden]){position:absolute!important;top:0;bottom:0;left:0;right:calc(min(var(--motion-chat-width),100%) + 6px)!important;display:flex!important;min-width:0}
+.reed-workspace.workspace-moving>.workspace-outgoing{position:absolute!important;inset:0 calc(min(var(--motion-chat-width),100%) + 6px) 0 0!important;display:flex!important;z-index:6;pointer-events:none;overflow:hidden}
+.browser-motion-image{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;pointer-events:none}
+.browser-toolbar input:focus{background:color-mix(in srgb,var(--ds-bg-primary) 90%,white);border-color:#85947b88;outline:2px solid #85947b33}
+.browser-pane[data-state=loading] .browser-toolbar{box-shadow:inset 0 -2px #85947b88}

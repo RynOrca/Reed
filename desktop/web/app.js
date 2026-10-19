@@ -107,7 +107,7 @@ $("goals-button").append(icon("book"));
 $("goals-button").onclick = () => goalsPanel.open();
 
 const projectPicker=createProjectPicker({button:$('workspace-button'),command,tauri,isRunning:()=>running,onError:errorRow,onSelect:()=>{closeHistory();prompt.focus();}});
-const workspacePanels=createWorkspacePanels({onEmpty:()=>tauri.core.invoke('set_canvas_window',{expanded:false})});
+const workspacePanels=createWorkspacePanels({onInterrupt:()=>{void tauri.core.invoke('cancel_canvas_transition').catch(errorRow);},onEmpty:()=>tauri.core.invoke('set_canvas_window',{expanded:false})});
 const canvasPanel = createConversationCanvas({command,tauri,prompt,panels:workspacePanels,isRunning:()=>running,reportError:errorRow,onUnavailable:()=>{
   const role=roles.find(item=>item.id===activeRoleId);
   if(!role){void command('get_state').catch(roleError);return;}
@@ -807,7 +807,9 @@ document.addEventListener('click',event=>{
   })();
 });
 document.addEventListener("click", event => {
-  const link = event.target.closest?.("a[data-local-file]"); if (!link) return; event.preventDefault();
+  const link = event.target.closest?.("a"); if (!link) return;
+  if(/^https?:/i.test(link.getAttribute("href")||"")){event.preventDefault();void browserPanel.open(link.href).catch(e=>errorRow(String(e.message||e)));return;}
+  if(!link.dataset.localFile)return;event.preventDefault();
   void command("resolve_file", { path: link.dataset.localFile }, true).then(r => /\.html?$/i.test(r.path)?browserPanel.open(r.path):tauri.core.invoke("open_local_file", { path: r.path })).catch(e => errorRow(String(e.message || e)));
 });
 async function command(type, args = {}, awaitReply = false) {
