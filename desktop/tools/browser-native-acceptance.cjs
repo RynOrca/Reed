@@ -16,6 +16,8 @@ public static class ReedTestResize {
  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int w,int hgt,uint flags);
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+ [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+ [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h,IntPtr dc,uint flags);
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out Rect r);
  public struct Rect {public int Left,Top,Right,Bottom;}
 }
@@ -32,9 +34,14 @@ $taskRect=New-Object ReedTestResize+Rect
 [ReedTestResize]::GetWindowRect($taskWindow,[ref]$taskRect)|Out-Null
 $taskBitmap=New-Object Drawing.Bitmap ($taskRect.Right-$taskRect.Left),($taskRect.Bottom-$taskRect.Top)
 $taskGraphics=[Drawing.Graphics]::FromImage($taskBitmap)
-try{$taskGraphics.CopyFromScreen($taskRect.Left,$taskRect.Top,0,0,$taskBitmap.Size);$taskBitmap.Save([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(capture).toString('base64')}')),[Drawing.Imaging.ImageFormat]::Png)}finally{$taskGraphics.Dispose();$taskBitmap.Dispose()}`:''}
+try{
+ if([ReedTestResize]::GetForegroundWindow() -eq $taskWindow){$taskGraphics.CopyFromScreen($taskRect.Left,$taskRect.Top,0,0,$taskBitmap.Size)}
+ else{$taskDC=$taskGraphics.GetHdc();try{if(-not [ReedTestResize]::PrintWindow($taskWindow,$taskDC,2)){throw 'Owned window capture unavailable'}}finally{$taskGraphics.ReleaseHdc($taskDC)}}
+ $taskBitmap.Save([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(capture).toString('base64')}')),[Drawing.Imaging.ImageFormat]::Png)
+}finally{$taskGraphics.Dispose();$taskBitmap.Dispose()}`:''}
 `;
-  await execute('powershell.exe',['-NoProfile','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{windowsHide:true});
+  try{await execute('powershell.exe',['-NoProfile','-NonInteractive','-OutputFormat','Text','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{windowsHide:true});}
+  catch(error){throw Error('原生测试窗口探测失败：'+(error.stderr||error.message).slice(-2000));}
 }
 (async()=>{
   const root=path.resolve(__dirname,'../..'),out=path.resolve(process.env.SUMMON_BROWSER_TEST_OUT||path.join(root,'dist/browser-native-acceptance'));await fs.mkdir(out,{recursive:true});
