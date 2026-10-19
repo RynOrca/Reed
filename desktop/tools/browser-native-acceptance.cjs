@@ -6,6 +6,23 @@ const {spawn,execFile}=require('node:child_process'),{promisify}=require('node:u
 const {createServer}=require('node:http');
 const {chromium}=require(process.env.SUMMON_PLAYWRIGHT_PATH||'C:/Users/Orca/AppData/Local/Programs/Python/Python314/Lib/site-packages/playwright/driver/package');
 const execute=promisify(execFile);
+async function resizeOwnedWindow(pid,width,height){
+  // Exercise real OS resizing without granting web content window-write APIs.
+  const script=`Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class ReedTestResize {
+ [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
+ [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int w,int hgt,uint flags);
+}
+'@
+$taskWindow=(Get-Process -Id ${Number(pid)}).MainWindowHandle
+if($taskWindow -eq 0){throw 'Owned test window not found'}
+$taskScale=[ReedTestResize]::GetDpiForWindow($taskWindow)/96.0
+if(-not [ReedTestResize]::SetWindowPos($taskWindow,[IntPtr]::Zero,0,0,[int](${Number(width)}*$taskScale),[int](${Number(height)}*$taskScale),0x16)){throw 'Owned window resize failed'}
+`;
+  await execute('powershell.exe',['-NoProfile','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{windowsHide:true});
+}
 (async()=>{
   const root=path.resolve(__dirname,'../..'),out=path.resolve(process.env.SUMMON_BROWSER_TEST_OUT||path.join(root,'dist/browser-native-acceptance'));await fs.mkdir(out,{recursive:true});
   const data=await fs.mkdtemp(path.join(os.tmpdir(),'reed-browser-native-')),project=path.join(data,'test-project');await fs.mkdir(project);
@@ -110,12 +127,12 @@ const execute=promisify(execFile);
     const oldWidth=await evaluate('innerWidth');await page.locator('.browser-splitter').focus();await page.keyboard.press('ArrowLeft');await page.waitForTimeout(150);
     assert.ok(await evaluate('innerWidth')<oldWidth);checks.push('分隔线键盘调整同时更新原生页面尺寸');
     const original=await page.evaluate(()=>({width:innerWidth,height:innerHeight}));
-    await page.evaluate(async()=>{const {LogicalSize}=await import('./vendor/tauri-api/dpi.js');await window.__TAURI__.window.getCurrentWindow().setSize(new LogicalSize(600,720));});
+    await resizeOwnedWindow(child.pid,600,720);
     await page.waitForTimeout(200);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     const narrow=await page.locator('[data-browser=viewport]').boundingBox();assert.ok(Math.abs((await evaluate('innerWidth'))-narrow.width)<3);
     await command('browser_read',{includeImages:true,maxSegments:1});await command('browser_action',{action:'snapshot'});checks.push('窄于320px的实际预览仍可连续读页和截图');
     await page.screenshot({path:path.join(out,'shell-narrow.png')});checks.push('600px窄窗口布局无横向溢出，原生预览同步尺寸');
-    await page.evaluate(async original=>{const {LogicalSize}=await import('./vendor/tauri-api/dpi.js');await window.__TAURI__.window.getCurrentWindow().setSize(new LogicalSize(original.width,original.height));},original);
+    await resizeOwnedWindow(child.pid,original.width,original.height);
     assert.deepEqual(errors,[]);checks.push('页面脚本错误0');
     await fs.writeFile(path.join(out,'result.json'),JSON.stringify({checks,timings,errors,data,requests:requests.length,imageCount},null,2));
     console.log(JSON.stringify({checks,timings,errors,imageCount},null,2));
