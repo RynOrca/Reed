@@ -38,3 +38,11 @@ test('原生响应错误保持为错误，不回退到系统Edge',async()=>{
   native.receive({type:'native_browser_response',id:sent.id,error:'模拟宿主不可用'});
   await assert.rejects(attempt,/宿主不可用/);assert.equal(browser.child,undefined);native.close();
 });
+
+test('可见预览窄于320px时仍可连续读取，不沿用模拟视口的最小尺寸',async()=>{
+  const native={request:async(_surface,method)=>method==='Page.getNavigationHistory'?{currentIndex:0,entries:[{url:'https://example.org'}]}:{}};
+  const browser=new AgentBrowser('synthetic',{native,surface:'preview'});browser.nativeReady=true;
+  browser.evaluate=async expression=>expression==='({width:innerWidth,height:innerHeight})'?{width:280,height:500}:{url:'https://example.org',text:'合成窄栏',controls:[]};
+  await browser.run({action:'snapshot'});await browser.run({action:'snapshot'});
+  assert.deepEqual(browser.viewport,{width:280,height:500});
+});

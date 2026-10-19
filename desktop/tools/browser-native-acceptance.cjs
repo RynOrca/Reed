@@ -7,7 +7,7 @@ const {createServer}=require('node:http');
 const {chromium}=require(process.env.SUMMON_PLAYWRIGHT_PATH||'C:/Users/Orca/AppData/Local/Programs/Python/Python314/Lib/site-packages/playwright/driver/package');
 const execute=promisify(execFile);
 (async()=>{
-  const root=path.resolve(__dirname,'../..'),out=path.join(root,'dist/browser-native-acceptance');await fs.mkdir(out,{recursive:true});
+  const root=path.resolve(__dirname,'../..'),out=path.resolve(process.env.SUMMON_BROWSER_TEST_OUT||path.join(root,'dist/browser-native-acceptance'));await fs.mkdir(out,{recursive:true});
   const data=await fs.mkdtemp(path.join(os.tmpdir(),'reed-browser-native-')),project=path.join(data,'test-project');await fs.mkdir(project);
   const executable=process.env.SUMMON_BROWSER_TEST_EXE||path.join(root,'desktop/src-tauri/target/debug/summon-desktop.exe');
   const checks=[],errors=[],requests=[],timings={};let child,browser,page;
@@ -19,13 +19,15 @@ const execute=promisify(execFile);
   const server=createServer(async(req,res)=>{
     if(req.url==='/external.html'){res.setHeader('content-type','text/html; charset=utf-8');res.end('<!doctype html><title>合成外部网页</title><h1>HTTP导航验收</h1>');return;}
     if(req.url==='/v1/models'){res.setHeader('content-type','application/json');res.end(JSON.stringify({data:[{id:'native-vision',context_length:65536,max_output_tokens:8192,supports_vision:true,reasoning:false}]}));return;}
+    if(req.method!=='POST'){res.writeHead(404);res.end();return;}
     let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);requests.push(body);
     const texts=body.messages.filter(m=>m.role==='user').map(m=>typeof m.content==='string'?m.content:(m.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n'));
-    const marker=texts.findLast(text=>/NATIVE_(READ|OPEN|AUDIT)_TEST/.test(text))||'',auditing=marker.includes('NATIVE_AUDIT_TEST'),reading=auditing||marker.includes('NATIVE_READ_TEST'),callId=auditing?'native-audit':'native-read';
-    const toolResult=body.messages.some(m=>m.role==='tool'&&m.tool_call_id===callId);
+    const marker=texts.findLast(text=>/NATIVE_(READ|OPEN|AUDIT)_TEST/.test(text))||'',auditing=marker.includes('NATIVE_AUDIT_TEST'),reading=auditing||marker.includes('NATIVE_READ_TEST');
+    const hasTool=id=>body.messages.some(m=>m.role==='tool'&&m.tool_call_id===id);
     res.writeHead(200,{'content-type':'text/event-stream'});
     const send=(delta,finish_reason=null)=>res.write('data: '+JSON.stringify({id:'native-test',choices:[{index:0,delta,finish_reason}]})+'\n\n');
-    if(reading&&!toolResult){send({role:'assistant',tool_calls:[{index:0,id:callId,type:'function',function:{name:'browser',arguments:JSON.stringify({action:'read_page',target:auditing?'agent':'preview',maxSegments:3})}}]},'tool_calls');}
+    const stage=auditing?(!hasTool('native-audit-preview')?['native-audit-preview',{action:'preview',path:fixture}]:!hasTool('native-audit-desktop')?['native-audit-desktop',{action:'screenshot',viewport:{width:1280,height:800}}]:!hasTool('native-audit-mobile')?['native-audit-mobile',{action:'screenshot',viewport:{width:390,height:844}}]:null):reading&&!hasTool('native-read')?['native-read',{action:'read_page',target:'preview',maxSegments:3}]:null;
+    if(stage){send({role:'assistant',tool_calls:[{index:0,id:stage[0],type:'function',function:{name:'browser',arguments:JSON.stringify(stage[1])}}]},'tool_calls');}
     else{send({role:'assistant',content:reading?'已收到实际网页文字和图片。':`合成页面已准备好：[在内置浏览器打开 HTML](${fixture.replace(/\\/g,'/')})`});send({},'stop');}
     res.end('data: [DONE]\n\n');
   });await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -92,12 +94,28 @@ const execute=promisify(execFile);
       const shot=await native('agent','Page.captureScreenshot',{format:'png',captureBeyondViewport:false,clip:{x:0,y:0,width,height,scale:1}}),buffer=Buffer.from(shot.data,'base64');
       assert.equal(buffer.readUInt32BE(16),width);assert.equal(buffer.readUInt32BE(20),height);assert.ok(buffer.length>5000);await fs.writeFile(path.join(out,'agent-'+name+'.png'),buffer);
     }
-    await command('prompt',{text:'NATIVE_AUDIT_TEST'});assert.equal(await evaluate('document.title'),'Reed 原生浏览器合成验收');checks.push('独立验收页桌面/窄屏真实截图，Agent工具图片进入模型请求，不改变用户页');
+    await command('prompt',{text:'NATIVE_AUDIT_TEST'});assert.equal(await evaluate('document.title'),'Reed 原生浏览器合成验收');
+    const auditImages=requests.at(-1).messages.flatMap(m=>Array.isArray(m.content)?m.content:[]).filter(b=>b.type==='image_url').slice(-2);assert.equal(auditImages.length,2);
+    for(const [index,expected]of [[0,[1280,800]],[1,[390,844]]]){const buffer=Buffer.from(auditImages[index].image_url.url.split(',')[1],'base64');assert.deepEqual([buffer.readUInt32BE(16),buffer.readUInt32BE(20)],expected);}
+    const receipts=requests.at(-1).messages.filter(m=>m.role==='tool'&&['native-audit-desktop','native-audit-mobile'].includes(m.tool_call_id));assert.equal(receipts.length,2);assert.ok(receipts.every(m=>JSON.stringify(m.content).includes('sourceHash')));
+    checks.push('独立验收页桌面/窄屏真实截图与来源收据，Agent工具图片进入模型请求，不改变用户页');
     await page.locator('[data-browser=read]').click();await page.waitForFunction(()=>document.querySelectorAll('#attachment-strip .attachment-chip').length>1);
     assert.ok((await page.locator('#prompt').inputValue()).includes('网页阅读.md'));checks.push('读取整页按钮将正文和真实图片加入草稿附件，不自动发送');
     while(await page.locator('#attachment-strip .attachment-chip button').count())await page.locator('#attachment-strip .attachment-chip button').first().click();
     await page.locator('[data-browser=close]').click();await page.locator('.browser-pane').waitFor({state:'hidden'});await page.locator('#browser-button').click();
     await page.waitForTimeout(150);assert.equal(await evaluate('document.getElementById("value").textContent'),'0');checks.push('关闭再展开保留已加载页面');
+    // CDP captures this renderer only; the native child view is captured
+    // separately above. Do not label these as an OS composite screenshot.
+    await page.screenshot({path:path.join(out,'shell-desktop.png')});
+    const oldWidth=await evaluate('innerWidth');await page.locator('.browser-splitter').focus();await page.keyboard.press('ArrowLeft');await page.waitForTimeout(150);
+    assert.ok(await evaluate('innerWidth')<oldWidth);checks.push('分隔线键盘调整同时更新原生页面尺寸');
+    const original=await page.evaluate(()=>({width:innerWidth,height:innerHeight}));
+    await page.evaluate(async()=>{const {LogicalSize}=await import('./vendor/tauri-api/dpi.js');await window.__TAURI__.window.getCurrentWindow().setSize(new LogicalSize(600,720));});
+    await page.waitForTimeout(200);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    const narrow=await page.locator('[data-browser=viewport]').boundingBox();assert.ok(Math.abs((await evaluate('innerWidth'))-narrow.width)<3);
+    await command('browser_read',{includeImages:true,maxSegments:1});await command('browser_action',{action:'snapshot'});checks.push('窄于320px的实际预览仍可连续读页和截图');
+    await page.screenshot({path:path.join(out,'shell-narrow.png')});checks.push('600px窄窗口布局无横向溢出，原生预览同步尺寸');
+    await page.evaluate(async original=>{const {LogicalSize}=await import('./vendor/tauri-api/dpi.js');await window.__TAURI__.window.getCurrentWindow().setSize(new LogicalSize(original.width,original.height));},original);
     assert.deepEqual(errors,[]);checks.push('页面脚本错误0');
     await fs.writeFile(path.join(out,'result.json'),JSON.stringify({checks,timings,errors,data,requests:requests.length,imageCount},null,2));
     console.log(JSON.stringify({checks,timings,errors,imageCount},null,2));

@@ -135,7 +135,9 @@ export class AgentBrowser {
   async runOne(input,signal) {
     const {action,url,index,text,path}=input;
     if(!["navigate","preview","snapshot","screenshot","click","fill","back","forward","reload","read_page"].includes(action)) throw new Error("未知浏览器操作");
-    const options=captureOptions({...input,viewport:input.viewport || this.viewport});
+    // The visible pane can be narrower than the explicit emulation minimum.
+    // Validate requested viewports, then read the actual preview dimensions.
+    const options=captureOptions({...input,viewport:input.viewport || (this.surface==='preview'?{width:1280,height:800}:this.viewport)});
     let destination;
     if(action==="navigate") {const u=new URL(url);if(!["http:","https:"].includes(u.protocol) || u.username || u.password) throw new Error("浏览器只接受 HTTP(S) 地址；本地 HTML 请使用 preview");destination=u.href;}
     if(action==="preview") destination=await this.preview(path);
