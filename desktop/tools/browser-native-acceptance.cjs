@@ -171,9 +171,17 @@ try{
     await page.waitForTimeout(150);assert.equal(await evaluate('document.getElementById("value").textContent'),'0');checks.push('关闭再展开保留已加载页面');
     if(process.env.SUMMON_TEST_TRANSITIONS==='1'){
       await page.evaluate(()=>{
-        window.__windowTransitions=[];const original=window.__TAURI__.core.invoke;
-        window.__TAURI__.core.invoke=(name,args,...rest)=>{if(name==='set_canvas_window')window.__windowTransitions.push({expanded:args.expanded,ms:performance.now()});return original(name,args,...rest);};
+        // Tauri's exported invoke is read-only. Observe actual IPC fetches,
+        // recording only the geometry flag, never invoke keys or other payloads.
+        window.__windowTransitions=[];const original=window.fetch;
+        window.fetch=(input,options,...rest)=>{
+          const url=typeof input==='string'?input:input.url;
+          if(url.endsWith('/set_canvas_window'))window.__windowTransitions.push({expanded:JSON.parse(options.body).expanded,ms:performance.now()});
+          return original(input,options,...rest);
+        };
       });
+      await page.evaluate(()=>window.__TAURI__.core.invoke('set_canvas_window',{expanded:true}));
+      assert.ok(await page.evaluate(()=>window.__windowTransitions.length>0),'Geometry IPC observer is inactive');
       const summaries=[];
       async function recordTransition(name,selector,handoff=false){
         const directory=path.join(out,name);await fs.mkdir(directory,{recursive:true});
@@ -189,6 +197,7 @@ try{
         assert.ok(frames.filter(frame=>frame.rightOwned).length>=20,'Insufficient owned chat-area samples');
         assert.equal(frames.filter(frame=>frame.rightOwned&&frame.rightWhite>.85).length,0,'White flash in owned native chat patch');
         const calls=await page.evaluate(()=>window.__windowTransitions);
+        assert.ok(calls.length>0,'Transition produced no observed geometry IPC');
         if(handoff){assert.equal(new Set(frames.map(frame=>frame.width)).size,1,'Panel handoff resized native window');assert.ok(calls.every(call=>call.expanded===true),'Panel handoff collapsed before expansion');}
         summaries.push({name,frames:frames.length,ownedChatSamples:frames.filter(frame=>frame.rightOwned).length,maxGapMs:maxGap,widths:[...new Set(frames.map(frame=>frame.width))],calls,modes:[...new Set(frames.map(frame=>frame.mode))],whiteFlashSamples:0});
       }
