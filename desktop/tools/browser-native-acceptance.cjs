@@ -12,10 +12,12 @@ async function resizeOwnedWindow(pid,width,height){
 using System;
 using System.Runtime.InteropServices;
 public static class ReedTestResize {
+ [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int w,int hgt,uint flags);
 }
 '@
+[ReedTestResize]::SetProcessDPIAware()|Out-Null
 $taskWindow=(Get-Process -Id ${Number(pid)}).MainWindowHandle
 if($taskWindow -eq 0){throw 'Owned test window not found'}
 $taskScale=[ReedTestResize]::GetDpiForWindow($taskWindow)/96.0
@@ -128,7 +130,7 @@ if(-not [ReedTestResize]::SetWindowPos($taskWindow,[IntPtr]::Zero,0,0,[int](${Nu
     assert.ok(await evaluate('innerWidth')<oldWidth);checks.push('分隔线键盘调整同时更新原生页面尺寸');
     const original=await page.evaluate(()=>({width:innerWidth,height:innerHeight}));
     await resizeOwnedWindow(child.pid,600,720);
-    await page.waitForTimeout(200);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    await page.waitForTimeout(200);assert.ok(Math.abs((await page.evaluate(()=>innerWidth))-600)<3,'Test host did not reach 600 CSS px');assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     const narrow=await page.locator('[data-browser=viewport]').boundingBox();assert.ok(Math.abs((await evaluate('innerWidth'))-narrow.width)<3);
     await command('browser_read',{includeImages:true,maxSegments:1});await command('browser_action',{action:'snapshot'});checks.push('窄于320px的实际预览仍可连续读页和截图');
     await page.screenshot({path:path.join(out,'shell-narrow.png')});checks.push('600px窄窗口布局无横向溢出，原生预览同步尺寸');
