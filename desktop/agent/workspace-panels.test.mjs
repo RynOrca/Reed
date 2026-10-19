@@ -18,3 +18,14 @@ test('画布保存失败保留当前面板，队列恢复后仍可正常切换',
   await assert.rejects(panels.show('browser'),/保存/);assert.equal(browser,false);
   blocked=false;await panels.show('browser');assert.equal(canvas,false);assert.equal(browser,true);
 });
+
+test('面板交接保留展开尺寸，目标展开失败才恢复纯聊天窗口',async()=>{
+  const calls=[];let browser=true,canvas=false;
+  const panels=createWorkspacePanels({onEmpty:async()=>calls.push('collapse')});
+  panels.register('browser',{isOpen:()=>browser,open:async()=>{browser=true;},close:async options=>{calls.push(options.keepExpanded);browser=false;}});
+  panels.register('canvas',{isOpen:()=>canvas,open:async()=>{canvas=true;},close:async options=>{calls.push(options.keepExpanded);canvas=false;}});
+  await panels.show('canvas');assert.deepEqual(calls,[true]);
+  await panels.show('browser',async()=>{throw Error('模拟目标打开失败');}).catch(()=>{});
+  assert.deepEqual(calls,[true,true,'collapse']);
+  await panels.close('canvas');assert.deepEqual(calls,[true,true,'collapse']);
+});

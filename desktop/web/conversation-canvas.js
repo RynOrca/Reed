@@ -1,4 +1,5 @@
 import {icon} from './icons.js';
+import {paintWorkspace} from './workspace-panels.mjs';
 import {renderMarkdown} from './markdown.js';
 import {connectionGeometry,visibleCanvasNodes,learningDescendants} from './canvas-geometry.js';
 
@@ -155,7 +156,7 @@ export function createConversationCanvas({command,tauri,prompt,panels,isRunning,
       for(const item of result.items){const row=document.createElement('div');row.className='canvas-candidate';const text=document.createElement('div'),title=document.createElement('strong'),state=document.createElement('small');title.textContent=item.title||'图片或附件问题';state.textContent=({hidden:'手动隐藏',ignored:'未收录',deferred:'暂缓判断',pending:'待整理'})[item.status]||'未收录';text.append(title,state);const button=document.createElement('button');button.type='button';button.textContent='收录';button.onclick=async()=>{button.disabled=true;try{const added=await command('canvas_include',{sessionId:id,pairId:item.id},true);if(id!==sessionId||ticket!==epoch)return;applyGraph(added.graph);row.remove();if(!list.childElementCount)error.textContent='没有未收录的问答。';}catch(e){if(ticket===epoch)error.textContent=e.message;}finally{button.disabled=false;}};row.append(text,button);list.append(row);}
     }catch(e){if(ticket===epoch)error.textContent=e.message;}
   };
-  async function setOpen(value,{force=false}={}){
+  async function setOpen(value,{force=false,keepExpanded=false}={}){
     if(transitioning&&!force)return;if(value&&(!available||!sessionId))return;
     transitioning=true;const ticket=++epoch,id=sessionId;
     try{
@@ -171,13 +172,14 @@ export function createConversationCanvas({command,tauri,prompt,panels,isRunning,
         if(state==='loading')setStatus('已整理当前对话','ready');
       }else{
         await flush();if(saveFailure&&!force){setStatus('布局尚未保存，请重试后收起','error');return;}
-        await command('canvas_close',{sessionId:id},true);await nativeWindow(false);if(ticket!==epoch)return;
+        await command('canvas_close',{sessionId:id},true);if(ticket!==epoch)return;
         opened=false;splitter.tabIndex=-1;splitDrag=null;workspace.classList.remove('canvas-resizing');pane.hidden=true;workspace.classList.remove('canvas-expanded');handle.setAttribute('aria-expanded','false');handle.title='展开对话画布';closeSource();clearReference();
+        if(!keepExpanded){await paintWorkspace();await nativeWindow(false);}
       }
     }catch(error){if(ticket===epoch){setStatus(error.message,'error');if(!value)reportError(error.message);if(value&&state==='error'&&!graph)q('empty').hidden=false;}}
     finally{if(ticket===epoch)transitioning=false;}
   }
-  panels.register('canvas',{isOpen:()=>opened,open:()=>setOpen(true),close:()=>opened?setOpen(false):Promise.resolve()});
+  panels.register('canvas',{isOpen:()=>opened,open:()=>setOpen(true),close:options=>opened?setOpen(false,options):Promise.resolve()});
   const requestClose=()=>panels.close('canvas').catch(error=>reportError(error.message));
   handle.onclick=()=>{if(!available){onUnavailable?.();return;}void panels.toggle('canvas').catch(error=>reportError(error.message));};q('close').onclick=()=>void requestClose();
   q('retry').onclick=async()=>{if(saveFailure){await flush();return;}try{setStatus('正在重新整理…','organizing');if(!graph){const result=await command('canvas_open',{sessionId},true);applyGraph(result.graph);}else await command('canvas_retry',{sessionId},true);}catch(error){setStatus(error.message,'error');}};

@@ -1,4 +1,5 @@
 import {icon} from './icons.js';
+import {paintWorkspace} from './workspace-panels.mjs';
 
 export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,panels,onError}){
   const workspace=document.querySelector('.reed-workspace'),shell=document.querySelector('.chat-shell');
@@ -41,16 +42,17 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
   function split(value,save=false){ratio=Math.max(.3,Math.min(.75,value));workspace.style.setProperty('--browser-width',Math.round(ratio*100)+'%');splitter.setAttribute('aria-valuenow',String(Math.round(ratio*100)));if(save)localStorage.setItem('reed-browser-ratio',String(ratio));scheduleBounds();}
   async function show(){
     if(opened)return;
-    await tauri.core.invoke('set_canvas_window',{expanded:true});
     opened=true;pane.hidden=false;splitter.hidden=false;workspace.classList.add('browser-expanded');entry.setAttribute('aria-expanded','true');split(ratio);
+    try{await tauri.core.invoke('set_canvas_window',{expanded:true});}
+    catch(error){opened=false;pane.hidden=true;splitter.hidden=true;workspace.classList.remove('browser-expanded');entry.setAttribute('aria-expanded','false');throw error;}
     workspace.classList.toggle('browser-mobile-page',innerWidth<=500);
   }
-  async function close(){
+  async function close({keepExpanded=false}={}){
     ticket++;opened=false;
     // Hide the native surface before changing its parent's layout or size.
     await applyBounds({visible:false},true);
     pane.hidden=true;splitter.hidden=true;workspace.classList.remove('browser-expanded','browser-mobile-page');entry.setAttribute('aria-expanded','false');
-    await tauri.core.invoke('set_canvas_window',{expanded:false});
+    if(!keepExpanded){await paintWorkspace();await tauri.core.invoke('set_canvas_window',{expanded:false});}
   }
   async function open(pathOrUrl){
     if(!opened)return;if(!pathOrUrl){scheduleBounds();return;}

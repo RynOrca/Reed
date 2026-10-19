@@ -205,6 +205,10 @@ fn brand_icon(style: &str, dark: bool) -> tauri::Result<tauri::image::Image<'sta
     tauri::image::Image::from_bytes(brand_bytes(style,dark))
 }
 
+fn surface_color(dark:bool)->tauri::window::Color{
+    if dark {tauri::window::Color(24,33,26,255)}else{tauri::window::Color(247,244,236,255)}
+}
+
 #[tauri::command]
 fn update_brand_icon(app: tauri::AppHandle, style: String, dark: bool) -> Result<(), String> {
     if !["glass", "illustrated"].contains(&style.as_str()) { return Err("图标风格无效".into()); }
@@ -214,6 +218,9 @@ fn update_brand_icon(app: tauri::AppHandle, style: String, dark: bool) -> Result
     let icon=brand_icon(&style,dark).map_err(|e|e.to_string())?;
     if let Some(tray)=app.tray_by_id("reed-tray") { tray.set_icon(Some(icon.clone())).map_err(|e|e.to_string())?; }
     for window in app.webview_windows().values() {
+        if ["main","settings"].contains(&window.label()) {
+            window.set_background_color(Some(surface_color(dark))).map_err(|e|e.to_string())?;
+        }
         window.set_icon(icon.clone()).map_err(|e|e.to_string())?;
         #[cfg(windows)]
         native_ui::taskbar_icon(window,brand_bytes(&style,dark),&format!("{style}-{dark}")).map_err(|e|e.to_string())?;
@@ -742,7 +749,9 @@ fn run_desktop() -> tauri::Result<()> {
             // Keep the native window hidden until the branded first frame calls ui_ready.
             // Set this on the builder as well as in tauri.conf.json so a future config
             // change cannot expose WebView2's unpainted client area during startup.
-            let mut builder = WebviewWindowBuilder::from_config(app.handle(), config)?.visible(false).decorations(false).shadow(false).data_directory(webview_dir);
+            let initial_prefs=read_preferences(app.handle());
+            let initial_dark=initial_prefs["theme"].as_str()!=Some("light");
+            let mut builder = WebviewWindowBuilder::from_config(app.handle(), config)?.visible(false).decorations(false).shadow(false).background_color(surface_color(initial_dark)).data_directory(webview_dir);
             #[cfg(windows)]
             if std::env::var_os("SUMMON_TEST_DATA_DIR").is_some() {
                 if let Ok(port) = std::env::var("SUMMON_TEST_WEBVIEW_PORT") {

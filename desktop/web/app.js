@@ -107,7 +107,7 @@ $("goals-button").append(icon("book"));
 $("goals-button").onclick = () => goalsPanel.open();
 
 const projectPicker=createProjectPicker({button:$('workspace-button'),command,tauri,isRunning:()=>running,onError:errorRow,onSelect:()=>{closeHistory();prompt.focus();}});
-const workspacePanels=createWorkspacePanels();
+const workspacePanels=createWorkspacePanels({onEmpty:()=>tauri.core.invoke('set_canvas_window',{expanded:false})});
 const canvasPanel = createConversationCanvas({command,tauri,prompt,panels:workspacePanels,isRunning:()=>running,reportError:errorRow,onUnavailable:()=>{
   const role=roles.find(item=>item.id===activeRoleId);
   if(!role){void command('get_state').catch(roleError);return;}

@@ -87,6 +87,8 @@
 
 :root[data-theme="light"] body { background: #F7F4EC; color: #202C24; }
 :root[data-theme="dark"] body { background: #18211A; color: #EFE9DA; }
+:root[data-theme="light"] { background: #F7F4EC; }
+:root[data-theme="dark"] { background: #18211A; }
 :root[data-theme="light"] .reed-workspace { background: #F7F4EC; }
 :root[data-theme="dark"] .reed-workspace { background: #18211A; }
 :root[data-theme="light"] #startup { background: #F7F4EC; color: #202C24; }
