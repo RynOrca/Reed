@@ -1,4 +1,5 @@
 import {readLearningSource} from './learning-source.mjs';
+import {createNativeBrowserTransport} from './native-browser.mjs';
 import { learningBlockExtension, LEARNING_BLOCK_TOOL, validateLearningReply, learningReceipt } from './learning-blocks.mjs';
 import { semanticMatcher } from "./memory-match.mjs";
 import { createMemoryValueGate } from './memory-value.mjs';
@@ -178,7 +179,8 @@ async function prepareSkills(text) {
   if(hasPreparedReview(roles.current(),capabilities,text))preparedReviews.add(key);
   if(preparedSkills.size>100){const oldest=preparedSkills.keys().next().value;preparedSkills.delete(oldest);preparedReviews.delete(oldest);}
 }
-const learningTools = createLearningTools({ capabilities, currentWorkspace: () => cwd, roles, send, scope, vaultOverview,runtime:getRuntime,model:()=>session?.model, turnSignal:()=>turnController?.signal,roleSkillInstructions: prompt=>prepareRoleSkills(roles.current(),capabilities,prompt) });
+const nativeBrowser=process.env.SUMMON_NATIVE_BROWSER==='1'?createNativeBrowserTransport(send):null;
+const learningTools = createLearningTools({ capabilities, currentWorkspace: () => cwd, roles, send, scope, vaultOverview,runtime:getRuntime,model:()=>session?.model, turnSignal:()=>turnController?.signal,roleSkillInstructions: prompt=>prepareRoleSkills(roles.current(),capabilities,prompt),nativeBrowser });
 const learnerTools = learnerExtension({ learner, memory, judgeValue, currentSession: () => session, send, enabled:()=>roles.current().learnerProfileEnabled === true });
 const roleFeatures = roleFeatureExtension({roles,goals,project:()=>projectPath,workspace:()=>cwd,learner,memory,currentSession:()=>session,reviewEnabled});
 let generationStart = null, firstDelta = null, outputTokens = 0, generationMs = 0, missingUsage = false;
@@ -584,6 +586,20 @@ async function navigate(command){
 }
 async function dispatch(command){
   try{
+    if(command.type==='browser_prewarm'){
+      const info=await learningTools.prewarm();send({type:'browser_state',state:info?'warmed':'disabled',...info});send({type:'ack',id:command.id});return;
+    }
+    if(command.type==='browser_preview'){
+      const result=await learningTools.preview(command.url?{action:'navigate',url:command.url}:{action:'preview',path:command.path});
+      send({type:'browser_result',id:command.id,result});return;
+    }
+    if(command.type==='browser_action'){
+      if(!['back','forward','reload','snapshot'].includes(command.action))throw Error('无效浏览器操作');
+      send({type:'browser_result',id:command.id,result:await learningTools.previewAction(command.action)});return;
+    }
+    if(command.type==='browser_read'){
+      send({type:'browser_result',id:command.id,result:await learningTools.readPreview({includeImages:command.includeImages,maxSegments:command.maxSegments,startY:command.startY,textOffset:command.textOffset})});return;
+    }
     if(viewRecords.size&&['new_session','open_session','change_workspace','select_role'].includes(command.type)){await navigate(command);return;}
     if(session&&command.type==='list_sessions'){
       const saved=await SessionManager.listAll(sessionsDir),byId=new Map(saved.map(item=>[item.id,item]));
@@ -1170,6 +1186,8 @@ for await (const line of createInterface({ input: process.stdin })) {
     send({ type: "error", message: "Invalid JSON command" });
     continue;
   }
+  if(nativeBrowser?.receive(command))continue;
+  if(command.type?.startsWith('browser_')){void dispatch(command);continue;}
   if ((command.type === "init" && session) || ["get_goals", "save_goals", "cancel_vault_overview", "abort", "tool_decision", "queue_message", "promote_queue", "clear_queue", "set_approval"].includes(command.type)) {
     void dispatch(command);
   } else if(command.type==='prompt') {
@@ -1197,5 +1215,6 @@ workingTools.cancel();
 capabilities.close();
 loadSampler?.abort();await foregroundHttp.destroy();
 learningTools.close();
+nativeBrowser?.close();
 session?.dispose();
 approvalGate.cancel("Agent 进程已退出");

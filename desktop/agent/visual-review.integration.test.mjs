@@ -118,7 +118,7 @@ test("真实 PI SDK 持续拒绝截图时有界结束并明确未验收", { time
   assert.match(f.gate.snapshot().reason, /未取得有效进展/);
 });
 
-test("真实 PI SDK 和隔离 Edge 完成预览、真实桌面与窄屏 PNG、图片输入、视觉评审闭环", { timeout: 30000 }, async t => {
+test("真实 PI SDK 和隔离 Edge 完成预览、真实桌面与窄屏 PNG、图片输入、视觉评审闭环", { timeout: 30000,skip:process.env.SUMMON_TEST_EXTERNAL_EDGE!=='1' }, async t => {
   const f = await fixture(t, { realBrowser: true });
   assert.equal(f.requests.length, 6, JSON.stringify({ snapshot: f.gate.snapshot(), tools: f.requests[5]?.messages.filter(m => m.role === "tool") }));
   const images = f.requests[4].messages.flatMap(m => Array.isArray(m.content) ? m.content : []).filter(b => b.type === "image_url");

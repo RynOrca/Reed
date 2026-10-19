@@ -3292,6 +3292,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
  "tauri-runtime",
+ "webview2-com",
  "windows",
 ]
 

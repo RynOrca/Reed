@@ -28,7 +28,7 @@ test("Local preview authorizes each resource and blocks directory escape",async(
     assert.equal(browser.child,undefined);
   }finally {browser.close();await rm(root,{recursive:true,force:true});}
 });
-test("Owned lazy Edge can read, fill, click and screenshot an isolated page",{timeout:30000},async()=>{
+test("Owned lazy Edge can read, fill, click and screenshot an isolated page",{timeout:30000,skip:process.env.SUMMON_TEST_EXTERNAL_EDGE!=='1'},async()=>{
   const root=await mkdtemp(join(tmpdir(),"summon-browser-test-"));
   const server=createServer((_req,res)=>{res.setHeader("Content-Type","text/html; charset=utf-8");res.end('<title>Summon isolated browser</title><h1>Browser test</h1><input aria-label="Test input"><button onclick="document.querySelector(\'h1\').textContent=document.querySelector(\'input\').value">Apply</button>');});
   await new Promise(r=>server.listen(0,"127.0.0.1",r));const browser=new AgentBrowser(root);
@@ -61,7 +61,7 @@ test("Owned lazy Edge can read, fill, click and screenshot an isolated page",{ti
 });
 
 
-test("owned browser reopens after idle-style shutdown without consuming stale debug port",{timeout:30000},async()=>{
+test("owned browser reopens after idle-style shutdown without consuming stale debug port",{timeout:30000,skip:process.env.SUMMON_TEST_EXTERNAL_EDGE!=='1'},async()=>{
  const root=await mkdtemp(join(tmpdir(),"reed-browser-reopen-")),browser=new AgentBrowser(root);
  try{
   await browser.run({action:"snapshot"});const socket=browser.socket;
@@ -80,7 +80,7 @@ test("cancelled queued browser operation never runs",async()=>{
 });
 
 
-test("active screenshot delay cancels promptly and owned browser can recover",{timeout:15000},async()=>{
+test("active screenshot delay cancels promptly and owned browser can recover",{timeout:15000,skip:process.env.SUMMON_TEST_EXTERNAL_EDGE!=='1'},async()=>{
  const root=await mkdtemp(join(tmpdir(),"reed-browser-cancel-")),browser=new AgentBrowser(root);
  try{
   await browser.run({action:"snapshot"});const controller=new AbortController();const begin=Date.now();const operation=browser.run({action:"screenshot",waitMs:10000},{signal:controller.signal});
@@ -103,7 +103,7 @@ test('preview keeps one server per file so a slow turn can reuse the URL',async(
   assert.equal(await (await fetch(again+"?cam=1")).text(),"<h1>one</h1>");
   const other=await browser.preview(join(root,"other.html"));
   assert.notEqual(other,first);
-  await assert.rejects(fetch(first),'换成另一个文件后旧地址失效');
+  assert.equal(await (await fetch(first)).text(),'<h1>one</h1>','打开其他本地HTML后历史地址仍可返回');
   browser.close();
  }finally{await rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
 });
