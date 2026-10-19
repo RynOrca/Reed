@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
   "description": "Summon main window",
-  "windows": ["main", "settings"],
+  "webviews": ["main", "settings"],
   "permissions": ["core:default", "updater:default", "process:default"]
 }

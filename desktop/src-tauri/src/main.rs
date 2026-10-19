@@ -3,6 +3,7 @@
 mod profile;
 mod canvas_window;
 mod native_ui;
+mod browser_workspace;
 
 use tauri::{
     menu::{Menu, MenuItem},
@@ -204,6 +205,10 @@ fn brand_icon(style: &str, dark: bool) -> tauri::Result<tauri::image::Image<'sta
     tauri::image::Image::from_bytes(brand_bytes(style,dark))
 }
 
+fn surface_color(dark:bool)->tauri::window::Color{
+    if dark {tauri::window::Color(24,33,26,255)}else{tauri::window::Color(247,244,236,255)}
+}
+
 #[tauri::command]
 fn update_brand_icon(app: tauri::AppHandle, style: String, dark: bool) -> Result<(), String> {
     if !["glass", "illustrated"].contains(&style.as_str()) { return Err("图标风格无效".into()); }
@@ -213,6 +218,9 @@ fn update_brand_icon(app: tauri::AppHandle, style: String, dark: bool) -> Result
     let icon=brand_icon(&style,dark).map_err(|e|e.to_string())?;
     if let Some(tray)=app.tray_by_id("reed-tray") { tray.set_icon(Some(icon.clone())).map_err(|e|e.to_string())?; }
     for window in app.webview_windows().values() {
+        if ["main","settings"].contains(&window.label()) {
+            window.set_background_color(Some(surface_color(dark))).map_err(|e|e.to_string())?;
+        }
         window.set_icon(icon.clone()).map_err(|e|e.to_string())?;
         #[cfg(windows)]
         native_ui::taskbar_icon(window,brand_bytes(&style,dark),&format!("{style}-{dark}")).map_err(|e|e.to_string())?;
@@ -240,6 +248,11 @@ fn ui_ready(window: tauri::WebviewWindow) -> Result<(), String> {
     if window.label()=="main" && std::env::args().any(|a|a=="--autostart") {return Ok(());}
     window.show().map_err(|e|e.to_string())?;
     startup_log(&format!("ui_ready showed {} (visible={})", window.label(), window.is_visible().unwrap_or(false)));
+    if window.label()=="main" {
+        // Main is already visible. Initialization runs in the background and is
+        // independent of Agent capability switches or opening the first HTML.
+        browser_workspace::prewarm(app);
+    }
     Ok(())
 }
 
@@ -370,6 +383,7 @@ fn agent_command(app: tauri::AppHandle, state: tauri::State<'_, AgentState>, com
         let workspace = app.path().home_dir().map_err(|error| error.to_string())?;
         let mut command_line = Command::new(node);
         command_line.arg(script)
+            .env("SUMMON_NATIVE_BROWSER", "1")
             .env("SUMMON_DATA_DIR", &data_dir)
             .env("SUMMON_WORKSPACE", &workspace)
             .current_dir(workspace)
@@ -395,7 +409,15 @@ fn agent_command(app: tauri::AppHandle, state: tauri::State<'_, AgentState>, com
                 match line {
                     Ok(line) => {
                         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
-                            let _ = events.emit("agent-event", value);
+                            if value["type"] == "native_browser_request" {
+                                let host=events.clone();
+                                thread::spawn(move || {
+                                    let id=value["id"].clone();
+                                    let result=browser_workspace::request(host.clone(),value);
+                                    let reply=match result {Ok(value)=>serde_json::json!({"type":"native_browser_response","id":id,"value":value}),Err(error)=>serde_json::json!({"type":"native_browser_response","id":id,"error":error})};
+                                    if let Ok(mut state)=host.state::<AgentState>().0.lock(){if let Some(process)=state.as_mut(){let _=writeln!(process.stdin,"{}",reply);}}
+                                });
+                            } else {let _ = events.emit("agent-event", value);}
                         }
                     }
                     Err(_) => break,
@@ -468,6 +490,7 @@ fn show_main(app: &tauri::AppHandle) {
         }
         let _ = window.unminimize();
         let _ = window.show();
+        browser_workspace::prewarm(app);
         let _ = window.set_focus();
     }
 }
@@ -699,6 +722,7 @@ fn run_desktop() -> tauri::Result<()> {
     let profile_dir = profile::prepare()?;
     startup_log(&format!("User profile ready: {}", profile_dir.display()));
     let window_state = tauri_plugin_window_state::Builder::new().with_state_flags(BOUNDS)
+        .with_denylist(&["reed-browser-preview","reed-browser-agent"])
         .with_filename(profile_dir.join("window-state.json").to_string_lossy().into_owned());
     tauri::Builder::default()
         .manage(AgentState::default())
@@ -707,11 +731,15 @@ fn run_desktop() -> tauri::Result<()> {
         .manage(BoundsAutosave::default())
         .manage(RoundedBounds::default())
         .manage(canvas_window::CanvasWindow::default())
+        .manage(browser_workspace::BrowserWorkspace::default())
         .plugin(window_state.build())
         .plugin(shortcuts)
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![canvas_window::set_canvas_window, dismiss, window_pinned, set_window_pinned, agent_command, choose_workspace, open_local_file, desktop_preferences, set_shortcut, set_autostart, open_settings, capture_shortcut, drag_window, resize_window, update_brand_icon, set_appearance, ui_ready, app_version, update_key_configured, open_external_url])
+        .invoke_handler(move |invoke:tauri::ipc::Invoke|{
+                if !["main","settings"].contains(&invoke.message.webview_ref().label()) {invoke.resolver.reject("网页不能调用Reed应用命令");return true;}
+                let handler: Box<dyn Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync> = Box::new(tauri::generate_handler![browser_workspace::browser_host,browser_workspace::choose_html_file,canvas_window::set_canvas_window,canvas_window::cancel_canvas_transition, dismiss, window_pinned, set_window_pinned, agent_command, choose_workspace, open_local_file, desktop_preferences, set_shortcut, set_autostart, open_settings, capture_shortcut, drag_window, resize_window, update_brand_icon, set_appearance, ui_ready, app_version, update_key_configured, open_external_url]); handler(invoke)
+        })
         .setup(|app| {
             startup_log("Creating Tauri window");
             let webview_dir = profile::directory()?.join("webview");
@@ -721,7 +749,9 @@ fn run_desktop() -> tauri::Result<()> {
             // Keep the native window hidden until the branded first frame calls ui_ready.
             // Set this on the builder as well as in tauri.conf.json so a future config
             // change cannot expose WebView2's unpainted client area during startup.
-            let mut builder = WebviewWindowBuilder::from_config(app.handle(), config)?.visible(false).decorations(false).shadow(false).data_directory(webview_dir);
+            let initial_prefs=read_preferences(app.handle());
+            let initial_dark=initial_prefs["theme"].as_str()!=Some("light");
+            let mut builder = WebviewWindowBuilder::from_config(app.handle(), config)?.visible(false).decorations(false).shadow(false).background_color(surface_color(initial_dark)).data_directory(webview_dir);
             #[cfg(windows)]
             if std::env::var_os("SUMMON_TEST_DATA_DIR").is_some() {
                 if let Ok(port) = std::env::var("SUMMON_TEST_WEBVIEW_PORT") {
@@ -759,6 +789,7 @@ fn run_desktop() -> tauri::Result<()> {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label().starts_with("reed-browser-"){return;}
             if matches!(event, WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }) {
                 if let Some(webview) = window.app_handle().get_webview_window(window.label()) { round_window(&webview); }
             }

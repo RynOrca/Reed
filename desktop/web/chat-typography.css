@@ -1,4 +1,11 @@
 /* Reading rhythm for the main conversation; keep the native shell compact. */
+@font-face {
+  font-family:"Reed Reading Serif";
+  src:url("./assets/fonts/noto-serif-sc-variable.woff") format("woff");
+  font-style:normal;
+  font-weight:200 900;
+  font-display:swap;
+}
 .chat-shell {
   --chat-code-bg:#20222b;
   --chat-code-bar:#ffffff0a;
@@ -12,23 +19,27 @@
   --chat-inline-bg:#46487912;
 }
 .chat-shell .thread-scroll { padding-inline:clamp(18px,4vw,48px); }
-.chat-shell .transcript-list { max-width:760px; }
+.chat-shell .transcript-list { max-width:740px; }
 .transcript-list .message-row { padding-block:18px; }
 .transcript-list .message-row.user { background:transparent; color:inherit; }
 .transcript-list .message-row.assistant .message-col { width:100%; }
 .transcript-list .message-row.user .message-bubble { padding:11px 16px; line-height:1.75; }
 .transcript-list .prose-chat {
-  font-family:"Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;
-  font-size:16px;
-  line-height:1.8;
+  font-family:"Reed Reading Serif","Noto Serif SC","Source Han Serif SC",Georgia,"SimSun",serif;
+  font-size:18px;
+  font-weight:400;
+  line-height:1.95;
+  letter-spacing:.005em;
   overflow-wrap:anywhere;
   color:var(--goal-text);
 }
-.transcript-list .prose-chat p { margin:0 0 1.15em; color:inherit; }
+.transcript-list .prose-chat p { margin:0 0 1.3em; color:inherit; text-wrap:pretty; }
 .transcript-list .prose-chat :is(h1,h2,h3,h4,h5,h6) {
-  margin:1.65em 0 .65em;
+  font-family:"Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;
+  margin:2em 0 .85em;
   font-weight:650;
   line-height:1.4;
+  letter-spacing:-.015em;
   text-wrap:pretty;
 }
 .transcript-list .prose-chat h1 { font-size:1.75em; }
@@ -37,6 +48,8 @@
 .transcript-list .prose-chat h4 { font-size:1.1em; }
 .transcript-list .prose-chat :is(h5,h6) { font-size:1em; }
 .transcript-list .prose-chat strong { font-weight:650; }
+.transcript-list .prose-chat :is(button,input,textarea,.learning-block) { font-family:"Segoe UI","Microsoft YaHei UI",system-ui,sans-serif; letter-spacing:normal; }
+.transcript-list .prose-chat .katex { letter-spacing:normal; }
 .transcript-list .prose-chat :is(ul,ol) { margin:.6em 0 1.25em; padding-left:1.65em; }
 .transcript-list .prose-chat li { padding-left:.15em; margin:.4em 0; }
 .transcript-list .prose-chat li > p { margin:.45em 0; }
@@ -108,7 +121,7 @@
 .prose-chat .markdown-code pre code { font:13px/1.75 var(--font-mono); color:inherit; }
 @media(max-width:480px) {
   .chat-shell .thread-scroll { padding-inline:18px; }
-  .transcript-list .prose-chat { font-size:15px; }
+  .transcript-list .prose-chat { font-size:17px; line-height:1.9; }
   .transcript-list .message-row { padding-block:14px; }
   .markdown-code-header { padding-inline:12px; }
   .prose-chat .markdown-code pre { padding:14px; }

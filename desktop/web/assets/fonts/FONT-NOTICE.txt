@@ -1,0 +1,5 @@
+© 2017-2023 Adobe (http://www.adobe.com/).
+
+Noto Serif SC variable font, distributed under SIL OFL 1.1.
+Source: https://github.com/notofonts/noto-cjk
+Converted losslessly to WOFF; no glyph subsetting.

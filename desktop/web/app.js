@@ -1,10 +1,14 @@
 import {renderLearning,replyText} from './learning-blocks.js';
+import {renderLearningFailure} from './learning-fallback.js';
 import {createLearningMode} from './learning-mode.js';
 import {requestStatus} from './request-status.js';
 import {cancellationStatus,cancellationApplies} from './cancellation-status.js';
 // Transcript row structure and disclosure behavior adapted from PI-Desktop 0.16.1.
 import {createGoals} from "./goals.js";
+import {createOutline} from "./reading-outline.js";
 import {createConversationCanvas} from "./conversation-canvas.js";
+import {createBrowserWorkspace} from './browser-workspace.js';
+import {createWorkspacePanels} from './workspace-panels.mjs';
 import {createProjectPicker} from "./project-picker.js";
 import {createMessageNavigation} from "./message-navigation.js";
 import {renderMarkdown} from "./markdown.js";
@@ -45,6 +49,27 @@ let retrying = false;
 let turnErrorShown = false;
 let assistantRow = null;
 let thinkingRow = null;
+let processTimeline=null,processStartedAt=null;
+const sessionDrafts=new Map();
+function processBody(){
+  if(!processTimeline){
+    const root=document.createElement('details');root.className='process-timeline';root.open=true;
+    const summary=document.createElement('summary');summary.hidden=true;
+    const body=document.createElement('div');body.className='process-timeline-body';root.append(summary,body);messages.append(root);
+    processTimeline={root,summary,body,startedAt:processStartedAt};
+  }
+  return processTimeline.body;
+}
+function finishProcess(outcome,timing={}){
+  if(!processTimeline)return;
+  const start=timing.startedAt??processTimeline.startedAt,end=timing.endedAt??Date.now();
+  const seconds=Number.isFinite(start)&&end>=start?Math.floor((end-start)/1000):null;
+  const duration=seconds===null?'执行过程':`用时 ${seconds>=60?Math.floor(seconds/60)+'m ':''}${seconds%60}s`;
+  const suffix=outcome?.status&&outcome.status!=='complete'?` · ${outcomeLabel(outcome)}`:'';
+  processTimeline.summary.textContent=duration+suffix;
+  processTimeline.summary.hidden=false;processTimeline.root.open=false;
+  processTimeline=null;processStartedAt=null;
+}
 let submitted = null;
 const toolRows = new Map();
 const learningRows=new Map();
@@ -71,9 +96,19 @@ const pending = new Map();
 const queuedTexts = new Map();
 let attachments = [];
 let followLatest = true;
-const goalsPanel = createGoals({command});
+let goalsPanel = null;
+const outlinePanel = createOutline({transcript, messages, onOpenGoals: () => goalsPanel?.open()});
+goalsPanel = createGoals({command, onChange: summary => {
+  const button = $("goals-button");
+  button.hidden = !summary.enabled;
+  outlinePanel.setGoal(summary);
+}});
+$("goals-button").append(icon("book"));
+$("goals-button").onclick = () => goalsPanel.open();
+
 const projectPicker=createProjectPicker({button:$('workspace-button'),command,tauri,isRunning:()=>running,onError:errorRow,onSelect:()=>{closeHistory();prompt.focus();}});
-const canvasPanel = createConversationCanvas({command,tauri,prompt,isRunning:()=>running,reportError:errorRow,onUnavailable:()=>{
+const workspacePanels=createWorkspacePanels({onInterrupt:()=>{void tauri.core.invoke('cancel_canvas_transition').catch(errorRow);},onEmpty:()=>tauri.core.invoke('set_canvas_window',{expanded:false})});
+const canvasPanel = createConversationCanvas({command,tauri,prompt,panels:workspacePanels,isRunning:()=>running,reportError:errorRow,onUnavailable:()=>{
   const role=roles.find(item=>item.id===activeRoleId);
   if(!role){void command('get_state').catch(roleError);return;}
   openRoleEditor(role);if(!rolesDialog.open)rolesDialog.showModal();
@@ -88,12 +123,29 @@ const canvasPanel = createConversationCanvas({command,tauri,prompt,isRunning:()=
   row.animate([{backgroundColor:"var(--goal-accent-soft)"},{backgroundColor:"transparent"}],{duration:1600});
 }});
 createMessageNavigation({messages,transcript,onNavigate:()=>{followLatest=false;}});
+const browserPanel=createBrowserWorkspace({tauri,command,prompt,panels:workspacePanels,onError:error=>errorRow(String(error.message||error)),
+  onQuote:({text,context,source,url,action})=>{
+    const quote=`引用「${source}」\n来源：${url}\n\n${text.split('\n').map(line=>'> '+line).join('\n')}${context&&context!==text?'\n\n所在段落：'+context:''}${action?'\n\n'+action:''}`;
+    prompt.value+=(prompt.value.trim()?'\n\n':'')+quote;prompt.dispatchEvent(new Event('input'));
+  },
+  onPage:async result=>{
+    const page=JSON.parse(result.content.find(block=>block.type==='text').text),images=result.content.filter(block=>block.type==='image');
+    if(attachments.length+images.length+1>8)throw Error('页面阅读需要附件空间，请先移除输入框中已有的附件后重试');
+    const body=`# ${page.title}\n\n来源：${page.url}\n\n${page.text}\n\n读取范围：${JSON.stringify(page.coverage)}\n\n页面标题：${JSON.stringify(page.headings)}\n\n链接：${JSON.stringify(page.links)}`;
+    const bytes=new TextEncoder().encode(body);let binary='';for(let offset=0;offset<bytes.length;offset+=4096)binary+=String.fromCharCode(...bytes.subarray(offset,offset+4096));
+    attachments.push({kind:'file',name:'网页阅读.md',mimeType:'text/markdown',data:btoa(binary)});
+    for(const [index,image] of images.entries())attachments.push({kind:'image',mimeType:image.mimeType,data:image.data,name:`网页截图 ${index+1}`});
+    renderAttachments();prompt.value+=(prompt.value.trim()?'\n\n':'')+`请阅读当前网页「${page.title}」。正文已附在“网页阅读.md”中${images.length?`，另附 ${images.length} 张真实页面截图`:''}。${page.coverage.complete?'':'本次尚未覆盖全部长页或嵌入内容，请通过 browser 的 read_page 按需继续读取。'}`;prompt.dispatchEvent(new Event('input'));
+  },
+});
 transcript.addEventListener("scroll",()=>{followLatest=transcript.scrollHeight-transcript.clientHeight-transcript.scrollTop<65;},{passive:true});
 
 function status(text) {
+  const state = $("composer-state");
   $("status").textContent = text;
-  $("status").parentElement.classList.toggle("is-busy", /正在|连接/.test(text));
-  $("status").parentElement.classList.toggle("is-error", /断开|出错|失败|截断|未生成/.test(text));
+  state.title = text;
+  state.classList.toggle("is-busy", /正在|连接/.test(text));
+  state.classList.toggle("is-error", /断开|出错|失败|截断|未生成/.test(text));
 }
 function updateSendAvailability() { $("send-button").disabled = (!prompt.value.trim() && !attachments.length); }
 function scrollToLatest() { if(followLatest)transcript.scrollTop = transcript.scrollHeight; }
@@ -236,7 +288,7 @@ function disclosure({ kind, title, summary = "", detail = "", state = "done", id
   const body = document.createElement("div"); body.className = "tool-row-body"; body.hidden = true;
   if (id) body.id = `detail-${id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const content = document.createElement("div"); content.className = "tool-row-content"; content.textContent = detail;
-  body.append(content); row.append(head, body); messages.append(row);
+  body.append(content); row.append(head, body); processBody().append(row);
   head.addEventListener("click", () => {
     body.hidden = !body.hidden;
     row.classList.toggle("open", !body.hidden);
@@ -296,7 +348,7 @@ function toolEnd(event) {
       learning.content.replaceChildren(view.root);learning.view=view;updateLearningAvailability();
     }else{
       const blocks=Array.isArray(event.result)?event.result:event.result?.content||[];
-      learning.content.textContent=blocks.filter(b=>b.type==='text').map(b=>b.text).join('\n')||'图解暂时无法显示，请继续阅读正文。';
+      renderLearningFailure(learning.content,{fallback:learning.fallback,content:blocks});
     }
     scrollToLatest();return;
   }
@@ -333,17 +385,20 @@ function permissionRequest(event) {
   deny.addEventListener("click", () => void decide("deny"));
   permissionRows.set(event.requestId, { ...row, allow, deny });
 }
-function restoreHistory(history) {
+function restoreHistory(history,timings=[]) {
   followLatest=true;
   learningStates.clear();for(const m of history){if(m.role==='user'&&m.learningReply){const r=m.learningReply;learningStates.set(learningStateKey(activeSessionId,r.toolCallId,r.blockId),{...r,status:'answered'});}}
-  messages.replaceChildren(); learningRows.clear(); learningCandidate=null; toolRows.clear(); permissionRows.clear(); assistantRow = null; thinkingRow = null;
+  messages.replaceChildren(); processTimeline=null;processStartedAt=null;learningRows.clear(); learningCandidate=null; toolRows.clear(); permissionRows.clear(); assistantRow = null; thinkingRow = null;
+  let turnTiming=null,lastOutcome=null;
   for (const message of history) {
+    if(message.role==='user'){finishProcess(lastOutcome,turnTiming||{});turnTiming=timings.find(t=>t.userEntryId===message.messageId)||null;processStartedAt=turnTiming?.startedAt??null;lastOutcome=null;}
     if (message.role === "toolResult") {
       toolEnd({ id: message.toolCallId, isError: message.isError, result: {content:message.content,details:message.details} });
       continue;
     }
     if (message.role !== "user" && message.role !== "assistant") continue;
     const outcome = message.role === "assistant" ? historyOutcome(message) : null;
+    if(outcome)lastOutcome=outcome;
     let content = null;
     for (const block of message.content || []) {
       if (block.type === "text") {
@@ -381,7 +436,7 @@ function restoreHistory(history) {
     }
     if (outcome?.status === "unverified") errorRow(outcome.message || "产物尚未通过视觉验收");
   }
-  updateLearningAvailability();refreshEmpty(); scrollToLatest();
+  finishProcess(lastOutcome,turnTiming||{});updateLearningAvailability();refreshEmpty(); scrollToLatest();
 }
 function closeHistory() {
   historyDrawer.hidden = true;
@@ -434,7 +489,7 @@ let chosenModel=null,activeModelKey="",activeThinking="off",statusModelResponse=
 function updateStatusModel(){const role=roles.find(r=>r.id===activeRoleId);$("status-model").textContent=[role?.name||statusModelResponse.roleName||"Agent",statusModelResponse.model?$("model-label").textContent:null,statusModelResponse.model?activeThinking:null].filter(Boolean).join(" · ");$("status-model").title=$("status-model").textContent;$("status-model").hidden=false;}
 const thinkingNames={off:"思考关闭",minimal:"最少",low:"低",medium:"中等",high:"高",xhigh:"很高",max:"最高"};
 function thinkingName(level,format){return level!=="off" && ["qwen","qwen-chat-template"].includes(format)?"思考开启":thinkingNames[level]||level;}
-function updateModelChip(response){statusModelResponse=response;activeModelKey=response.model||"";activeThinking=response.thinkingLevel||"off";$("model-label").textContent=response.model?response.modelName||response.model:"选择模型";const name=thinkingName(activeThinking,response.thinkingFormat);$("model-thinking").textContent=/思考/.test(name)?name:`思考·${name}`;$("model-thinking").hidden=!response.model;$("model-button").title=response.model?`${$("model-label").textContent} · ${$("model-thinking").textContent}`:"选择模型";$("status-model").textContent=response.model?`${$("model-label").textContent} · ${activeThinking}`:"";$("status-model").title=$("status-model").textContent;$("status-model").hidden=!response.model;updateStatusModel();}
+function updateModelChip(response){statusModelResponse=response;activeModelKey=response.model||"";activeThinking=response.thinkingLevel||"off";$("model-label").textContent=response.model?response.modelName||response.model:"选择模型";const name=thinkingName(activeThinking,response.thinkingFormat);$("model-thinking").textContent=/思考/.test(name)?name:`思考·${name}`;$("model-thinking").hidden=!response.model||activeThinking==="off";$("model-button").title=response.model?`${$("model-label").textContent} · ${$("model-thinking").textContent}`:"选择模型";$("status-model").textContent=response.model?`${$("model-label").textContent} · ${activeThinking}`:"";$("status-model").title=$("status-model").textContent;$("status-model").hidden=!response.model;updateStatusModel();}
 function resetModelStep(){chosenModel=null;$("model-step").hidden=false;$("thinking-step").hidden=true;$("model-step-title").textContent="选择模型";$("model-error").hidden=true;}
 function chooseModel(model){chosenModel=model;$("model-step").hidden=true;$("thinking-step").hidden=false;$("model-step-title").textContent="选择思考档位";$("chosen-model-name").textContent=model.name||model.id;$("chosen-model-info").textContent=`${model.providerName||model.provider} · ${model.contextWindow?model.contextWindow.toLocaleString()+" 上下文":"上下文未知"}`;const format=model.compat?.thinkingFormat;renderThinkingLevels(model.thinkingLevels||["off"],activeModelKey===`${model.provider}/${model.id}`?activeThinking:"off",{thinkingFormat:format,reasoningKnown:model.reasoning!=null});$("thinking-hint").textContent=["qwen","qwen-chat-template"].includes(format)?"当前配置为 Qwen 思考开关，只发送开启/关闭，不区分深度。若服务支持 reasoning_effort，请在设置中选择该协议并配置档位。":model.thinkingDefaults?"服务未返回档位，使用默认五档；实际思考效果由模型服务决定，可在设置中调整协议。":model.reasoning===false?"此模型不支持思考。":"仅展示当前模型支持的选项。";$("thinking-level").focus();}
 function renderModels() {
@@ -509,7 +564,7 @@ function renderRoles() {
 }
 async function newSession() {
   try {
-    await command("new_session", { noProject: true }, true);
+    await command("new_session", {}, true);
     closeHistory();
     prompt.focus();
   } catch (error) {
@@ -519,13 +574,19 @@ async function newSession() {
 function onEvent(event) {
   const response = event.payload;
   if (!response || typeof response !== "object") return;
-  const handledReply = Boolean(response.id && pending.has(response.id) && ["ack", "error", "done", "conversation", "file_staged", "goals", "sessions"].includes(response.type));
+  const handledReply = Boolean(response.id && pending.has(response.id) && ["ack", "error", "done", "conversation", "file_staged", "goals", "sessions", "browser_result"].includes(response.type));
   if (handledReply) {
     const { resolve, reject, timer } = pending.get(response.id); clearTimeout(timer); pending.delete(response.id);
     response.type === "error" ? reject(new Error(response.message)) : resolve(response);
   }
+  if(response.sessionId&&activeSessionId&&response.sessionId!==activeSessionId&&!['session','sessions'].includes(response.type))return;
   if(response.type==="ack"&&response.stale){stopping=false;$("stop-button").disabled=false;status(running?"这一轮已结束，正在等待 Agent 同步…":"已停止");}
   switch (response.type) {
+    case 'browser_state':browserPanel.event(response);break;
+    case 'restore_user':{
+      const message=response.message||{};const content=messageRow('user',(message.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n'));
+      attachmentPreview(content,(message.content||[]).filter(b=>b.type==='image').map(b=>({...b,kind:'image'})));break;
+    }
     case 'learning_answer':{
       if(response.sessionId!==activeSessionId)break;
       learningStates.set(learningStateKey(response.sessionId,response.toolCallId,response.blockId),{...response,status:'answered'});
@@ -554,13 +615,17 @@ function onEvent(event) {
       void goalsPanel.session(response.workspace || null, response.learningGoalsEnabled === true);
       $("model-label").textContent = response.modelName || response.model || "选择模型";
       $("model-button").title = response.model || "选择模型";
-      if(activeSessionId!==(response.sessionId||"")){learningCandidate=null;updateLearningAvailability();}
+      if(activeSessionId!==(response.sessionId||"")){
+        sessionDrafts.set(activeSessionId,{text:prompt.value,attachments:[...attachments]});
+        const draft=sessionDrafts.get(response.sessionId);prompt.value=draft?.text||'';attachments=draft?.attachments||[];renderAttachments();
+        submitted=null;recoveredPending=null;queuedTexts.clear();activePromptId=null;cancelledTurnId=null;setRunning(false);learningCandidate=null;updateLearningAvailability();
+      }
       activeSessionId = response.sessionId || "";
       activeSessionName = response.sessionName || "";
       void canvasPanel.session(activeSessionId,response.canvasEnabled===true,response.canvasOpen===true,activeSessionName,response.learningModeEnabled===true||response.learningGoalsEnabled===true);
       updateModelChip(response);$("compaction-state").textContent=response.autoCompaction?"自动压缩已开启":"自动压缩已关闭";
-      $("workspace-label").textContent = (response.workspace || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "无项目";
-      $("workspace-button").title = response.workspace || "切换工作目录";
+      $("workspace-label").textContent = (response.workspace || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "默认工作区";
+      $("workspace-button").title = response.workspace || response.defaultWorkspace || "默认工作区";
       if (response.roleId) { activeRoleId = response.roleId; renderRoles(); }
       void command("list_sessions");
       break;
@@ -604,7 +669,7 @@ function onEvent(event) {
     case "memory_status": if (!running) status(response.status === "organizing" ? "Agent 正在整理记忆…" : "就绪"); break;
     case "canvas": canvasPanel.event(response); break;
     case "sessions": projectPicker.update(response.sessions||[]);renderSessions(response.sessions || []); break;
-    case "history": restoreHistory(response.messages || []); status("就绪"); break;
+    case "history": restoreHistory(response.messages || [],response.timings||[]);status("就绪");for(const replay of response.replay||[])onEvent({payload:replay});break;
     case "stopping": stopping=true;$("stop-button").disabled=true;if(response.turnId){activeTurnId=response.turnId;cancelledTurnId=response.turnId;}status(response.message||"正在取消本地请求…");break;
     case 'cancellation_state': if(cancellationApplies(response,{running,stopping,cancelledTurnId}))status(cancellationStatus(response));break;
     case "turn_forced_end":
@@ -618,7 +683,7 @@ function onEvent(event) {
       recoveryStatus = "";
       if (running&&!stopping) status("PI 正在回复…");
       if (response.kind === "thinking") {
-        if (!thinkingRow) { thinkingRow = disclosure({ kind: "thinking", title: "思考过程", state: "running" }); thinkingRow.head.click(); }
+        if (!thinkingRow) { thinkingRow = disclosure({ kind: "thinking", title: "思考过程", state: "running" }); }
         thinkingRow.content.textContent += response.text || "";
         thinkingRow.brief.textContent = thinkingRow.content.textContent.replace(/\s+/g, " ").slice(0, 120);
       } else {
@@ -644,7 +709,7 @@ function onEvent(event) {
       break;
     }
     case "compaction": $("compaction-state").textContent=response.status==="running"?"正在压缩上下文…":response.status==="error"?"压缩失败："+response.message:response.status==="skipped"?response.message:"上下文已压缩";$("compact-now").disabled=response.status==="running";break;
-    case "started": cancelledTurnId=null;canvasPanel.foreground(); recoveryStatus = ""; retrying = false; submitted = null; turnErrorShown = false; activeTurnId = response.turnId || response.id || null; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
+    case "started": processStartedAt=response.startedAt??null;cancelledTurnId=null;canvasPanel.foreground(); recoveryStatus = ""; retrying = false; submitted = null; turnErrorShown = false; activeTurnId = response.turnId || response.id || null;activePromptId=activeTurnId; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
     case "message_outcome":
       finishThinking(response.outcome);
       assistantRow = null; thinkingRow = null; break;
@@ -661,6 +726,7 @@ function onEvent(event) {
       if (response.final === false) break;
       if (!turnMatches(response)) break;
       setRunning(false); finishThinking(response.outcome);
+      finishProcess(response.outcome,response);
       if(response.outcome?.status==='complete')canvasPanel.clearReference();
       // 恢复出来的题目：本轮成功结束后记成已回答，并把题干一起存下来供历史重放。
       // 这里不依赖 submitted（它可能在别的分支里已被清掉），而是按轮次配对。
@@ -693,6 +759,7 @@ function onEvent(event) {
         break;
       }
       finishThinking({ status: "error" });
+      finishProcess({status:'error'});
       const failedLearningReply=submitted?.learningReply;
       const failedRecovered=submitted?.recoveredReply;
       if (submitted) {
@@ -740,16 +807,18 @@ document.addEventListener('click',event=>{
   })();
 });
 document.addEventListener("click", event => {
-  const link = event.target.closest?.("a[data-local-file]"); if (!link) return; event.preventDefault();
-  void command("resolve_file", { path: link.dataset.localFile }, true).then(r => tauri.core.invoke("open_local_file", { path: r.path })).catch(e => errorRow(String(e.message || e)));
+  const link = event.target.closest?.("a"); if (!link) return;
+  if(/^https?:/i.test(link.getAttribute("href")||"")){event.preventDefault();void browserPanel.open(link.href).catch(e=>errorRow(String(e.message||e)));return;}
+  if(!link.dataset.localFile)return;event.preventDefault();
+  void command("resolve_file", { path: link.dataset.localFile }, true).then(r => /\.html?$/i.test(r.path)?browserPanel.open(r.path):tauri.core.invoke("open_local_file", { path: r.path })).catch(e => errorRow(String(e.message || e)));
 });
 async function command(type, args = {}, awaitReply = false) {
   if(['open_session','new_session','select_role','change_workspace','save_role','set_role_learning'].includes(type))await canvasPanel.flush();
   if (!tauri) return Promise.reject(new Error("需要在 Tauri 桌面窗口中运行"));
   const id = `${commandPrefix}${++sequence}`;
   if(type==='prompt')activePromptId=id;
-  const response = awaitReply ? new Promise((resolve, reject) => { const timer = setTimeout(() => { pending.delete(id); reject(new Error("操作超时，请检查 Agent 连接")); }, type==="compact"?180000:type==="abort"?15000:30000); pending.set(id, { resolve, reject, timer }); }) : Promise.resolve();
-  tauri.core.invoke("agent_command", { command: { id, type, ...args } }).catch((error) => {
+  const response = awaitReply ? new Promise((resolve, reject) => { const timer = setTimeout(() => { pending.delete(id); reject(new Error("操作超时，请检查 Agent 连接")); }, type==="compact"?180000:type==="browser_read"?120000:type?.startsWith("browser_")?60000:type==="abort"?15000:30000); pending.set(id, { resolve, reject, timer }); }) : Promise.resolve();
+  tauri.core.invoke("agent_command", { command: { id, type, sessionId:activeSessionId,...args } }).catch((error) => {
     if (pending.has(id)) { clearTimeout(pending.get(id).timer); pending.get(id).reject(error); pending.delete(id); }
     else onEvent({payload:{type:'error',id,commandType:type,message:String(error)}});
   });
@@ -898,7 +967,7 @@ document.addEventListener("keydown", (event) => {
 });
 updateSendAvailability();
 if (tauri) {
-  tauri.event.listen("agent-event", onEvent).then(() => command("init", {}, true)).then(finishStartup).catch((error) => {finishStartup(); errorRow(String(error));});
+  tauri.event.listen("agent-event", onEvent).then(() => command("init", {}, true)).then(()=>{finishStartup();}).catch((error) => {finishStartup(); errorRow(String(error));});
 } else {
   status("请在 Tauri 桌面窗口中运行");
 }
@@ -909,6 +978,11 @@ function showPinned(value){$("pin-button").setAttribute("aria-pressed",String(va
 $("pin-button").onclick=async()=>{const button=$("pin-button");button.disabled=true;try{showPinned(await tauri.core.invoke("set_window_pinned",{pinned:button.getAttribute("aria-pressed")!=="true"}));}catch(e){errorRow(String(e));}finally{button.disabled=false;}};
 if(tauri)void tauri.core.invoke("window_pinned").then(showPinned).catch(console.error);
 $("hide-button").onclick = () => void tauri?.core.invoke("dismiss");
+const canvasEntry = $("canvas-button");
+if (canvasEntry) {
+  canvasEntry.classList.add("header-canvas-button");
+  $("goals-button").before(canvasEntry);
+}
 const activityOpen = new Set();
 function renderActivity() {
   for(const row of $("activity-list").querySelectorAll(".tool-row")) { if(row.classList.contains("open")) activityOpen.add(row.dataset.recordId); else activityOpen.delete(row.dataset.recordId); }

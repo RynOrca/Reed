@@ -1,4 +1,5 @@
 const paths={
+  browser:["M3 4h18v16H3Z","M3 9h18M7 6.5h.01M10 6.5h.01"],
   graph:["M4 10h5v5H4Z","M16 3h5v5h-5ZM16 17h5v5h-5Z","M9 12h3V5h4M12 12v7h4"],
   fit:["M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5"],
   pin:["M9 3h6l-1 6 4 4v2H6v-2l4-4-1-6Z","M12 15v7"],

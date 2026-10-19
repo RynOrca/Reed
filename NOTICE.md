@@ -38,3 +38,7 @@ Tauri 及 Rust / npm 依赖各自遵循包内许可证。依赖列表由 Cargo.l
 
 
 KaTeX 0.19.0 is distributed under the MIT License. Copyright Khan Academy and other contributors. Source: https://github.com/KaTeX/KaTeX. License: desktop/web/vendor/KATEX-LICENSE. Reed uses its local MathML output for mathematical typesetting.
+
+## 阅读字体
+
+Noto Serif SC 可变字体使用 SIL Open Font License 1.1，离线副本位于 `desktop/web/assets/fonts/`，包含完整许可证 `OFL.txt` 与版权说明 `FONT-NOTICE.txt`。字体无损转换为 WOFF，未删减字形。来源：https://github.com/notofonts/noto-cjk 。该字体用于学习正文，标题和界面控件使用系统无衬线字体，代码使用等宽字体。

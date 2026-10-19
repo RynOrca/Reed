@@ -49,7 +49,7 @@ function inline(tokens = [], options = {}) {
         if (/^(https?:|mailto:)/i.test(url)) {
           node = document.createElement("a"); node.href = url; node.target = "_blank"; node.rel = "noopener noreferrer"; node.append(inline(token.tokens,options));
         } else if (/^(summon-file:|file:|[a-z]:[\\/]|[./\\])|\.(html?|md|txt|pdf)(#.*)?$/i.test(url) && !/^(javascript|data|vbscript):/i.test(url)) {
-          node = document.createElement("a"); node.href = "#"; node.dataset.localFile = url; node.title = "在默认应用中打开本地文件"; node.append(inline(token.tokens,options));
+          node = document.createElement("a"); node.href = "#"; node.dataset.localFile = url; node.title = /\.html?(?:#.*)?$/i.test(url)?"在内置浏览器中预览":"在默认应用中打开本地文件";if(/\.html?(?:#.*)?$/i.test(url))node.className='html-preview-link';node.append(inline(token.tokens,options));
         } else { node = document.createTextNode(token.text || url); }
         break;
       }

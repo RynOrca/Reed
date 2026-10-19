@@ -7,7 +7,7 @@ const recoveryHint = "The previous model request ended without a visible answer 
 // The model looped in its thinking phase and never reached a tool call. Planning
 // again is exactly what failed, so this continuation asks for one concrete action
 // instead of resuming the plan. It adds no time or token limit.
-const actionHint = "The previous attempt was stopped because it kept repeating the same plan line without any tool call. Do not explain or restate the plan. Immediately perform the smallest concrete step now: call exactly one tool with complete valid arguments (write the smallest runnable file first, then extend it) or return the final answer. After each tool result, say one short sentence about what changed and continue with the next step.";
+const actionHint = "The previous attempt was stopped because it kept repeating the same plan line without any tool call. Do not explain or restate the plan. Use the existing tool results. Immediately perform the smallest concrete step: call exactly one tool with complete valid arguments or return the final answer. Prefer a focused edit when repairing an existing file; write a new file only when the task requires one. After each tool result, briefly state what changed and continue with the next step.";
 
 function replayCompletedThinking(payload, message) {
   // The SDK drops Chat Completions assistants with reasoning but no content/tools.
