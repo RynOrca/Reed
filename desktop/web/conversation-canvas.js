@@ -197,6 +197,7 @@ export function createConversationCanvas({command,tauri,prompt,isRunning,onJump,
   document.addEventListener('keydown',e=>{if(e.key!=='Escape'||document.querySelector('dialog[open]'))return;if(!source.hidden){closeSource();e.preventDefault();}else if(opened&&e.target.closest?.('.canvas-pane')){void setOpen(false);e.preventDefault();}});
   new ResizeObserver(()=>{if(opened){if(!viewTouched)fit(true,false);else transform();}}).observe(viewport);
   return {
+    close:()=>opened?setOpen(false):Promise.resolve(),
     async session(next,enabled,backendOpen=false,name='',entryEnabled=enabled){
       q('title').textContent=name||'当前对话';
       // Discoverability follows the learning entry; permission still gates every operation.

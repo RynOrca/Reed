@@ -7,6 +7,7 @@ import {cancellationStatus,cancellationApplies} from './cancellation-status.js';
 import {createGoals} from "./goals.js";
 import {createOutline} from "./reading-outline.js";
 import {createConversationCanvas} from "./conversation-canvas.js";
+import {createBrowserWorkspace} from './browser-workspace.js';
 import {createProjectPicker} from "./project-picker.js";
 import {createMessageNavigation} from "./message-navigation.js";
 import {renderMarkdown} from "./markdown.js";
@@ -120,6 +121,21 @@ const canvasPanel = createConversationCanvas({command,tauri,prompt,isRunning:()=
   row.animate([{backgroundColor:"var(--goal-accent-soft)"},{backgroundColor:"transparent"}],{duration:1600});
 }});
 createMessageNavigation({messages,transcript,onNavigate:()=>{followLatest=false;}});
+const browserPanel=createBrowserWorkspace({tauri,command,prompt,beforeOpen:()=>canvasPanel.close(),onError:error=>errorRow(String(error.message||error)),
+  onQuote:({text,context,source,url,action})=>{
+    const quote=`引用「${source}」\n来源：${url}\n\n${text.split('\n').map(line=>'> '+line).join('\n')}${context&&context!==text?'\n\n所在段落：'+context:''}${action?'\n\n'+action:''}`;
+    prompt.value+=(prompt.value.trim()?'\n\n':'')+quote;prompt.dispatchEvent(new Event('input'));
+  },
+  onPage:async result=>{
+    const page=JSON.parse(result.content.find(block=>block.type==='text').text),images=result.content.filter(block=>block.type==='image');
+    if(attachments.length+images.length+1>8)throw Error('页面阅读需要附件空间，请先移除输入框中已有的附件后重试');
+    const body=`# ${page.title}\n\n来源：${page.url}\n\n${page.text}\n\n读取范围：${JSON.stringify(page.coverage)}\n\n页面标题：${JSON.stringify(page.headings)}\n\n链接：${JSON.stringify(page.links)}`;
+    const bytes=new TextEncoder().encode(body);let binary='';for(let offset=0;offset<bytes.length;offset+=4096)binary+=String.fromCharCode(...bytes.subarray(offset,offset+4096));
+    attachments.push({kind:'file',name:'网页阅读.md',mimeType:'text/markdown',data:btoa(binary)});
+    for(const [index,image] of images.entries())attachments.push({kind:'image',mimeType:image.mimeType,data:image.data,name:`网页截图 ${index+1}`});
+    renderAttachments();prompt.value+=(prompt.value.trim()?'\n\n':'')+`请阅读当前网页「${page.title}」。正文已附在“网页阅读.md”中${images.length?`，另附 ${images.length} 张真实页面截图`:''}。${page.coverage.complete?'':'本次尚未覆盖全部长页或嵌入内容，请通过 browser 的 read_page 按需继续读取。'}`;prompt.dispatchEvent(new Event('input'));
+  },
+});
 transcript.addEventListener("scroll",()=>{followLatest=transcript.scrollHeight-transcript.clientHeight-transcript.scrollTop<65;},{passive:true});
 
 function status(text) {
@@ -556,7 +572,7 @@ async function newSession() {
 function onEvent(event) {
   const response = event.payload;
   if (!response || typeof response !== "object") return;
-  const handledReply = Boolean(response.id && pending.has(response.id) && ["ack", "error", "done", "conversation", "file_staged", "goals", "sessions"].includes(response.type));
+  const handledReply = Boolean(response.id && pending.has(response.id) && ["ack", "error", "done", "conversation", "file_staged", "goals", "sessions", "browser_result"].includes(response.type));
   if (handledReply) {
     const { resolve, reject, timer } = pending.get(response.id); clearTimeout(timer); pending.delete(response.id);
     response.type === "error" ? reject(new Error(response.message)) : resolve(response);
@@ -564,6 +580,7 @@ function onEvent(event) {
   if(response.sessionId&&activeSessionId&&response.sessionId!==activeSessionId&&!['session','sessions'].includes(response.type))return;
   if(response.type==="ack"&&response.stale){stopping=false;$("stop-button").disabled=false;status(running?"这一轮已结束，正在等待 Agent 同步…":"已停止");}
   switch (response.type) {
+    case 'browser_state':browserPanel.event(response);break;
     case 'restore_user':{
       const message=response.message||{};const content=messageRow('user',(message.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n'));
       attachmentPreview(content,(message.content||[]).filter(b=>b.type==='image').map(b=>({...b,kind:'image'})));break;
@@ -789,14 +806,14 @@ document.addEventListener('click',event=>{
 });
 document.addEventListener("click", event => {
   const link = event.target.closest?.("a[data-local-file]"); if (!link) return; event.preventDefault();
-  void command("resolve_file", { path: link.dataset.localFile }, true).then(r => tauri.core.invoke("open_local_file", { path: r.path })).catch(e => errorRow(String(e.message || e)));
+  void command("resolve_file", { path: link.dataset.localFile }, true).then(r => /\.html?$/i.test(r.path)?browserPanel.open(r.path):tauri.core.invoke("open_local_file", { path: r.path })).catch(e => errorRow(String(e.message || e)));
 });
 async function command(type, args = {}, awaitReply = false) {
   if(['open_session','new_session','select_role','change_workspace','save_role','set_role_learning'].includes(type))await canvasPanel.flush();
   if (!tauri) return Promise.reject(new Error("需要在 Tauri 桌面窗口中运行"));
   const id = `${commandPrefix}${++sequence}`;
   if(type==='prompt')activePromptId=id;
-  const response = awaitReply ? new Promise((resolve, reject) => { const timer = setTimeout(() => { pending.delete(id); reject(new Error("操作超时，请检查 Agent 连接")); }, type==="compact"?180000:type==="abort"?15000:30000); pending.set(id, { resolve, reject, timer }); }) : Promise.resolve();
+  const response = awaitReply ? new Promise((resolve, reject) => { const timer = setTimeout(() => { pending.delete(id); reject(new Error("操作超时，请检查 Agent 连接")); }, type==="compact"?180000:type==="browser_read"?120000:type?.startsWith("browser_")?60000:type==="abort"?15000:30000); pending.set(id, { resolve, reject, timer }); }) : Promise.resolve();
   tauri.core.invoke("agent_command", { command: { id, type, sessionId:activeSessionId,...args } }).catch((error) => {
     if (pending.has(id)) { clearTimeout(pending.get(id).timer); pending.get(id).reject(error); pending.delete(id); }
     else onEvent({payload:{type:'error',id,commandType:type,message:String(error)}});
@@ -946,7 +963,7 @@ document.addEventListener("keydown", (event) => {
 });
 updateSendAvailability();
 if (tauri) {
-  tauri.event.listen("agent-event", onEvent).then(() => command("init", {}, true)).then(finishStartup).catch((error) => {finishStartup(); errorRow(String(error));});
+  tauri.event.listen("agent-event", onEvent).then(() => command("init", {}, true)).then(()=>{finishStartup();browserPanel.prewarm();}).catch((error) => {finishStartup(); errorRow(String(error));});
 } else {
   status("请在 Tauri 桌面窗口中运行");
 }
