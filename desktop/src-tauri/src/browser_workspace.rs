@@ -1,9 +1,18 @@
 use serde_json::{json, Value};
-use std::{collections::HashSet, sync::{mpsc, Mutex}, time::{Duration, Instant}};
+use std::{collections::HashSet, sync::{mpsc, Mutex, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
 use tauri::{Emitter, Manager, WebviewUrl};
 
 #[derive(Default)]
-pub struct BrowserWorkspace { failed: Mutex<HashSet<String>> }
+pub struct BrowserWorkspace { failed: Mutex<HashSet<String>>, prewarming:AtomicBool }
+
+pub fn prewarm(app:&tauri::AppHandle){
+    if app.state::<BrowserWorkspace>().prewarming.swap(true,Ordering::SeqCst){return;}
+    let handle=app.clone();
+    std::thread::spawn(move || {
+        let result=request(handle,json!({"surface":"preview","method":"ensure"}));
+        crate::startup_log(&format!("Browser background prewarm: {result:?}"));
+    });
+}
 
 fn label(surface: &str) -> Result<&'static str, String> {
     match surface { "preview" => Ok("reed-browser-preview"), "agent" => Ok("reed-browser-agent"), _ => Err("无效浏览器视图".into()) }
@@ -22,6 +31,7 @@ fn ensure(app: &tauri::AppHandle, surface: &str) -> Result<Value, String> {
     let titles=app.clone();
     let selection=surface=="preview";
     let builder=tauri::WebviewWindowBuilder::new(app,target,WebviewUrl::External("about:blank".parse().unwrap()))
+        .title(if selection {"Reed 网页预览"}else{"Reed 网页验收"})
         .visible(false).skip_taskbar(true).decorations(false).shadow(false).resizable(false).inner_size(1280.,800.)
         .data_directory(profile)
         .initialization_script(if selection {include_str!("browser_selection.js")}else{""})
@@ -60,7 +70,7 @@ fn ensure(app: &tauri::AppHandle, surface: &str) -> Result<Value, String> {
                 let hwnd=view.hwnd().map_err(|e|e.to_string())?.0 as isize;
                 let owner=parent.hwnd().map_err(|e|e.to_string())?.0 as isize;
                 #[link(name="user32")]extern "system"{fn SetParent(child:isize,parent:isize)->isize;fn GetParent(child:isize)->isize;fn GetWindowLongPtrW(hwnd:isize,index:i32)->isize;fn SetWindowLongPtrW(hwnd:isize,index:i32,value:isize)->isize;}
-                unsafe{SetParent(hwnd,owner);let style=GetWindowLongPtrW(hwnd,-16);SetWindowLongPtrW(hwnd,-16,(style&!(0x80000000_u32 as isize))|0x40000000);if GetParent(hwnd)!=owner{let _=view.destroy();return Err("无法嵌入网页预览窗口".into());}}
+                unsafe{SetParent(hwnd,owner);let style=GetWindowLongPtrW(hwnd,-16);SetWindowLongPtrW(hwnd,-16,(style&!(0x80000000_u32 as isize))|0x40000000|0x04000000);if GetParent(hwnd)!=owner{let _=view.destroy();return Err("无法嵌入网页预览窗口".into());}}
             }
             Ok(json!({"engine":"webview2","reused":false,"startupMs":started.elapsed().as_millis()}))
         },
@@ -85,10 +95,23 @@ pub fn request(app: tauri::AppHandle, input: Value) -> Result<Value,String> {
                 if let Some(view)=handle.get_webview_window(&target){view.destroy().map_err(|e|e.to_string())?;}
                 return Ok(Some(json!({})));
             }
-            let view=handle.get_webview_window(&target).ok_or("浏览器尚未启动")?;
+            let existing=handle.get_webview_window(&target);
+            if method=="visibility" {return Ok(Some(json!({"exists":existing.is_some(),"visible":existing.as_ref().map(native_visible).unwrap_or(false)})));}
+            if method=="bounds" && params["visible"]==false && existing.is_none(){return Ok(Some(json!({})));}
+            let view=existing.ok_or("浏览器尚未启动")?;
             if method=="bounds" {
                 if surface!="preview" {return Err("只能调整预览面板".into());}
-                if params["visible"]==false {view.hide().map_err(|e|e.to_string())?;return Ok(Some(json!({})));}
+                if params["visible"]==false {
+                    // SetWindowPos(SWP_SHOWWINDOW) bypasses winit's visibility
+                    // cache. Hide through the same Win32 layer, not Window.hide.
+                    #[cfg(windows)]{
+                        #[link(name="user32")]extern "system"{fn ShowWindow(hwnd:isize,command:i32)->i32;}
+                        unsafe{ShowWindow(view.hwnd().map_err(|e|e.to_string())?.0 as isize,0);}
+                    }
+                    #[cfg(not(windows))]view.hide().map_err(|e|e.to_string())?;
+                    if native_visible(&view){return Err("网页预览未能隐藏".into());}
+                    return Ok(Some(json!({})));
+                }
                 let number=|name:&str|params[name].as_f64().filter(|v|v.is_finite()&&v.abs()<50000.).ok_or_else(||format!("无效的预览尺寸：{name}"));
                 let (x,y,w,h)=(number("x")?,number("y")?,number("width")?,number("height")?);
                 if w<100. || h<100. {return Err("预览区域太小".into());}
@@ -130,6 +153,14 @@ pub fn request(app: tauri::AppHandle, input: Value) -> Result<Value,String> {
         match result {Ok(Some(value))=>{let _=tx.send(Ok(value));},Err(error)=>{let _=tx.send(Err(error));},_=>{}}
     }).map_err(|e|e.to_string())?;
     rx.recv_timeout(Duration::from_secs(30)).map_err(|_|"内置浏览器没有及时响应".to_string())?
+}
+
+fn native_visible(view:&tauri::WebviewWindow)->bool{
+    #[cfg(windows)]{
+        #[link(name="user32")]extern "system"{fn IsWindowVisible(hwnd:isize)->i32;}
+        view.hwnd().map(|hwnd|unsafe{IsWindowVisible(hwnd.0 as isize)!=0}).unwrap_or(false)
+    }
+    #[cfg(not(windows))]{view.is_visible().unwrap_or(false)}
 }
 
 #[tauri::command]

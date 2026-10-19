@@ -241,6 +241,11 @@ fn ui_ready(window: tauri::WebviewWindow) -> Result<(), String> {
     if window.label()=="main" && std::env::args().any(|a|a=="--autostart") {return Ok(());}
     window.show().map_err(|e|e.to_string())?;
     startup_log(&format!("ui_ready showed {} (visible={})", window.label(), window.is_visible().unwrap_or(false)));
+    if window.label()=="main" {
+        // Main is already visible. Initialization runs in the background and is
+        // independent of Agent capability switches or opening the first HTML.
+        browser_workspace::prewarm(app);
+    }
     Ok(())
 }
 
@@ -478,6 +483,7 @@ fn show_main(app: &tauri::AppHandle) {
         }
         let _ = window.unminimize();
         let _ = window.show();
+        browser_workspace::prewarm(app);
         let _ = window.set_focus();
     }
 }

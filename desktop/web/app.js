@@ -8,6 +8,7 @@ import {createGoals} from "./goals.js";
 import {createOutline} from "./reading-outline.js";
 import {createConversationCanvas} from "./conversation-canvas.js";
 import {createBrowserWorkspace} from './browser-workspace.js';
+import {createWorkspacePanels} from './workspace-panels.mjs';
 import {createProjectPicker} from "./project-picker.js";
 import {createMessageNavigation} from "./message-navigation.js";
 import {renderMarkdown} from "./markdown.js";
@@ -106,7 +107,8 @@ $("goals-button").append(icon("book"));
 $("goals-button").onclick = () => goalsPanel.open();
 
 const projectPicker=createProjectPicker({button:$('workspace-button'),command,tauri,isRunning:()=>running,onError:errorRow,onSelect:()=>{closeHistory();prompt.focus();}});
-const canvasPanel = createConversationCanvas({command,tauri,prompt,isRunning:()=>running,reportError:errorRow,onUnavailable:()=>{
+const workspacePanels=createWorkspacePanels();
+const canvasPanel = createConversationCanvas({command,tauri,prompt,panels:workspacePanels,isRunning:()=>running,reportError:errorRow,onUnavailable:()=>{
   const role=roles.find(item=>item.id===activeRoleId);
   if(!role){void command('get_state').catch(roleError);return;}
   openRoleEditor(role);if(!rolesDialog.open)rolesDialog.showModal();
@@ -121,7 +123,7 @@ const canvasPanel = createConversationCanvas({command,tauri,prompt,isRunning:()=
   row.animate([{backgroundColor:"var(--goal-accent-soft)"},{backgroundColor:"transparent"}],{duration:1600});
 }});
 createMessageNavigation({messages,transcript,onNavigate:()=>{followLatest=false;}});
-const browserPanel=createBrowserWorkspace({tauri,command,prompt,beforeOpen:()=>canvasPanel.close(),onError:error=>errorRow(String(error.message||error)),
+const browserPanel=createBrowserWorkspace({tauri,command,prompt,panels:workspacePanels,onError:error=>errorRow(String(error.message||error)),
   onQuote:({text,context,source,url,action})=>{
     const quote=`引用「${source}」\n来源：${url}\n\n${text.split('\n').map(line=>'> '+line).join('\n')}${context&&context!==text?'\n\n所在段落：'+context:''}${action?'\n\n'+action:''}`;
     prompt.value+=(prompt.value.trim()?'\n\n':'')+quote;prompt.dispatchEvent(new Event('input'));
@@ -963,7 +965,7 @@ document.addEventListener("keydown", (event) => {
 });
 updateSendAvailability();
 if (tauri) {
-  tauri.event.listen("agent-event", onEvent).then(() => command("init", {}, true)).then(()=>{finishStartup();browserPanel.prewarm();}).catch((error) => {finishStartup(); errorRow(String(error));});
+  tauri.event.listen("agent-event", onEvent).then(() => command("init", {}, true)).then(()=>{finishStartup();}).catch((error) => {finishStartup(); errorRow(String(error));});
 } else {
   status("请在 Tauri 桌面窗口中运行");
 }

@@ -2,7 +2,7 @@ import {icon} from './icons.js';
 import {renderMarkdown} from './markdown.js';
 import {connectionGeometry,visibleCanvasNodes,learningDescendants} from './canvas-geometry.js';
 
-export function createConversationCanvas({command,tauri,prompt,isRunning,onJump,reportError,onUnavailable}){
+export function createConversationCanvas({command,tauri,prompt,panels,isRunning,onJump,reportError,onUnavailable}){
   const shell=document.querySelector('.chat-shell'),body=document.querySelector('.chat-body'),transcript=document.getElementById('transcript');
   const workspace=document.createElement('div');workspace.className='reed-workspace';shell.before(workspace);
   const pane=document.createElement('section');pane.className='canvas-pane';pane.hidden=true;pane.setAttribute('aria-label','对话画布');
@@ -177,7 +177,9 @@ export function createConversationCanvas({command,tauri,prompt,isRunning,onJump,
     }catch(error){if(ticket===epoch){setStatus(error.message,'error');if(!value)reportError(error.message);if(value&&state==='error'&&!graph)q('empty').hidden=false;}}
     finally{if(ticket===epoch)transitioning=false;}
   }
-  handle.onclick=()=>{if(!available){onUnavailable?.();return;}void setOpen(!opened);};q('close').onclick=()=>void setOpen(false);
+  panels.register('canvas',{isOpen:()=>opened,open:()=>setOpen(true),close:()=>opened?setOpen(false):Promise.resolve()});
+  const requestClose=()=>panels.close('canvas').catch(error=>reportError(error.message));
+  handle.onclick=()=>{if(!available){onUnavailable?.();return;}void panels.toggle('canvas').catch(error=>reportError(error.message));};q('close').onclick=()=>void requestClose();
   q('retry').onclick=async()=>{if(saveFailure){await flush();return;}try{setStatus('正在重新整理…','organizing');if(!graph){const result=await command('canvas_open',{sessionId},true);applyGraph(result.graph);}else await command('canvas_retry',{sessionId},true);}catch(error){setStatus(error.message,'error');}};
   q('arrange').onclick=()=>{if(!graph)return;const positions=visibleCanvasNodes(graph).map((n,index)=>({id:n.id,x:24+Math.floor(index/4)*290,y:40+(index%4)*190}));for(const change of positions){dirtyNodes.set(change.id,change);Object.assign(graph.nodes.find(n=>n.id===change.id),change);}viewTouched=false;render();fit(true,false);void flush();};
   q('plus').onclick=()=>zoom(scale*1.15);q('minus').onclick=()=>zoom(scale/1.15);q('zoom').onclick=()=>zoom(1);q('fit').onclick=()=>fit();q('minimap').onclick=()=>fit();clear.onclick=clearReference;
@@ -194,7 +196,7 @@ export function createConversationCanvas({command,tauri,prompt,isRunning,onJump,
   function finish(e){if(!gesture||gesture.pointer!==e.pointerId)return;const g=gesture;gesture=null;viewport.classList.remove('panning');for(const el of nodeElements.values())el.classList.remove('dragging');if(viewport.hasPointerCapture(e.pointerId))viewport.releasePointerCapture(e.pointerId);if(g.node){if(g.moved)editNode({id:g.node.id,x:g.node.x,y:g.node.y});else if(e.type!=='pointercancel')void showSource(g.node.id);}else if(g.moved)saveView(false);if(deferredGraph){const next=deferredGraph;deferredGraph=null;applyGraph(next);}}
   viewport.addEventListener('pointerup',finish);viewport.addEventListener('pointercancel',finish);
   viewport.addEventListener('keydown',e=>{if(e.target!==viewport)return;if(['+','=','-','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();if(['+','=','-'].includes(e.key))zoom(scale*(e.key==='-'?1/1.15:1.15));else{pan.x+=e.key==='ArrowLeft'?40:e.key==='ArrowRight'?-40:0;pan.y+=e.key==='ArrowUp'?40:e.key==='ArrowDown'?-40:0;transform();saveView();}}});
-  document.addEventListener('keydown',e=>{if(e.key!=='Escape'||document.querySelector('dialog[open]'))return;if(!source.hidden){closeSource();e.preventDefault();}else if(opened&&e.target.closest?.('.canvas-pane')){void setOpen(false);e.preventDefault();}});
+  document.addEventListener('keydown',e=>{if(e.key!=='Escape'||document.querySelector('dialog[open]'))return;if(!source.hidden){closeSource();e.preventDefault();}else if(opened&&e.target.closest?.('.canvas-pane')){void requestClose();e.preventDefault();}});
   new ResizeObserver(()=>{if(opened){if(!viewTouched)fit(true,false);else transform();}}).observe(viewport);
   return {
     close:()=>opened?setOpen(false):Promise.resolve(),
