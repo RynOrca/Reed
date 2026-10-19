@@ -55,6 +55,8 @@ description: 正文学习块与快捷回复的完整生成规范。在讲解、�
 
 `choices` 的每个选项点击后发送的是 `replyText`，写成用户会真实说出口的完整句子，例如“我算出来明文是 3，因为它满足条件”。`fill` 只有一个输入框，用户点“提交回答”才发送。
 
+每个选项必须同时提供 `id`、`label`、`replyText`，例如 `{"id":"a","label":"先看总结","replyText":"请先帮我总结重点，我再写笔记。"}`。`id` 在该题内唯一，`label` 是按钮上显示的短文字；不要只写 `replyText`。需要重读规范时，使用技能目录中给出的完整 `SKILL.md` 路径，不要把技能 ID（如 `builtin-learning-blocks`）当作当前项目的相对目录。
+
 ## 四、完整调用示例
 
 讲解同态加法并把“为什么密文相乘等于明文相加”摊开，最后问一个选择题：
@@ -75,7 +77,7 @@ description: 正文学习块与快捷回复的完整生成规范。在讲解、�
         {"expression": "D(c_1c_2) = m_1 + m_2 \\bmod n", "reason": "结果与「加密 $m_1+m_2$ 所得密文」形式完全一致，解密即得明文之和"}
       ]
     },
-    {"id": "purpose", "type": "callout", "title": "能力边界", "text": "只支持密文相加 $E(m_1)\\cdot E(m_2) \\to m_1+m_2$ 与密文乘标量 $E(m)^k \\to m\\cdot k$，不支持两个未知明文之间的同态乘法，因此是加法部分同态（PHE）。", "tone": "note"},
+    {"id": "purpose", "type": "callout", "title": "能力边界", "fallbackText": "仅支持密文相加与密文乘标量，不支持两个未知明文相乘。", "text": "只支持密文相加 $E(m_1)\\cdot E(m_2) \\to m_1+m_2$ 与密文乘标量 $E(m)^k \\to m\\cdot k$，不支持两个未知明文之间的同态乘法，因此是加法部分同态（PHE）。", "tone": "note"},
     {
       "id": "check",
       "type": "choices",

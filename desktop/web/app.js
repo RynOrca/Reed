@@ -1,4 +1,5 @@
 import {renderLearning,replyText} from './learning-blocks.js';
+import {renderLearningFailure} from './learning-fallback.js';
 import {createLearningMode} from './learning-mode.js';
 import {requestStatus} from './request-status.js';
 import {cancellationStatus,cancellationApplies} from './cancellation-status.js';
@@ -329,7 +330,7 @@ function toolEnd(event) {
       learning.content.replaceChildren(view.root);learning.view=view;updateLearningAvailability();
     }else{
       const blocks=Array.isArray(event.result)?event.result:event.result?.content||[];
-      learning.content.textContent=blocks.filter(b=>b.type==='text').map(b=>b.text).join('\n')||'图解暂时无法显示，请继续阅读正文。';
+      renderLearningFailure(learning.content,{fallback:learning.fallback,content:blocks});
     }
     scrollToLatest();return;
   }

@@ -22,10 +22,14 @@ test('真实 bridge 学习块：正文顺序、回执持久化、重启恢复、
     const userText=typeof user?.content==='string'?user.content:(user?.content||[]).map(b=>b.text||'').join('');
     res.writeHead(200,{'content-type':'text/event-stream'});
     const send=(delta,finish=null)=>res.write(`data: ${JSON.stringify({id:'synthetic',choices:[{index:0,delta,finish_reason:finish}]})}\n\n`);
-    if(!tool&&['解释非零条件','填空练习'].includes(userText)){
+    if(!tool&&['解释非零条件','填空练习','缺字段选项','非法选项'].includes(userText)){
       assert.ok(body.tools.some(t=>t.function.name==='show_learning'));
       send({role:'assistant',content:'先看条件的输入与输出。'});
-      send({tool_calls:[{index:0,id:userText==='填空练习'?'fill-call':'learning-call',type:'function',function:{name:'show_learning',arguments:JSON.stringify(userText==='填空练习'?fillSpec:spec)}}]});send({},'tool_calls');
+      let payload=userText==='填空练习'?fillSpec:spec;
+      const id=({'填空练习':'fill-call','缺字段选项':'missing-call','非法选项':'invalid-call'})[userText]||'learning-call';
+      if(userText==='缺字段选项')payload={...spec,blocks:[{...question,options:question.options.map(({replyText})=>({replyText}))}]};
+      if(userText==='非法选项')payload={...spec,blocks:[{...question,options:[{label:'错误选项'}]}]};
+      send({tool_calls:[{index:0,id,type:'function',function:{name:'show_learning',arguments:JSON.stringify(payload)}}]});send({},'tool_calls');
     }else{send({role:'assistant',content:tool?'图解后继续解释：请尝试回答。':'回答已收到：非零整数为真。'});send({},'stop');}
     res.end('data: [DONE]\n\n');
   });
@@ -63,6 +67,21 @@ test('真实 bridge 学习块：正文顺序、回执持久化、重启恢复、
     const canvas=new ConversationCanvasStore(data);const graph=await canvas.sync(sessionId,entries);assert.equal(graph.edges.filter(e=>e.kind==='learning_reply').length,2);
     const edge=graph.edges.find(e=>e.to===submitted.messageId);assert.equal(edge.from,submitted.learningReply.parentUserId);assert.equal(edge.type,'作答');
     await canvas.edit(sessionId,{nodes:[{id:edge.from,answersCollapsed:true}]});const collapsed=await new ConversationCanvasStore(data).get(sessionId);assert.equal(collapsed.nodes.length,graph.nodes.length);assert.equal(visibleCanvasNodes(collapsed).some(n=>n.id===edge.to),false);
+
+    await command('prompt',{text:'缺字段选项'});
+    const repairedEvent=seen.find(e=>e.type==='tool_end'&&e.id==='missing-call');
+    assert.equal(repairedEvent.isError,false);
+    const repaired=repairedEvent.result.details.learning.blocks[0];
+    assert.equal(repaired.options[0].id,'choice-1');assert.equal(repaired.options[0].label,question.options[0].replyText);
+    await stop();await start();
+    const repairedHistory=seen.findLast(e=>e.type==='history').messages;
+    assert.deepEqual(repairedHistory.find(m=>m.toolCallId==='missing-call').details.learning.blocks[0],repaired);
+    await command('prompt',{text:learningReplyText(repaired,repaired.options[0]),learningReply:{sessionId,toolCallId:'missing-call',blockId:'q',optionId:'choice-1'}});
+    await command('prompt',{text:'非法选项'});
+    const rejected=seen.find(e=>e.type==='tool_end'&&e.id==='invalid-call');assert.equal(rejected.isError,true);
+    const error=rejected.result.content.map(b=>b.text||'').join('\n');
+    assert.match(error,/blocks\[0\]\.options\[0\].*replyText/);
+    assert.doesNotMatch(error,/Received arguments|must have required properties nodes/);
 
   }finally{for(const w of waiters)clearTimeout(w.timer);await stop();server.closeAllConnections();await new Promise(r=>server.close(r));await rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
 });
