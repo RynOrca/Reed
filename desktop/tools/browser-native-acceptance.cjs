@@ -6,7 +6,7 @@ const {spawn,execFile}=require('node:child_process'),{promisify}=require('node:u
 const {createServer}=require('node:http');
 const {chromium}=require(process.env.SUMMON_PLAYWRIGHT_PATH||'C:/Users/Orca/AppData/Local/Programs/Python/Python314/Lib/site-packages/playwright/driver/package');
 const execute=promisify(execFile);
-async function resizeOwnedWindow(pid,width,height){
+async function resizeOwnedWindow(pid,width,height,capture=''){
   // Exercise real OS resizing without granting web content window-write APIs.
   const script=`Add-Type -TypeDefinition @'
 using System;
@@ -15,13 +15,24 @@ public static class ReedTestResize {
  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int w,int hgt,uint flags);
+ [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+ [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out Rect r);
+ public struct Rect {public int Left,Top,Right,Bottom;}
 }
 '@
 [ReedTestResize]::SetProcessDPIAware()|Out-Null
 $taskWindow=(Get-Process -Id ${Number(pid)}).MainWindowHandle
 if($taskWindow -eq 0){throw 'Owned test window not found'}
 $taskScale=[ReedTestResize]::GetDpiForWindow($taskWindow)/96.0
-if(-not [ReedTestResize]::SetWindowPos($taskWindow,[IntPtr]::Zero,0,0,[int](${Number(width)}*$taskScale),[int](${Number(height)}*$taskScale),0x16)){throw 'Owned window resize failed'}
+if(${Number(width)} -gt 0 -and -not [ReedTestResize]::SetWindowPos($taskWindow,[IntPtr]::Zero,0,0,[int](${Number(width)}*$taskScale),[int](${Number(height)}*$taskScale),0x16)){throw 'Owned window resize failed'}
+${capture?`Add-Type -AssemblyName System.Drawing
+[ReedTestResize]::SetForegroundWindow($taskWindow)|Out-Null
+Start-Sleep -Milliseconds 200
+$taskRect=New-Object ReedTestResize+Rect
+[ReedTestResize]::GetWindowRect($taskWindow,[ref]$taskRect)|Out-Null
+$taskBitmap=New-Object Drawing.Bitmap ($taskRect.Right-$taskRect.Left),($taskRect.Bottom-$taskRect.Top)
+$taskGraphics=[Drawing.Graphics]::FromImage($taskBitmap)
+try{$taskGraphics.CopyFromScreen($taskRect.Left,$taskRect.Top,0,0,$taskBitmap.Size);$taskBitmap.Save([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(capture).toString('base64')}')),[Drawing.Imaging.ImageFormat]::Png)}finally{$taskGraphics.Dispose();$taskBitmap.Dispose()}`:''}
 `;
   await execute('powershell.exe',['-NoProfile','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{windowsHide:true});
 }
@@ -65,11 +76,16 @@ if(-not [ReedTestResize]::SetWindowPos($taskWindow,[IntPtr]::Zero,0,0,[int](${Nu
     }),{type,args});
     const native=(surface,method,params={})=>page.evaluate(request=>window.__TAURI__.core.invoke('browser_host',{request}),{surface,method,params});
     const evaluate=async expression=>(await native('preview','Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true})).result.value;
+    for(let i=0;i<100;i++){if((await native('preview','visibility')).exists)break;await page.waitForTimeout(100);}
+    assert.deepEqual(await native('preview','visibility'),{exists:true,visible:false});
+    assert.equal((await native('preview','ensure')).reused,true);checks.push('未点击HTML即已后台预热，实例存在且原生窗口隐藏');
+    assert.notEqual(await page.locator('#browser-button svg').innerHTML(),await page.locator('#goals-button svg').innerHTML());checks.push('浏览器图标与学习目标图标不同');
     await command('change_workspace',{path:project});
     const provider=await command('save_provider',{template:'custom',name:'内置浏览器隔离验收',baseUrl:`http://127.0.0.1:${server.address().port}/v1`,protocol:'openai-completions'});
     await command('discover_models',{providerId:provider.providerId});
     await command('update_model',{providerId:provider.providerId,model:{id:'native-vision',enabled:true,vision:true,reasoning:false,contextWindow:65536,maxTokens:8192}});
     await command('select_model',{provider:provider.providerId,model:'native-vision'});
+    await command('set_role_learning',{roleId:'agent',learningModeEnabled:true,canvasEnabled:true});
     await command('prompt',{text:'NATIVE_OPEN_TEST'});
     const link=page.locator('a[data-local-file]').filter({hasText:'在内置浏览器打开 HTML'});await link.waitFor();
     const opening=Date.now();await link.click();
@@ -121,7 +137,26 @@ if(-not [ReedTestResize]::SetWindowPos($taskWindow,[IntPtr]::Zero,0,0,[int](${Nu
     await page.locator('[data-browser=read]').click();await page.waitForFunction(()=>document.querySelectorAll('#attachment-strip .attachment-chip').length>1);
     assert.ok((await page.locator('#prompt').inputValue()).includes('网页阅读.md'));checks.push('读取整页按钮将正文和真实图片加入草稿附件，不自动发送');
     while(await page.locator('#attachment-strip .attachment-chip button').count())await page.locator('#attachment-strip .attachment-chip button').first().click();
-    await page.locator('[data-browser=close]').click();await page.locator('.browser-pane').waitFor({state:'hidden'});await page.locator('#browser-button').click();
+    await resizeOwnedWindow(child.pid,0,0,path.join(out,'window-browser-native.png'));
+    await page.locator('[data-browser=close]').click();await page.locator('.browser-pane').waitFor({state:'hidden'});
+    assert.equal((await native('preview','visibility')).visible,false);
+    await page.locator('#prompt').click();assert.equal(await page.evaluate(()=>document.activeElement.id),'prompt');
+    await resizeOwnedWindow(child.pid,0,0,path.join(out,'window-chat-closed-native.png'));checks.push('关闭后原生HWND确实隐藏，真实鼠标可点击聊天输入框');
+    for(let i=0;i<3;i++){
+      await page.locator('#browser-button').click();await page.waitForFunction(()=>document.querySelector('.browser-pane').hidden===false);
+      await page.waitForTimeout(80);assert.equal((await native('preview','visibility')).visible,true);
+      await page.locator('#canvas-button').click();await page.waitForFunction(()=>document.querySelector('.canvas-pane').hidden===false);
+      assert.equal((await native('preview','visibility')).visible,false);assert.equal(await page.locator('.browser-pane').isVisible(),false);
+      if(i===0)await resizeOwnedWindow(child.pid,0,0,path.join(out,'window-canvas-native.png'));
+      await page.locator('#browser-button').click();await page.waitForFunction(()=>document.querySelector('.browser-pane').hidden===false);
+      assert.equal(await page.locator('.canvas-pane').isVisible(),false);
+      await page.locator('[data-browser=close]').click();await page.waitForFunction(()=>document.querySelector('.browser-pane').hidden);
+      assert.equal((await native('preview','visibility')).visible,false);
+    }
+    checks.push('浏览器画布连续往返切换三轮互斥，关闭后无网页残留');
+    await page.evaluate(()=>{for(let i=0;i<6;i++)document.getElementById('browser-button').click();});
+    await page.waitForTimeout(800);assert.equal((await native('preview','visibility')).visible,false);assert.equal(await page.locator('.browser-pane').isVisible(),false);checks.push('快速六次切换最终关闭，不接受过期显示请求');
+    await page.locator('#browser-button').click();
     await page.waitForTimeout(150);assert.equal(await evaluate('document.getElementById("value").textContent'),'0');checks.push('关闭再展开保留已加载页面');
     // CDP captures this renderer only; the native child view is captured
     // separately above. Do not label these as an OS composite screenshot.
