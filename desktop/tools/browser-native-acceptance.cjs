@@ -169,6 +169,42 @@ try{
     await page.waitForTimeout(800);assert.equal((await native('preview','visibility')).visible,false);assert.equal(await page.locator('.browser-pane').isVisible(),false);checks.push('快速六次切换最终关闭，不接受过期显示请求');
     await page.locator('#browser-button').click();
     await page.waitForTimeout(150);assert.equal(await evaluate('document.getElementById("value").textContent'),'0');checks.push('关闭再展开保留已加载页面');
+    if(process.env.SUMMON_TEST_TRANSITIONS==='1'){
+      await page.evaluate(()=>{
+        window.__windowTransitions=[];const original=window.__TAURI__.core.invoke;
+        window.__TAURI__.core.invoke=(name,args,...rest)=>{if(name==='set_canvas_window')window.__windowTransitions.push({expanded:args.expanded,ms:performance.now()});return original(name,args,...rest);};
+      });
+      const summaries=[];
+      async function recordTransition(name,selector,handoff=false){
+        const directory=path.join(out,name);await fs.mkdir(directory,{recursive:true});
+        const task=execute('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',path.join(root,'desktop/tools/workspace-transition-probe.ps1'),'-OwnerPid',String(child.pid),'-Output',directory],{windowsHide:true,timeout:15000}).then(()=>({}),error=>({error}));
+        for(let i=0;i<100;i++){if(await fs.access(path.join(directory,'ready')).then(()=>true,()=>false))break;await page.waitForTimeout(50);}
+        assert.ok(await fs.access(path.join(directory,'ready')).then(()=>true,()=>false),'Native frame recorder did not start');
+        await page.evaluate(()=>{window.__windowTransitions=[];});await page.locator(selector).click();
+        const completed=await task;if(completed.error)throw Error('Native frame recording failed: '+completed.error.stderr);
+        const frames=JSON.parse(await fs.readFile(path.join(directory,'samples.json'),'utf8'));
+        assert.ok(frames.length>=20,'Insufficient native transition samples');
+        const gaps=frames.slice(1).map((frame,i)=>frame.ms-frames[i].ms),maxGap=Math.max(...gaps);
+        assert.ok(maxGap<250,'Native sampling gap too large');
+        assert.ok(frames.filter(frame=>frame.rightOwned).length>=20,'Insufficient owned chat-area samples');
+        assert.equal(frames.filter(frame=>frame.rightOwned&&frame.rightWhite>.85).length,0,'White flash in owned native chat patch');
+        const calls=await page.evaluate(()=>window.__windowTransitions);
+        if(handoff){assert.equal(new Set(frames.map(frame=>frame.width)).size,1,'Panel handoff resized native window');assert.ok(calls.every(call=>call.expanded===true),'Panel handoff collapsed before expansion');}
+        summaries.push({name,frames:frames.length,ownedChatSamples:frames.filter(frame=>frame.rightOwned).length,maxGapMs:maxGap,widths:[...new Set(frames.map(frame=>frame.width))],calls,modes:[...new Set(frames.map(frame=>frame.mode))],whiteFlashSamples:0});
+      }
+      for(const theme of ['dark','light']){
+        await page.evaluate(theme=>window.__TAURI__.core.invoke('set_appearance',{style:'glass',theme}),theme);
+        await page.waitForFunction(theme=>document.documentElement.dataset.theme===theme,theme);await page.waitForTimeout(150);
+        await recordTransition(theme+'-browser-canvas','#canvas-button',true);
+        await recordTransition(theme+'-canvas-browser','#browser-button',true);
+        await recordTransition(theme+'-browser-chat','[data-browser=close]');
+        await recordTransition(theme+'-chat-canvas','#canvas-button');
+        await recordTransition(theme+'-canvas-chat','[data-cv=close]');
+        await recordTransition(theme+'-chat-browser','#browser-button');
+      }
+      await fs.writeFile(path.join(out,'transitions.json'),JSON.stringify(summaries,null,2));
+      checks.push('深浅主题12组切换连续原生采样聊天区域无白屏，面板互切窗口宽度恒定且无收窄命令');
+    }
     // CDP captures this renderer only; the native child view is captured
     // separately above. Do not label these as an OS composite screenshot.
     await page.screenshot({path:path.join(out,'shell-desktop.png')});
