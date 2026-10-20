@@ -2,6 +2,7 @@ import {readLearningSource} from './learning-source.mjs';
 import {createNativeBrowserTransport} from './native-browser.mjs';
 import { learningBlockExtension, LEARNING_BLOCK_TOOL, validateLearningReply, learningReceipt } from './learning-blocks.mjs';
 import { semanticMatcher } from "./memory-match.mjs";
+import { withSenseNovaPayload } from './sensenova.mjs';
 import { createMemoryValueGate } from './memory-value.mjs';
 import { ModelRequests } from './model-requests.mjs';
 import { createAuxiliaryCompleter } from './auxiliary-runtime.mjs';
@@ -221,7 +222,7 @@ async function getRuntime() {
         attempt=createWireAttempt({taskId:`auxiliary:${session?.sessionId||'none'}`,index:++auxiliaryRequestIndex,model,signal,diagnostic,requestGroup:'auxiliary'});
         return attempt.fetch(createRequestFetch(options.fetch || globalThis.fetch, {signal,totalMs,idleMs,diagnostic:entry=>{onRequestState?.({state:'running',phase:entry.phase,elapsedMs:entry.elapsedMs});return diagnostic({...entry,attempt_id:attempt.snapshot().attempt_id,provider:model.provider,model:model.id,requestGroup:'auxiliary'});}}))(input,init);
       };
-      const execute=async signal=>{const result=await completeAuxiliary(model,context,{...requestOptions,signal});return attempt?attempt.attach(result):result;};
+      const execute=async signal=>{const result=await completeAuxiliary(model,context,withSenseNovaPayload(model,{...requestOptions,signal}));return attempt?attempt.attach(result):result;};
       if(requestTimeoutMs!==undefined)return modelRequests.complete(model,{signal:options.signal,priority:requestPriority,requestTimeoutMs,queueTimeoutMs,onState:onRequestState},execute);
       return modelRequests.run(model,{signal:options.signal,priority:requestPriority},()=>execute(options.signal));
     };
@@ -381,11 +382,11 @@ async function openSession(provider, modelId, sessionManager) {
     const attempt=createWireAttempt({model,taskId:`${session.sessionId}:${activeTurnId}`,index:++foregroundRequestIndex,signal,diagnostic,
       onPhase:phase=>{if(phase==='progress'&&busy&&!signal.aborted)send({type:'request_phase',phase:'progress',attempt_id:attempt.snapshot().attempt_id});}});
     activeWireAttempt=attempt;
-    const sdkStream = await streamFunction(model, context, {
+    const sdkStream = await streamFunction(model, context, withSenseNovaPayload(model,{
       ...options, signal, maxRetries:0,
       fetch: attempt.fetch(createDiagnosticFetch(createRequestFetch(options?.fetch || foregroundFetch, {signal,idleMs:0,totalMs:0,connectionMs:0,dispatcher:foregroundHttp,diagnostic:entry=>{if(entry.phase==='waiting'&&busy&&!signal.aborted)send({type:'request_phase',phase:'waiting',elapsedMs:entry.elapsedMs});return diagnostic({...entry,attempt_id:attempt.snapshot().attempt_id,provider:model.provider,model:model.id,requestGroup:'foreground'});},
         onPhase:phase=>{if(phase!=='waiting'&&busy&&!signal.aborted)send({type:'request_phase',phase});}}), diagnostic)),
-    });
+    }));
     return {result:async()=>attempt.attach(await sdkStream.result()),async *[Symbol.asyncIterator](){for await(const event of sdkStream){if(event.partial&&!event.partial.reedWire)attempt.attach(event.partial);if(event.message)attempt.attach(event.message);if(event.error?.role==='assistant')attempt.attach(event.error);yield event;}}};
   });
   };

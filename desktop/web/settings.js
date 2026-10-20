@@ -12,7 +12,14 @@ let sequence = 0, templates = [], providers = [], editing = null, providerId = n
 const commandPrefix=`settings-${crypto.randomUUID()}-`;
 const pending = new Map();
 const thinkingHint=document.createElement('p');thinkingHint.className='hint';thinkingHint.id='thinking-protocol-hint';$("manual-levels").parentElement.after(thinkingHint);
-function explainThinkingProtocol(){const binary=["qwen","qwen-chat-template"].includes($("thinking-format").value);$("manual-levels").disabled=binary;thinkingHint.textContent=binary?"Qwen enable_thinking 仅控制开启/关闭，不区分 low、medium 等深度。仅在服务支持 reasoning_effort 时切换该协议。":"档位必须由模型服务支持；reasoning_effort 可配置 off、low、medium、high、xhigh。";}
+function explainThinkingProtocol(){
+  let sense=false;try{sense=new URL($("base-url").value).hostname==='token.sensenova.cn'&&$("protocol").value==='openai-completions';}catch{}
+  const binary=["qwen","qwen-chat-template"].includes($("thinking-format").value);
+  $("manual-levels").disabled=sense||binary;
+  thinkingHint.textContent=sense?"商汤 Token Plan 使用服务端默认思考方式，不发送 thinking、enable_thinking 或 reasoning_effort 参数。":binary?"Qwen enable_thinking 仅控制开启/关闭，不区分 low、medium 等深度。仅在服务支持 reasoning_effort 时切换该协议。":"档位必须由模型服务支持；reasoning_effort 可配置 off、low、medium、high、xhigh。";
+}
+$("base-url").addEventListener('input',explainThinkingProtocol);
+$("protocol").addEventListener('change',explainThinkingProtocol);
 $("thinking-format").onchange=()=>{const format=$("thinking-format").value;if(format)$("manual-reasoning").value="yes";if(format==="openai"&&["","medium"].includes($("manual-levels").value.trim()))$("manual-levels").value="low, medium, high, xhigh";explainThinkingProtocol();};
 let browseRoot=null,browseNext=0,browseVersion=0,browseBusy=false;
 const browseList=element("div"),browseMore=element("button","继续浏览","secondary"),browseStatus=element("p","","hint");
@@ -187,7 +194,7 @@ function editProvider(template, provider = null) {
   $("api-key").value = ""; $("api-key").placeholder = provider?.hasKey ? "已保存；留空保留当前 Key" : "无鉴权服务可留空";
   renderProviderModels(provider?.models || []);
   $("provider-form").scrollIntoView({ behavior: "smooth", block: "start" });
-  $("base-url").focus(); notice("");
+  explainThinkingProtocol(); $("base-url").focus(); notice("");
 }
 function renderProviders() {
   $("providers").replaceChildren();

@@ -3,8 +3,10 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { protectKey, unprotectKey, EndpointStore } from "./endpoint.mjs";
+import { isSenseNova, senseNovaCompat } from './sensenova.mjs';
 
 const presets = [
+  { id: "sensenova", name: "商汤日日新 Token Plan", sdk: null, protocol: "openai-completions", baseUrl: "https://token.sensenova.cn/v1" },
   { id: "deepseek", name: "DeepSeek", sdk: "deepseek", protocol: "openai-completions", baseUrl: "https://api.deepseek.com" },
   { id: "kimi", name: "Kimi", sdk: "moonshotai-cn", protocol: "openai-completions", baseUrl: "https://api.moonshot.cn/v1" },
   { id: "minimax", name: "MiniMax", sdk: "minimax", protocol: "anthropic-messages", baseUrl: "https://api.minimax.io/anthropic" },
@@ -230,9 +232,10 @@ export class ProviderStore {
       const enabledModels = provider.models.filter((model) => model.enabled !== false);
       if (!enabledModels.length) { delete current.providers[provider.id]; continue; }
       current.providers[provider.id] = { baseUrl: provider.baseUrl, api: provider.protocol, models: enabledModels.map((model) => {
-        const levels=configuredThinkingLevels(model);
-        const compat=model.reasoning==null && provider.protocol==="openai-completions" && !model.compat?.thinkingFormat ? {...model.compat,thinkingFormat:"openai",supportsReasoningEffort:true} : model.compat;
-        return { id:model.id,name:model.name,...(model.contextWindow?{contextWindow:model.contextWindow}:{}),...(model.maxTokens?{maxTokens:model.maxTokens}:{}),reasoning:model.reasoning!==false,input:model.input||["text"],...(compat?{compat}:{}),thinkingLevelMap:Object.fromEntries(["minimal","low","medium","high","xhigh","max"].map(level=>[level,levels.includes(level)?level:null])) };
+        const sense=isSenseNova({api:provider.protocol,baseUrl:provider.baseUrl});
+        const levels=sense?['off']:configuredThinkingLevels(model);
+        const compat=sense?{...model.compat,...senseNovaCompat}:model.reasoning==null && provider.protocol==="openai-completions" && !model.compat?.thinkingFormat ? {...model.compat,thinkingFormat:"openai",supportsReasoningEffort:true} : model.compat;
+        return { id:model.id,name:model.name,...(model.contextWindow?{contextWindow:model.contextWindow}:{}),...(model.maxTokens?{maxTokens:model.maxTokens}:{}),reasoning:sense?false:model.reasoning!==false,input:model.input||["text"],...(compat?{compat}:{}),thinkingLevelMap:Object.fromEntries(["minimal","low","medium","high","xhigh","max"].map(level=>[level,levels.includes(level)?level:null])) };
       }) };
     }
     const temporary = `${this.modelsPath}.tmp`; await writeFile(temporary, JSON.stringify(current, null, 2)); await rename(temporary, this.modelsPath);
