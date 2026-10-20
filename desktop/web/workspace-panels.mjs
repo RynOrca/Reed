@@ -29,7 +29,12 @@ export function createWorkspacePanels({onEmpty=async()=>{},onInterrupt=()=>{},on
       const finish=await panels.get(active())?.beforeTransition?.();
       if(desired!==target){await finish?.();continue;}
       const endMotion=typeof document==='undefined'?()=>{}:await beginWorkspaceMotion(prepare);
-      try{if(target)await show(target,work);else{const name=active();if(name)await hide(name,{keepExpanded:true});}}
+      try{if(target)await show(target,work);else{
+        // Keep the outgoing drawer painted until the native clip reaches chat.
+        // A reversal keeps that same surface and continues from its current clip.
+        await onEmpty();
+        const name=active();if(desired===null&&name)await hide(name,{keepExpanded:true});
+      }}
       catch(error){desired=active();throw error;}
       finally{try{await endMotion();}finally{await finish?.();}}
       if(desired===target&&active()!==target){desired=active();}

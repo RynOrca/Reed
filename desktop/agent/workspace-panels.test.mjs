@@ -40,3 +40,16 @@ test('运行中的过渡只接续最后目标，不回放中间点击',async()=>
   const pending=[panels.show('canvas'),panels.toggle('browser'),panels.show('canvas')];release();
   await Promise.all([first,...pending]);assert.deepEqual(events,['browser','close-browser','canvas']);assert.equal(canvas,true);
 });
+
+test('收回期间保留面板绘制，反向展开复用当前面板',async()=>{
+  let browser=true,release,entered,shrinking=true;const events=[];
+  const gate=new Promise(resolve=>release=resolve),started=new Promise(resolve=>entered=resolve);
+  const panels=createWorkspacePanels({onEmpty:async()=>{
+    if(!shrinking)return;assert.equal(browser,true);events.push('shrink');entered();await gate;shrinking=false;
+  },onExpanded:async()=>events.push('expand')});
+  panels.register('browser',{isOpen:()=>browser,open:async()=>{browser=true;events.push('open');},close:async()=>{browser=false;events.push('hide');}});
+  const closing=panels.close('browser');await started;
+  const reopening=panels.show('browser');release();await Promise.all([closing,reopening]);
+  assert.equal(browser,true);assert.deepEqual(events,['shrink','expand']);
+  await panels.close('browser');assert.equal(browser,false);assert.deepEqual(events,['shrink','expand','hide']);
+});

@@ -16,9 +16,13 @@ public static class WorkspaceTransitionProbe {
   [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Point p);
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h,out Rect r);
   [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr h,IntPtr dc,uint flags);
+  [DllImport("user32.dll")] static extern int GetWindowRgn(IntPtr h,IntPtr region);
+  [DllImport("gdi32.dll")] static extern IntPtr CreateRectRgn(int l,int t,int r,int b);
+  [DllImport("gdi32.dll")] static extern int GetRgnBox(IntPtr region,out Rect rect);
+  [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr region);
   struct Rect { public int Left,Top,Right,Bottom; }
   public class Sample {
-    public long ms;public int width,height,left,top;public double leftWhite,rightWhite;public string mode;public bool leftOwned,rightOwned;
+    public long ms;public int width,height,left,top,visibleWidth,clipLeft;public double leftWhite,rightWhite;public string mode;public bool leftOwned,rightOwned;
   }
   static double White(Bitmap b,int offset) {
     int white=0,total=0;
@@ -38,6 +42,8 @@ public static class WorkspaceTransitionProbe {
       while(watch.ElapsedMilliseconds<duration&&samples.Count<100){
         Rect rect;if(!GetWindowRect(hwnd,out rect))throw new Exception("Owned window disappeared");
         int width=rect.Right-rect.Left,height=rect.Bottom-rect.Top;
+        Rect clip=new Rect{Right=width};IntPtr region=CreateRectRgn(0,0,0,0);
+        try{if(GetWindowRgn(hwnd,region)!=0)GetRgnBox(region,out clip);}finally{DeleteObject(region);}
         if(width<360||height<280)throw new Exception("Owned window too small");
         int left=32,right=width-192,top=Math.Min(160,height-152);
         string mode="screen";
@@ -55,7 +61,7 @@ public static class WorkspaceTransitionProbe {
               g.DrawImage(full,new Rectangle(160,0,160,120),new Rectangle(right,top,160,120),GraphicsUnit.Pixel);
             }
           }
-          var sample=new Sample{ms=watch.ElapsedMilliseconds,width=width,height=height,left=rect.Left,top=rect.Top,leftWhite=White(patch,0),rightWhite=White(patch,160),mode=mode,
+          var sample=new Sample{ms=watch.ElapsedMilliseconds,width=width,height=height,left=rect.Left,top=rect.Top,visibleWidth=clip.Right-clip.Left,clipLeft=clip.Left,leftWhite=White(patch,0),rightWhite=White(patch,160),mode=mode,
             leftOwned=mode=="PrintWindow"||(leftOwned&&GetAncestor(WindowFromPoint(lp),2)==hwnd),rightOwned=mode=="PrintWindow"||(rightOwned&&GetAncestor(WindowFromPoint(rp),2)==hwnd)};
           if(mode=="screen"&&sample.rightOwned&&sample.rightWhite>.85){
             Rect now;GetWindowRect(hwnd,out now);

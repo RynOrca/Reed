@@ -92,6 +92,19 @@ try{
     for(let i=0;i<100;i++){if((await native('preview','visibility')).exists)break;await page.waitForTimeout(100);}
     assert.deepEqual(await native('preview','visibility'),{exists:true,visible:false});
     assert.equal((await native('preview','ensure')).reused,true);checks.push('未点击HTML即已后台预热，实例存在且原生窗口隐藏');
+    if(process.env.SUMMON_TEST_MOTION_ONLY==='1'){
+      await resizeOwnedWindow(child.pid,0,0,'',true);
+      const motion=await page.evaluate(async()=>{
+        const root=document.querySelector('.reed-workspace'),chat=document.querySelector('.chat-shell'),pane=document.querySelector('.browser-pane');
+        const invoke=window.__TAURI__.core.invoke,width=chat.getBoundingClientRect().width,results=[];
+        root.style.setProperty('--workspace-chat-width',width+'px');root.dataset.drawerSide=(await invoke('workspace_geometry')).side;
+        root.classList.add('workspace-drawer','workspace-transitioning');pane.hidden=false;root.classList.add('browser-expanded');
+        for(let i=0;i<5;i++)for(const expanded of [true,false]){const result=await invoke('set_canvas_window',{expanded,durationMs:320,chatWidth:width});results.push({expanded,...result});await new Promise(resolve=>setTimeout(resolve,100));}
+        return results;
+      });
+      await fs.writeFile(path.join(out,'motion-only.json'),JSON.stringify(motion,null,2));
+      console.log(JSON.stringify(motion));return;
+    }
     assert.notEqual(await page.locator('#browser-button svg').innerHTML(),await page.locator('#goals-button svg').innerHTML());checks.push('浏览器图标与学习目标图标不同');
     await page.locator('#browser-button').click();await page.locator('[data-browser=empty]').waitFor({state:'visible'});
     assert.equal((await native('preview','visibility')).visible,false);
@@ -201,7 +214,7 @@ try{
     await fs.writeFile(path.join(out,'reversal.json'),JSON.stringify({collapsedWidth,frames:reversal,final:await page.evaluate(()=>({width:innerWidth,browser:document.querySelector('.browser-pane:not(.workspace-outgoing)').hidden,canvas:document.querySelector('.canvas-pane:not(.workspace-outgoing)').hidden}))},null,2));
     assert.ok(Math.abs(await page.evaluate(()=>innerWidth)-collapsedWidth)<3,'Reversal did not restore collapsed width: '+collapsedWidth+' -> '+await page.evaluate(()=>innerWidth));
     assert.equal(await page.locator('.browser-pane:not(.workspace-outgoing)').isVisible(),false);assert.equal(await page.locator('.canvas-pane:not(.workspace-outgoing)').isVisible(),false);assert.equal((await native('preview','visibility')).visible,false);
-    assert.ok(new Set(reversal.map(frame=>frame.width)).size>2,'No intermediate window widths during reversal');
+    assert.ok(new Set(reversal.map(frame=>frame.width)).size<=2,'Drawer repeatedly resized WebView during reversal');
     assert.equal(await page.locator('.workspace-outgoing,.browser-motion-image').count(),0);
 checks.push('动画中五次反向/跨面板点击仅落实最后关闭目标，原尺寸恢复且无残留');
     await page.emulateMedia({reducedMotion:'reduce'});await page.locator('#browser-button').click();await page.waitForFunction(()=>!document.querySelector('.reed-workspace').classList.contains('workspace-transitioning'));
@@ -213,8 +226,9 @@ checks.push('动画中五次反向/跨面板点击仅落实最后关闭目标，
         window.__windowTransitions=[];const original=window.fetch;
         window.fetch=(input,options,...rest)=>{
           const url=typeof input==='string'?input:input.url;
-          if(url.endsWith('/set_canvas_window'))window.__windowTransitions.push({expanded:JSON.parse(options.body).expanded,ms:performance.now()});
-          return original(input,options,...rest);
+          const call=url.endsWith('/set_canvas_window')?{expanded:JSON.parse(options.body).expanded,ms:performance.now()}:null;
+          if(call)window.__windowTransitions.push(call);
+          return original(input,options,...rest).then(async response=>{if(call){try{call.result=await response.clone().json();}catch{}}return response;});
         };
       });
       await page.evaluate(()=>window.__TAURI__.core.invoke('set_canvas_window',{expanded:true}));
@@ -244,10 +258,22 @@ checks.push('动画中五次反向/跨面板点击仅落实最后关闭目标，
         assert.ok(Math.max(...layout.map(frame=>frame.chat))-Math.min(...layout.map(frame=>frame.chat))<3,'Drawer changed transcript width');
         const rightEdges=frames.map(frame=>opensRight?frame.left:frame.left+frame.width);assert.ok(Math.max(...rightEdges)-Math.min(...rightEdges)<3,'Native chat right edge moved');
         const calls=await page.evaluate(()=>window.__windowTransitions);
+        await fs.writeFile(path.join(directory,'ipc.json'),JSON.stringify(calls,null,2));
         assert.ok(calls.length>0,'Transition produced no observed geometry IPC');
-        if(!handoff)assert.ok(new Set(frames.map(frame=>frame.width)).size>=3,'Window changed without intermediate native widths');
+        if(!handoff){
+          assert.ok(new Set(frames.map(frame=>frame.visibleWidth)).size>=3,'No intermediate native clip widths');
+          assert.ok(new Set(frames.map(frame=>frame.width)).size<=2,'WebView was resized during reveal');
+          const motion=calls.flatMap(call=>call.result?.revealFramesMs?.length?[call.result.revealFramesMs]:[]);
+          assert.ok(motion.length>0,'No native reveal frame telemetry');
+          for(const times of motion){
+            const intervals=times.slice(1).map((t,i)=>t-times[i]).sort((a,b)=>a-b);
+            assert.ok(times.length>=15,'Insufficient reveal frames: '+times.length);
+            assert.ok(intervals[Math.floor(intervals.length*.95)]<34,'Reveal p95 frame interval exceeds 34ms: '+JSON.stringify(intervals));
+            assert.ok(Math.max(...intervals)<65,'Reveal has a long frame stall: '+JSON.stringify(intervals));
+          }
+        }
         if(handoff){assert.equal(new Set(frames.map(frame=>frame.width)).size,1,'Panel handoff resized native window');assert.ok(calls.every(call=>call.expanded===true),'Panel handoff collapsed before expansion');}
-        summaries.push({name,frames:frames.length,ownedChatSamples:frames.filter(frame=>frame[owned]).length,maxGapMs:maxGap,widths:[...new Set(frames.map(frame=>frame.width))],calls,modes:[...new Set(frames.map(frame=>frame.mode))],whiteFlashSamples:0});
+        summaries.push({name,frames:frames.length,ownedChatSamples:frames.filter(frame=>frame[owned]).length,maxGapMs:maxGap,widths:[...new Set(frames.map(frame=>frame.width))],clipWidths:[...new Set(frames.map(frame=>frame.visibleWidth))],calls,modes:[...new Set(frames.map(frame=>frame.mode))],whiteFlashSamples:0});
       }
       for(const theme of ['dark','light']){
         await page.evaluate(theme=>window.__TAURI__.core.invoke('set_appearance',{style:'glass',theme}),theme);

@@ -29,6 +29,8 @@ struct RoundedBounds(Mutex<std::collections::HashMap<String, (u32, u32)>>);
 fn round_window(window: &tauri::WebviewWindow) {
     #[cfg(windows)]
     {
+        // The drawer owns the visible region while revealing its fixed surface.
+        if window.label()=="main" && window.state::<canvas_window::CanvasWindow>().is_clipping(){return;}
         let Ok(size) = window.outer_size() else { return; };
         let state = window.state::<RoundedBounds>();
         if let Ok(mut sizes) = state.0.lock() {
