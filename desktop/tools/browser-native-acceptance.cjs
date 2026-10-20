@@ -234,6 +234,10 @@ checks.push('动画中五次反向/跨面板点击仅落实最后关闭目标，
       });
       await page.evaluate(()=>window.__TAURI__.core.invoke('set_canvas_window',{expanded:true}));
       assert.ok(await page.evaluate(()=>window.__windowTransitions.length>0),'Geometry IPC observer is inactive');
+      if(process.env.SUMMON_TEST_CHAT_ANCHOR==='1')await page.evaluate(()=>{
+        const chat=document.querySelector('.chat-shell');
+        for(const side of ['left','right']){const marker=document.createElement('div');marker.dataset.chatAnchor=side;Object.assign(marker.style,{position:'absolute',top:'0',bottom:'0',[side]:'0',width:'200px',background:'rgb(0, 180, 255)',zIndex:'1000',pointerEvents:'none'});chat.append(marker);}
+      });
       const summaries=[];
       async function recordTransition(name,selector,handoff=false){
         const directory=path.join(out,name);await fs.mkdir(directory,{recursive:true});
@@ -253,6 +257,7 @@ checks.push('动画中五次反向/跨面板点击仅落实最后关闭目标，
         assert.ok(frames.filter(frame=>frame[owned]).length>=20,'Insufficient owned chat-area samples');
         assert.ok(frames.filter(frame=>frame[owned]&&frame.mode==='screen').length>=20,'Insufficient actual screen-composite chat samples');
         assert.equal(frames.filter(frame=>frame[owned]&&frame[white]>.85).length,0,'White flash in owned native chat patch');
+        if(process.env.SUMMON_TEST_CHAT_ANCHOR==='1'){const anchor=opensRight?'leftAnchor':'rightAnchor';assert.ok(frames.filter(frame=>frame[owned]&&frame.mode==='screen').every(frame=>frame[anchor]>.92),'Chat texture moved or stretched before its anchored frame was painted');}
         const canary=opensRight?'leftCanary':'rightCanary';
         assert.equal(frames.filter(frame=>frame[owned]&&frame.mode==='screen'&&frame[canary]>.05).length,0,'Browser surface leaked into chat during native collapse');
         const layout=await page.evaluate(()=>{window.__samplingLayout=false;return window.__layoutFrames;});
@@ -289,6 +294,7 @@ checks.push('动画中五次反向/跨面板点击仅落实最后关闭目标，
         await recordTransition(theme+'-canvas-chat','[data-cv=close]');
         await recordTransition(theme+'-chat-browser','#browser-button');
       }
+      if(process.env.SUMMON_TEST_CHAT_ANCHOR==='1')await page.evaluate(()=>document.querySelectorAll('[data-chat-anchor]').forEach(n=>n.remove()));
       await fs.writeFile(path.join(out,'transitions.json'),JSON.stringify(summaries,null,2));
       assert.ok(summaries.some(group=>group.sourceCanarySamples>0),'Native browser canary positive control was not observed');
       checks.push('网页高饱和标记在真实浏览器区域可见，收回全过程聊天采样无网页颜色串入');

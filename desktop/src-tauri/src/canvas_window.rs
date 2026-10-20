@@ -155,10 +155,17 @@ fn change_window(window:tauri::WebviewWindow,expanded:bool,duration:u64,chat_wid
         let original_width=original.width as f64/scale;
         persist(true,original_width,was_maximized,next.x==original.x&&next.width>original.width)?;
         let rightward=next.x==original.x&&next.width>original.width;
+        // Expanding to the left moves the HWND origin. Until WebView2 paints
+        // its wider, right-anchored layout, DWM can show the narrow old texture
+        // at that new origin. Keep the original chat on an independent surface.
+        #[cfg(windows)]let opening_cover=if !rightward&&next.width>chat{Some(crate::collapse_cover::CollapseCover::capture(&window,chat,false)?)}else{None};
         state.clipping.store(true,Ordering::SeqCst);
         *active=Some(Expanded{original_width,chat_width:chat as f64/scale,was_maximized,target:next,settled:false,rightward,visible_width:chat});
         place_clipped(&window,next,chat,rightward)?;
+        // Do not reveal the drawer until the expanded renderer has a raster.
+        #[cfg(windows)]if let Some(cover)=opening_cover.as_ref(){if let Err(error)=cover.wait_for_chat_frame(){crate::startup_log(&format!("Workspace expand preparation: {error}"));}}
         let (width,frames)=reveal(&window,next,chat,next.width,rightward,duration,revision)?;
+        #[cfg(windows)]if let Some(cover)=opening_cover{if let Err(error)=cover.wait_for_chat_frame(){crate::startup_log(&format!("Workspace expand frame: {error}"));}}
         if let Some(saved)=active.as_mut(){saved.visible_width=width;saved.settled=width==next.width;}
         if width==next.width{state.clipping.store(false,Ordering::SeqCst);}
         Ok(json!({"expanded":true,"chatWidth":chat as f64/scale,"revealFramesMs":frames}))
