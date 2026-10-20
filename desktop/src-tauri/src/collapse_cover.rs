@@ -24,13 +24,15 @@ fn cdp(window:&WebviewWindow,method:&str,params:Value)->Result<Value,String>{
 
 #[repr(C)]
 struct BitmapInfo{size:u32,width:i32,height:i32,planes:u16,bits:u16,compression:u32,image_size:u32,xppm:i32,yppm:i32,used:u32,important:u32,color:u32}
+#[repr(C)]struct Point{x:i32,y:i32}
+#[repr(C)]struct Size{width:i32,height:i32}
 #[link(name="gdi32")]
-extern "system"{fn CreateDIBSection(dc:isize,info:*const BitmapInfo,usage:u32,bits:*mut *mut u8,section:isize,offset:u32)->isize;fn DeleteObject(object:isize)->i32;}
+extern "system"{fn CreateDIBSection(dc:isize,info:*const BitmapInfo,usage:u32,bits:*mut *mut u8,section:isize,offset:u32)->isize;fn DeleteObject(object:isize)->i32;fn CreateCompatibleDC(dc:isize)->isize;fn SelectObject(dc:isize,object:isize)->isize;fn DeleteDC(dc:isize)->i32;}
 #[link(name="user32")]
 extern "system"{
     fn CreateWindowExW(ex:u32,class:*const u16,title:usize,style:u32,x:i32,y:i32,w:i32,h:i32,parent:isize,menu:usize,instance:usize,param:usize)->isize;
-    fn SendMessageW(hwnd:isize,msg:u32,wparam:usize,lparam:isize)->isize;
-    fn RedrawWindow(hwnd:isize,rect:usize,region:usize,flags:u32)->i32;
+    fn UpdateLayeredWindow(hwnd:isize,dest_dc:isize,dest:*const Point,size:*const Size,source_dc:isize,source:*const Point,key:u32,blend:usize,flags:u32)->i32;
+    fn ShowWindow(hwnd:isize,command:i32)->i32;
     fn DestroyWindow(hwnd:isize)->i32;
 }
 
@@ -39,14 +41,22 @@ impl CollapseCover{
     pub fn capture(window:&WebviewWindow,chat_width:u32,rightward:bool)->Result<Self,String>{
         let size=window.inner_size().map_err(|e|e.to_string())?;let scale=window.scale_factor().map_err(|e|e.to_string())?;
         let x=if rightward{0}else{size.width.saturating_sub(chat_width)};
-        let shot=cdp(window,"Page.captureScreenshot",json!({"format":"png","fromSurface":true,"captureBeyondViewport":false,"optimizeForSpeed":true,"clip":{"x":x as f64/scale,"y":0,"width":chat_width as f64/scale,"height":size.height as f64/scale,"scale":1}}))?;
+        // A CDP clip with nonzero x temporarily repositions WebView2's raster
+        // during capture. Capture the unchanged viewport, then crop in memory.
+        let shot=cdp(window,"Page.captureScreenshot",json!({"format":"png","fromSurface":true,"captureBeyondViewport":false,"optimizeForSpeed":true}))?;
         let bytes=base64::engine::general_purpose::STANDARD.decode(shot["data"].as_str().ok_or("聊天截图为空")?).map_err(|e|e.to_string())?;
+        if let Some(out)=std::env::var_os("SUMMON_TEST_COVER_OUT"){
+            let stamp=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis();
+            let _=std::fs::write(std::path::PathBuf::from(out).join(format!("cover-{stamp}.png")),&bytes);
+        }
         let image=tauri::image::Image::from_bytes(&bytes).map_err(|e|e.to_string())?;
-        if image.width()!=chat_width||image.height()!=size.height{return Err("聊天截图尺寸与原生窗口不一致".into());}
-        let info=BitmapInfo{size:40,width:image.width() as i32,height:-(image.height() as i32),planes:1,bits:32,compression:0,image_size:0,xppm:0,yppm:0,used:0,important:0,color:0};
+        if image.width()!=size.width||image.height()!=size.height||x+chat_width>image.width(){return Err("聊天截图尺寸与原生窗口不一致".into());}
+        let mut rgba=Vec::with_capacity(chat_width as usize*size.height as usize*4);
+        for row in image.rgba().chunks_exact(image.width() as usize*4){rgba.extend_from_slice(&row[x as usize*4..(x+chat_width) as usize*4]);}
+        let info=BitmapInfo{size:40,width:chat_width as i32,height:-(size.height as i32),planes:1,bits:32,compression:0,image_size:0,xppm:0,yppm:0,used:0,important:0,color:0};
         let mut bits=std::ptr::null_mut();let bitmap=unsafe{CreateDIBSection(0,&info,0,&mut bits,0,0)};
         if bitmap==0||bits.is_null(){return Err(std::io::Error::last_os_error().to_string());}
-        unsafe{let destination=std::slice::from_raw_parts_mut(bits,image.rgba().len());for(source,target)in image.rgba().chunks_exact(4).zip(destination.chunks_exact_mut(4)){target.copy_from_slice(&[source[2],source[1],source[0],source[3]]);}}
+        unsafe{let destination=std::slice::from_raw_parts_mut(bits,rgba.len());for(source,target)in rgba.chunks_exact(4).zip(destination.chunks_exact_mut(4)){target.copy_from_slice(&[source[2],source[1],source[0],source[3]]);}}
         let parent=window.hwnd().map_err(|e|e.to_string())?.0 as isize;
         let origin=window.outer_position().map_err(|e|e.to_string())?;
         let radius=(14.0*scale) as i32;
@@ -56,13 +66,22 @@ impl CollapseCover{
             // An owned popup has its own compositor surface. A child STATIC
             // shares the parent's resize invalidation and can expose the old
             // WebView texture before its next GDI paint.
-            let hwnd=unsafe{CreateWindowExW(0x080000a0,class.as_ptr(),0,0x80000000|0x10000000|0x08000000|0x0e,origin.x+x as i32,origin.y,chat_width as i32,size.height as i32,parent,0,0,0)};
+            // Upload the complete image before showing this surface. A visible
+            // STATIC + STM_SETIMAGE can expose an unpainted DWM surface while
+            // the owner is resized, even after synchronous WM_PAINT.
+            let mut hwnd=unsafe{CreateWindowExW(0x080800a0,class.as_ptr(),0,0x80000000|0x08000000,origin.x+x as i32,origin.y,chat_width as i32,size.height as i32,parent,0,0,0)};
             if hwnd!=0{unsafe{
                 #[link(name="gdi32")]extern "system"{fn CreateRoundRectRgn(l:i32,t:i32,r:i32,b:i32,w:i32,h:i32)->isize;}
                 #[link(name="user32")]extern "system"{fn SetWindowRgn(hwnd:isize,region:isize,redraw:i32)->i32;}
                 let region=CreateRoundRectRgn(0,0,chat_width as i32+1,size.height as i32+1,radius*2,radius*2);
                 if region!=0&&SetWindowRgn(hwnd,region,0)==0{DeleteObject(region);}
-                SendMessageW(hwnd,0x172,0,bitmap);RedrawWindow(hwnd,0,0,0x101);
+                let dc=CreateCompatibleDC(0);
+                let previous=if dc!=0{SelectObject(dc,bitmap)}else{0};
+                let destination=Point{x:origin.x+x as i32,y:origin.y};let source=Point{x:0,y:0};
+                let dimensions=Size{width:chat_width as i32,height:size.height as i32};
+                let uploaded=if dc!=0{UpdateLayeredWindow(hwnd,0,&destination,&dimensions,dc,&source,0,0,4)}else{0};
+                if dc!=0{SelectObject(dc,previous);DeleteDC(dc);}
+                if uploaded==0{DestroyWindow(hwnd);hwnd=0;}else{ShowWindow(hwnd,4);}
             }}
             let _=tx.send(hwnd);
         }).map_err(|e|{unsafe{DeleteObject(bitmap);};e.to_string()})?;

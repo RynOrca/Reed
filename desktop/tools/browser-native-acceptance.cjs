@@ -99,6 +99,7 @@ try{
         const invoke=window.__TAURI__.core.invoke,width=chat.getBoundingClientRect().width,results=[];
         root.style.setProperty('--workspace-chat-width',width+'px');root.dataset.drawerSide=(await invoke('workspace_geometry')).side;
         root.classList.add('workspace-drawer','workspace-transitioning');pane.hidden=false;root.classList.add('browser-expanded');
+        for(const side of ['left','right']){const n=document.createElement('div');Object.assign(n.style,{position:'absolute',top:0,bottom:0,[side]:0,width:'200px',background:'rgb(0,180,255)',zIndex:1000,pointerEvents:'none'});chat.append(n);}
         for(let i=0;i<5;i++)for(const expanded of [true,false]){const result=await invoke('set_canvas_window',{expanded,durationMs:expanded?320:213,chatWidth:width});results.push({expanded,...result});await new Promise(resolve=>setTimeout(resolve,100));}
         return results;
       });

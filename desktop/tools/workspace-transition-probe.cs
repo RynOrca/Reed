@@ -26,7 +26,7 @@ public static class WorkspaceTransitionProbe {
   }
   static void Ratios(byte[] pixels,int stride,int offset,out double whiteRatio,out double canaryRatio,out double anchorRatio){
     int white=0,hits=0,anchors=0,total=0;
-    for(int x=offset+4;x<offset+160;x+=4)for(int y=4;y<120;y+=4){int i=y*stride+x*4;int b=pixels[i],g=pixels[i+1],r=pixels[i+2];if(r>=250&&g>=250&&b>=250)white++;if(r>180&&b>130&&g<70)hits++;if(r<40&&g>140&&g<210&&b>210)anchors++;total++;}
+    for(int x=offset+4;x<offset+160;x+=4)for(int y=4;y<120;y+=4){int i=y*stride+x*4;int b=pixels[i],g=pixels[i+1],r=pixels[i+2];if(r>=250&&g>=250&&b>=250)white++;if(r>180&&b>130&&g<70)hits++;if(r<140&&g>140&&g<210&&b>210&&b>g+30)anchors++;total++;}
     whiteRatio=(double)white/total;canaryRatio=(double)hits/total;anchorRatio=(double)anchors/total;
   }
   public static Sample[] Run(int pid,string output,int duration) {
