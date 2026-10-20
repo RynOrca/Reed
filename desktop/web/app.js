@@ -48,7 +48,7 @@ let cancelledTurnId=null;
 let retrying = false;
 let turnErrorShown = false;
 let assistantRow = null;
-let thinkingRow = null;
+let thinkingRow = null;let thinkingContentSeen=false;
 let processTimeline=null,processStartedAt=null;
 const sessionDrafts=new Map();
 function processBody(){
@@ -107,7 +107,7 @@ $("goals-button").append(icon("book"));
 $("goals-button").onclick = () => goalsPanel.open();
 
 const projectPicker=createProjectPicker({button:$('workspace-button'),command,tauri,isRunning:()=>running,onError:errorRow,onSelect:()=>{closeHistory();prompt.focus();}});
-const workspacePanels=createWorkspacePanels({onInterrupt:()=>{void tauri.core.invoke('cancel_canvas_transition').catch(errorRow);},onEmpty:()=>tauri.core.invoke('set_canvas_window',{expanded:false})});
+const workspacePanels=createWorkspacePanels({prepare:()=>tauri.core.invoke('workspace_geometry'),onExpanded:()=>tauri.core.invoke('set_canvas_window',{expanded:true,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:320}),onInterrupt:()=>{void tauri.core.invoke('cancel_canvas_transition').catch(errorRow);},onEmpty:()=>tauri.core.invoke('set_canvas_window',{expanded:false,chatWidth:document.querySelector('.chat-shell').getBoundingClientRect().width,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:213})});
 const canvasPanel = createConversationCanvas({command,tauri,prompt,panels:workspacePanels,isRunning:()=>running,reportError:errorRow,onUnavailable:()=>{
   const role=roles.find(item=>item.id===activeRoleId);
   if(!role){void command('get_state').catch(roleError);return;}
@@ -140,12 +140,13 @@ const browserPanel=createBrowserWorkspace({tauri,command,prompt,panels:workspace
 });
 transcript.addEventListener("scroll",()=>{followLatest=transcript.scrollHeight-transcript.clientHeight-transcript.scrollTop<65;},{passive:true});
 
-function status(text) {
+function status(text,explicit) {
   const state = $("composer-state");
   $("status").textContent = text;
   state.title = text;
-  state.classList.toggle("is-busy", /正在|连接/.test(text));
-  state.classList.toggle("is-error", /断开|出错|失败|截断|未生成/.test(text));
+  const mode=explicit||(/失败|异常|截断|未生成|未通过|错误/.test(text)?'error':/等待|连接|确认|需要.*回答|停止|取消/.test(text)?'waiting':/正在|回复中|思考/.test(text)?'busy':'ready');
+  state.dataset.state=mode;state.setAttribute('aria-label',text);
+  state.classList.toggle('is-busy',mode==='busy');state.classList.toggle('is-error',mode==='error');state.classList.toggle('is-waiting',mode==='waiting');
 }
 function updateSendAvailability() { $("send-button").disabled = (!prompt.value.trim() && !attachments.length); }
 function scrollToLatest() { if(followLatest)transcript.scrollTop = transcript.scrollHeight; }
@@ -330,7 +331,7 @@ function toolStart(event) {
     learningRows.set(event.id,{content,sessionId:activeSessionId,fallback:typeof event.args?.fallbackText==='string'?event.args.fallbackText.slice(0,6000):''});return;
   }
   const detail = pretty(event.args);
-  const row = disclosure({ kind: "tool", title: event.name || "工具", summary: detail.replace(/\s+/g, " ").slice(0, 120), detail, state: "running", id: event.id });
+  const row = disclosure({ kind: "tool", title: event.name==="browser"?`浏览器 · ${event.args?.target==="agent"?"后台验收":"当前网页"}`:event.name||"工具", summary: detail.replace(/\s+/g, " ").slice(0, 120), detail, state: "running", id: event.id });
   toolRows.set(event.id, row);
 }
 function toolEnd(event) {
@@ -339,7 +340,7 @@ function toolEnd(event) {
     const spec=!event.isError&&event.result?.details?.learning;
     if(spec){
       const question=spec.blocks?.find(b=>['choices','fill'].includes(b.type));
-      if(question)learningCandidate={toolCallId:event.id,blockId:question.id,sessionId:learning.sessionId};
+      if(question){learningCandidate={toolCallId:event.id,blockId:question.id,sessionId:learning.sessionId};status('等待你的回答','waiting');}
       const view=renderLearning(spec,{
         getReplyState:b=>learningStates.get(learningStateKey(learning.sessionId,event.id,b.id)),
         getDraft:b=>learningDraft(learning.sessionId,event.id,b.id),onDraft:(b,value)=>learningDraft(learning.sessionId,event.id,b.id,value),
@@ -361,6 +362,7 @@ function toolEnd(event) {
   scrollToLatest();
 }
 function permissionRequest(event) {
+  status("等待你的操作批准","waiting");
   const row = disclosure({
     kind: "permission",
     title: `允许 ${event.name || "工具"}？`,
@@ -683,8 +685,9 @@ function onEvent(event) {
       recoveryStatus = "";
       if (running&&!stopping) status("PI 正在回复…");
       if (response.kind === "thinking") {
+        if(response.text)thinkingContentSeen=true;
         if (!thinkingRow) { thinkingRow = disclosure({ kind: "thinking", title: "思考过程", state: "running" }); }
-        thinkingRow.content.textContent += response.text || "";
+        status("正在思考…","busy");thinkingRow.content.textContent += response.text || "";
         thinkingRow.brief.textContent = thinkingRow.content.textContent.replace(/\s+/g, " ").slice(0, 120);
       } else {
         if (!assistantRow) assistantRow = messageRow("assistant");
@@ -709,7 +712,7 @@ function onEvent(event) {
       break;
     }
     case "compaction": $("compaction-state").textContent=response.status==="running"?"正在压缩上下文…":response.status==="error"?"压缩失败："+response.message:response.status==="skipped"?response.message:"上下文已压缩";$("compact-now").disabled=response.status==="running";break;
-    case "started": processStartedAt=response.startedAt??null;cancelledTurnId=null;canvasPanel.foreground(); recoveryStatus = ""; retrying = false; submitted = null; turnErrorShown = false; activeTurnId = response.turnId || response.id || null;activePromptId=activeTurnId; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
+    case "started": thinkingContentSeen=false;processStartedAt=response.startedAt??null;cancelledTurnId=null;canvasPanel.foreground(); recoveryStatus = ""; retrying = false; submitted = null; turnErrorShown = false; activeTurnId = response.turnId || response.id || null;activePromptId=activeTurnId; $("token-speed").textContent = "— tok/s"; setRunning(true); break;
     case "message_outcome":
       finishThinking(response.outcome);
       assistantRow = null; thinkingRow = null; break;
@@ -726,8 +729,11 @@ function onEvent(event) {
       if (response.final === false) break;
       if (!turnMatches(response)) break;
       setRunning(false); finishThinking(response.outcome);
+      if(activeThinking!=='off'&&!thinkingContentSeen&&response.outcome?.status==='complete'){
+        const row=disclosure({kind:'thinking',title:'思考过程',summary:'服务未返回思考内容',detail:'本轮已选择思考档位，但模型服务没有返回可展示的思考文本；这不代表没有进行推理。可检查模型的思考协议和服务端配置。'});row.label.textContent='未返回';
+      }
       finishProcess(response.outcome,response);
-      if(response.outcome?.status==='complete')canvasPanel.clearReference();
+      if(response.outcome?.status==='complete'){canvasPanel.clearReference();if(learningCandidate)status('等待你的回答','waiting');}
       // 恢复出来的题目：本轮成功结束后记成已回答，并把题干一起存下来供历史重放。
       // 这里不依赖 submitted（它可能在别的分支里已被清掉），而是按轮次配对。
       if(response.outcome?.status==='complete'&&recoveredPending&&(!recoveredPending.turnId||!response.turnId||recoveredPending.turnId===response.turnId)){
@@ -737,7 +743,7 @@ function onEvent(event) {
         setRecoveredStatus(r.key,'已发送你的回答：'+r.answer);
       }
       if (response.outcome && response.outcome.status !== "complete") {
-        status(outcomeLabel(response.outcome));
+        status(outcomeLabel(response.outcome),response.outcome.status==="aborted"&&(response.outcome.wire?.cancelled===true||cancelledTurnId&&(!response.turnId||cancelledTurnId===response.turnId))?"waiting":"error");
         if (response.outcome.status !== "aborted" && !turnErrorShown) errorRow(response.outcome.message || outcomeLabel(response.outcome));
       }
       assistantRow = null; thinkingRow = null; break;
@@ -773,7 +779,7 @@ function onEvent(event) {
         refreshEmpty();
       }
       if (!handledReply&&!failedLearningReply) { errorRow(terminalErrorMessage(response)); turnErrorShown = true; }
-      setRunning(false); break;
+      setRunning(false);status(response.message||"回复失败","error"); break;
     case "disconnected":
       setRunning(false); status("PI Agent 已断开，正在恢复连接…");
       for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(new Error("Agent 连接断开，请重新执行操作")); } pending.clear();

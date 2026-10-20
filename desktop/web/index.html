@@ -66,11 +66,11 @@
             <button id="workspace-button" class="workspace-chip" type="button" title="切换工作目录"><svg><use href="#icon-folder"/></svg><span id="workspace-label">工作目录</span></button>
       <div class="composer-configuration">
         <button id="model-button" class="model-chip" type="button" title="选择模型"><svg><use href="#icon-spark"/></svg><span class="compact-button-label">模型</span><span id="model-label">选择模型</span><span id="model-thinking" hidden></span><svg class="chip-chevron"><use href="#icon-chevron"/></svg></button>
-        <button id="role-button" class="model-chip role-chip" type="button" title="角色预设"><svg><use href="#icon-role"/></svg><span class="compact-button-label">Agent</span><span id="role-label">Agent</span><svg class="chip-chevron"><use href="#icon-chevron"/></svg></button>
+        <button id="role-button" class="model-chip role-chip" type="button" title="角色预设"><svg><use href="#icon-role"/></svg><span class="compact-button-label">角色</span><span id="role-label">Agent</span><svg class="chip-chevron"><use href="#icon-chevron"/></svg></button>
       </div>
             <span class="composer-spacer"></span>
             <div class="composer-metrics">
-            <span id="composer-state" class="composer-state" title="正在连接…"><i aria-hidden="true"></i><span id="status" role="status" aria-live="polite">正在连接…</span></span><span id="status-model" class="status-model" hidden></span>
+            <span id="composer-state" tabindex="0" class="composer-state" title="正在连接…"><i aria-hidden="true"></i><span id="status" role="status" aria-live="polite">正在连接…</span></span><span id="status-model" class="status-model" hidden></span>
             <span id="token-speed" class="token-speed" title="服务端输出 token / 模型生成时段（含思考和首 token 等待，不含工具等待）">— tok/s</span>
             <button id="context-usage" class="context-usage" type="button" aria-label="查看上下文占用" title="上下文占用未知"><svg viewBox="0 0 32 32"><circle class="context-track" cx="16" cy="16" r="12"/><circle id="context-arc" class="context-arc" cx="16" cy="16" r="12" stroke-dasharray="0 75.4"/></svg><span id="context-percent">?</span></button>
             <button id="stop-button" type="button" class="stop-button" title="停止生成" aria-label="停止生成" hidden><svg><use href="#icon-stop"/></svg></button>

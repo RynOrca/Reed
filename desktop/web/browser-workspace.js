@@ -12,7 +12,7 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
   for(const [name,glyph] of [['back','chevron'],['forward','chevron'],['reload','history'],['open','folder'],['close','close'],['mark','book']])q(name).append(icon(glyph));
   q('back').classList.add('browser-back');
   const entry=document.createElement('button');entry.type='button';entry.id='browser-button';entry.className='icon-button';entry.title='内置浏览器';entry.setAttribute('aria-label','内置浏览器');entry.setAttribute('aria-expanded','false');entry.append(icon('browser'));document.getElementById('goals-button').before(entry);
-  let opened=false,ready=false,dragging=false,pendingBounds=false,layoutQueue=Promise.resolve(),lastBounds='',source='',attempt='',ticket=0,layoutRevision=0;
+  let opened=false,ready=false,dragging=false,pendingBounds=false,layoutQueue=Promise.resolve(),lastBounds='',source='',attempt='',lastShot='',ticket=0,layoutRevision=0;
   let ratio=Number(localStorage.getItem('reed-browser-ratio'))||.6;
   const status=(text,state='ready')=>{q('status').textContent=text;pane.dataset.state=state;pane.setAttribute('aria-busy',String(state==='loading'));};
   function quote(data){
@@ -28,7 +28,7 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
       const rect=q('viewport').getBoundingClientRect(),blocked=Boolean(document.querySelector('dialog[open],#history-overlay:not([hidden])'));
       const visible=opened&&ready&&!dragging&&!blocked&&!workspace.classList.contains('workspace-moving')&&rect.width>=100&&rect.height>=100&&getComputedStyle(pane).display!=='none'&&getComputedStyle(q('viewport')).display!=='none';
       const params=visible?{visible,x:rect.x,y:rect.y,width:rect.width,height:rect.height}:{visible:false};
-      void applyBounds(params).catch(error=>{if(visible&&opened)status(String(error),'error');});
+      void applyBounds(params).then(()=>{if(visible)q('viewport').querySelectorAll('.browser-motion-image').forEach(image=>image.remove());}).catch(error=>{if(visible&&opened)status(String(error),'error');});
     });
   }
   function applyBounds(params,force=false){
@@ -40,16 +40,12 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
     });
     layoutQueue=task.catch(()=>{lastBounds='';});return task;
   }
-  function split(value,save=false){ratio=Math.max(.3,Math.min(.75,value));workspace.style.setProperty('--browser-width',Math.round(ratio*100)+'%');splitter.setAttribute('aria-valuenow',String(Math.round(ratio*100)));if(save)localStorage.setItem('reed-browser-ratio',String(ratio));scheduleBounds();}
+  function split(value,save=false){ratio=Math.max(.3,Math.min(.75,value));workspace.style.setProperty('--browser-width',Math.round(ratio*100)+'%');splitter.setAttribute('aria-valuenow',String(Math.round(ratio*100)));if(save){localStorage.setItem('reed-browser-ratio',String(ratio));workspace.style.setProperty('--workspace-chat-width',Math.max(240,workspace.clientWidth*(1-ratio)-6)+'px');}scheduleBounds();}
   async function show(){
     if(opened)return;
     opened=true;pane.hidden=false;splitter.hidden=false;workspace.classList.add('browser-expanded');entry.setAttribute('aria-expanded','true');split(ratio);
-    // The native page child is still hidden here, so a transform stays aligned;
-    // the pane slides and fades in while the window snaps wider.
-    pane.style.transition='opacity 160ms ease, transform 160ms ease';
-    pane.style.opacity='0';pane.style.transform='translateX(-14px)';
-    requestAnimationFrame(()=>{pane.style.opacity='1';pane.style.transform='translateX(0)';});
-    try{await tauri.core.invoke('set_canvas_window',{expanded:true,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:160});}
+    if(ready&&lastShot){const image=document.createElement('img');image.alt='';image.className='browser-motion-image';image.src='data:image/png;base64,'+lastShot;await image.decode();q('viewport').append(image);}
+    try{await tauri.core.invoke('set_canvas_window',{expanded:true,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:320});}
     catch(error){opened=false;pane.hidden=true;splitter.hidden=true;workspace.classList.remove('browser-expanded');entry.setAttribute('aria-expanded','false');throw error;}
     workspace.classList.toggle('browser-mobile-page',innerWidth<=500);
   }
@@ -57,10 +53,7 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
     ticket++;opened=false;
     // Hide the native surface before changing its parent's layout or size.
     await applyBounds({visible:false},true);
-    pane.style.transition='opacity 160ms ease, transform 160ms ease';
-    pane.style.opacity='0';pane.style.transform='translateX(-14px)';
-    await new Promise(resolve=>setTimeout(resolve,160));
-    pane.hidden=true;splitter.hidden=true;pane.style.opacity='1';pane.style.transform='';
+    pane.hidden=true;splitter.hidden=true;q('viewport').querySelectorAll('.browser-motion-image').forEach(image=>image.remove());
     workspace.classList.remove('browser-expanded','browser-mobile-page');entry.setAttribute('aria-expanded','false');
     if(!keepExpanded){await paintWorkspace();}
   }
@@ -84,7 +77,7 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
     let proxy;
     if(ready){
       try{
-        const shot=await tauri.core.invoke('browser_host',{request:{surface:'preview',method:'Page.captureScreenshot',params:{format:'png'}}});
+        const visible=await tauri.core.invoke('browser_host',{request:{surface:'preview',method:'visibility'}});const shot=visible.visible?await tauri.core.invoke('browser_host',{request:{surface:'preview',method:'Page.captureScreenshot',params:{format:'png'}}}):{data:lastShot};if(!shot.data)return ()=>scheduleBounds();lastShot=shot.data;
         proxy=document.createElement('img');proxy.className='browser-motion-image';proxy.alt='';proxy.src='data:image/png;base64,'+shot.data;await proxy.decode();q('viewport').append(proxy);
       }catch(error){console.warn('网页切换截图失败',error);}
     }
@@ -116,7 +109,7 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
   };
   q('chat').onclick=()=>{workspace.classList.toggle('browser-mobile-page');scheduleBounds();if(!workspace.classList.contains('browser-mobile-page'))prompt.focus();};
   splitter.addEventListener('pointerdown',event=>{if(event.button!==0)return;dragging=true;splitter.setPointerCapture(event.pointerId);scheduleBounds();});
-  splitter.addEventListener('pointermove',event=>{if(dragging){const rect=workspace.getBoundingClientRect();split((event.clientX-rect.left)/rect.width);}});
+  splitter.addEventListener('pointermove',event=>{if(dragging){const rect=workspace.getBoundingClientRect();split(workspace.dataset.drawerSide==='right'?1-(event.clientX-rect.left)/rect.width:(event.clientX-rect.left)/rect.width);}});
   const finish=()=>{if(!dragging)return;dragging=false;split(ratio,true);};splitter.addEventListener('pointerup',finish);splitter.addEventListener('lostpointercapture',finish);
   splitter.addEventListener('dblclick',()=>split(.6,true));splitter.addEventListener('keydown',event=>{if(['ArrowLeft','ArrowRight','Home'].includes(event.key)){event.preventDefault();split(event.key==='Home' ? .6 : ratio+(event.key==='ArrowRight' ? .03 : -.03),true);}});
   new ResizeObserver(scheduleBounds).observe(q('viewport'));
@@ -127,5 +120,14 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
   tauri?.event.listen('browser-location',event=>{if(opened&&ready&&event.payload.url!=='about:blank'){source=event.payload.url;attempt=source;if(document.activeElement!==q('address'))q('address').value=source;q('source').textContent=source;q('back').disabled=false;}});
   tauri?.event.listen('tauri://drag-drop',event=>{const path=event.payload?.paths?.find(path=>/\.html?$/i.test(path));if(path)void openPage(path).catch(onError);});
   tauri?.event.listen('browser-drop',event=>{if(event.payload?.path)void openPage(event.payload.path).catch(onError);});
-  return {open:openPage,close:()=>panels.close('browser'),event(){}};
+  return {open:openPage,close:()=>panels.close('browser'),event(event){
+    if(event.initiator!=='agent')return;
+    if(event.state==='loading'){
+      if(['navigate','preview'].includes(event.action)){ticket++;ready=false;q('empty').hidden=false;}
+      status('模型正在操作当前网页…','loading');void panels.show('browser').catch(onError);
+    }else if(event.state==='ready'){
+      source=event.url||source;attempt=source;if(document.activeElement!==q('address'))q('address').value=source;q('source').textContent=source;
+      ready=true;q('empty').hidden=true;q('read').disabled=false;q('quote').disabled=false;status(event.title||'模型操作已完成');scheduleBounds();
+    }else if(event.state==='error'){status(browserFailure(event.message),'error');scheduleBounds();}
+  }};
 }

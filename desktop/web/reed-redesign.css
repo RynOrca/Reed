@@ -891,17 +891,17 @@
 :root[data-theme="light"] .image-dialog #image-close { background: #FFFDF8; color: #202C24; }
 
 /* 顶栏的扉页细线在窄窗收短。 */
-@media (max-width: 900px) {
+@container reed-chat (max-width: 900px) {
   .chat-shell .chat-body,
   .chat-shell.outline-visible .chat-body { grid-template-columns: minmax(0, 1fr); }
   .outline-rail { display: none !important; }
   .chat-shell.outline-visible .composer-dock { padding-right: 26px; }
   .chat-shell.outline-visible .message-navigation { right: 5px; }
 }
-@media (max-width: 650px) {
+@container reed-chat (max-width: 650px) {
   .compact-button-label { display: inline; }
 }
-@media (max-width: 620px) {
+@container reed-chat (max-width: 620px) {
   .chat-header { height: 52px; min-height: 52px; padding: 0 12px; }
   .chat-header::after { right: 16px; left: 16px; }
   .header-brand { width: 24px; height: 24px; margin-right: 6px; }
@@ -946,7 +946,7 @@
   .empty-brand { width: 60px; height: 60px; border-radius: 15px; }
   .empty-state p { font-size: 12.5px; }
 }
-@media (max-width: 390px) {
+@container reed-chat (max-width: 390px) {
   .header-wordmark { display: none; }
   .chat-header .icon-button { width: 29px; }
   .workspace-chip { max-width: 30px; }
@@ -959,14 +959,14 @@
 }
 
 /* 画布分栏后，聊天列可能远窄于窗口；响应式必须以聊天列自身宽度为准。 */
-@container (max-width: 900px) {
+@container reed-chat (max-width: 900px) {
   .chat-shell.outline-visible .chat-body { grid-template-columns: minmax(0, 1fr); }
   .chat-shell .outline-rail { display: none !important; }
   .chat-shell.outline-visible .composer-dock { padding-right: 26px; }
   .chat-shell.outline-visible .message-navigation { right: 5px; }
 }
 
-@container (max-width: 620px) {
+@container reed-chat (max-width: 620px) {
   .chat-header { height: 52px; min-height: 52px; padding: 0 12px; }
   .chat-header::after { right: 16px; left: 16px; }
   .header-wordmark { font-size: 14px; }
@@ -1014,7 +1014,7 @@
   .composer-configuration .role-chip { flex: none; width: auto; padding: 0 7px; }
 }
 
-@container (max-width: 400px) {
+@container reed-chat (max-width: 400px) {
   .header-wordmark { display: none; }
   .chat-header .icon-button { width: 29px; }
   .workspace-chip { max-width: 30px; }
@@ -1022,7 +1022,7 @@
   .composer-configuration #model-button { max-width: 104px; }
 }
 
-@container (max-width: 760px) {
+@container reed-chat (max-width: 760px) {
   .canvas-pane .canvas-header { padding-inline: 10px; }
   .canvas-pane .canvas-heading > span { display: none; }
   .canvas-pane .canvas-heading h2 { font-size: 11px; }
@@ -1034,3 +1034,10 @@
   .canvas-pane .canvas-zoom button { width: 25px; }
   .canvas-pane .canvas-zoom > [data-cv="zoom"] { width: 39px; }
 }
+
+.composer-state.is-waiting i{animation:none;background:#c59a44;box-shadow:0 0 0 3px #c59a4422}
+.composer-state.is-error i{animation:none}
+.composer-state:focus-visible{outline:1px solid var(--rd-accent);outline-offset:4px}
+.composer-state{position:relative}
+.composer-state:hover::after,.composer-state:focus-visible::after{content:attr(aria-label);position:absolute;bottom:calc(100% + 12px);right:0;max-width:260px;width:max-content;padding:7px 10px;border:1px solid var(--rd-line);border-radius:6px;background:var(--ds-bg-primary);color:var(--ds-text);font:11px/1.5 var(--sans);z-index:20;pointer-events:none}
+@media(prefers-reduced-motion:reduce){.composer-state.is-busy i{animation:none}}

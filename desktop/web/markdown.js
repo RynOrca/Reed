@@ -1,5 +1,7 @@
+import {bareUrlExtension} from './browser-links.mjs';
 import { marked } from "./vendor/marked.esm.js";
 import {renderMath,mathExtension,emphasisExtension} from "./math.js";
+marked.use(bareUrlExtension());
 marked.use(mathExtension());
 marked.use(emphasisExtension());
 

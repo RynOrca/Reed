@@ -11,7 +11,7 @@ export function createConversationCanvas({command,tauri,prompt,panels,isRunning,
   workspace.append(pane,shell);const q=name=>pane.querySelector(`[data-cv="${name}"]`);
   const splitter=document.createElement('div');splitter.className='canvas-splitter';splitter.tabIndex=-1;splitter.setAttribute('role','separator');splitter.setAttribute('aria-orientation','vertical');splitter.setAttribute('aria-label','调整画布与对话宽度');splitter.setAttribute('aria-valuemin','25');splitter.setAttribute('aria-valuemax','75');splitter.title='拖动调整画布与对话宽度；双击恢复默认';workspace.append(splitter);
   q('mark').append(icon('graph'));q('empty-icon').append(icon('graph'));q('close').append(icon('chevron'));q('fit').append(icon('fit'));
-  const handle=document.createElement('button');handle.id='canvas-button';handle.className='canvas-handle';handle.type='button';handle.hidden=true;handle.title='展开对话画布';handle.setAttribute('aria-label','展开对话画布');handle.setAttribute('aria-expanded','false');handle.append(icon('graph'));body.append(handle);
+  const handle=document.createElement('button');handle.id='canvas-button';handle.className='canvas-handle';handle.type='button';handle.hidden=false;handle.title='展开对话画布';handle.setAttribute('aria-label','展开对话画布');handle.setAttribute('aria-expanded','false');handle.append(icon('graph'));body.append(handle);
   const source=document.createElement('aside');source.className='canvas-source';source.hidden=true;source.setAttribute('aria-label','节点问答原文');
   source.innerHTML='<header><h2>问答原文</h2><button type="button" data-source="close" class="icon-button" title="返回当前对话" aria-label="返回当前对话"></button></header><div class="canvas-source-scroll"><div class="canvas-source-question" data-source="question"></div><div class="prose-chat" data-source="answer"></div></div><footer><button type="button" data-source="jump">定位原文</button><button type="button" data-source="rename">修改标题</button><button type="button" data-source="hide">隐藏卡片</button><button type="button" data-source="follow">引用并追问</button></footer>';
   body.append(source);const sq=name=>source.querySelector(`[data-source="${name}"]`);sq('close').append(icon('close'));
@@ -23,7 +23,7 @@ export function createConversationCanvas({command,tauri,prompt,panels,isRunning,
   const splitKey='reed-canvas-split';
   let scale=1,pan={x:0,y:0},viewTouched=false,gesture=null,zoomTimer=null,saveQueue=Promise.resolve(),dirtyView=null,dirtyNodes=new Map(),saveFailure=false,state='ready';
   let windowQueue=Promise.resolve(),deferredGraph=null;
-  function nativeWindow(expanded){const task=windowQueue.then(()=>tauri.core.invoke('set_canvas_window',{expanded,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:160}));windowQueue=task.catch(()=>{});return task;}
+  function nativeWindow(expanded){const task=windowQueue.then(()=>tauri.core.invoke('set_canvas_window',{expanded,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:(expanded?320:213)}));windowQueue=task.catch(()=>{});return task;}
   const ns='http://www.w3.org/2000/svg',nodeElements=new Map();
   function setStatus(text,next=state){state=next;q('status').textContent=text;q('retry').hidden=next!=='error';pane.dataset.state=next;}
   function clampSplit(width){
@@ -39,14 +39,14 @@ export function createConversationCanvas({command,tauri,prompt,panels,isRunning,
     const percent=Math.round(next/total*100);
     splitter.setAttribute('aria-valuenow',String(percent));
     splitter.setAttribute('aria-valuetext',`对话占 ${percent}%`);
-    if(save){try{localStorage.setItem(splitKey,String(next/total));}catch{}}
+    if(save){workspace.style.setProperty('--workspace-chat-width',next+'px');try{localStorage.setItem(splitKey,String(next/total));}catch{}}
   }
   function endSplit(event){
     if(!splitDrag)return;
     if(event&&event.pointerId!==splitDrag.pointer)return;
     splitDrag=null;workspace.classList.remove('canvas-resizing');
     if(event&&splitter.hasPointerCapture(event.pointerId))splitter.releasePointerCapture(event.pointerId);
-    if(splitRatio){try{localStorage.setItem(splitKey,String(splitRatio));}catch{}}
+    if(splitRatio){workspace.style.setProperty('--workspace-chat-width',shell.getBoundingClientRect().width+'px');try{localStorage.setItem(splitKey,String(splitRatio));}catch{}}
   }
   splitter.addEventListener('pointerdown',event=>{
     if(!opened||event.button!==0)return;
@@ -59,7 +59,7 @@ export function createConversationCanvas({command,tauri,prompt,panels,isRunning,
   splitter.addEventListener('pointermove',event=>{
     if(!splitDrag||event.pointerId!==splitDrag.pointer)return;
     const total=workspace.clientWidth;
-    const width=splitDrag.startWidth-(event.clientX-splitDrag.startX);
+    const width=splitDrag.startWidth+(workspace.dataset.drawerSide==='right'?1:-1)*(event.clientX-splitDrag.startX);
     if(total)splitRatio=clampSplit(width)/total;
     setSplit(width);
   });
@@ -162,14 +162,10 @@ export function createConversationCanvas({command,tauri,prompt,panels,isRunning,
     try{
       if(value){
         workspace.style.setProperty('--canvas-chat-width',shell.getBoundingClientRect().width+'px');workspace.classList.add('canvas-expanded');pane.hidden=false;opened=true;splitter.tabIndex=0;handle.setAttribute('aria-expanded','true');handle.title='收起对话画布';setStatus('正在读取画布…','loading');
-        // Pure DOM pane: slide and fade it in while the window snaps wider.
-        pane.style.transition='opacity 160ms ease, transform 160ms ease';
-        pane.style.opacity='0';pane.style.transform='translateX(-14px)';
-        requestAnimationFrame(()=>{pane.style.opacity='1';pane.style.transform='translateX(0)';});
         let native;try{native=await nativeWindow(true);}catch(error){opened=false;pane.hidden=true;pane.style.opacity='1';pane.style.transform='';workspace.classList.remove('canvas-expanded');splitter.tabIndex=-1;handle.setAttribute('aria-expanded','false');reportError(error.message);throw error;}if(ticket!==epoch||!available||sessionId!==id)return;
         const total=workspace.clientWidth;
         let stored=0;try{stored=Number(localStorage.getItem(splitKey))||0;}catch{}
-        splitRatio=stored>=.25&&stored<=.75?stored:Math.min(.75,Math.max(.25,native.chatWidth/Math.max(1,total)));
+        splitRatio=Number.parseFloat(workspace.style.getPropertyValue('--workspace-chat-width'))/Math.max(1,total)||native.chatWidth/Math.max(1,total);
         setSplit(total*splitRatio);
         const result=await command('canvas_open',{sessionId:id},true);if(ticket!==epoch||sessionId!==id)return;
         viewTouched=result.graph.view.saved===true;if(viewTouched){scale=result.graph.view.scale;pan={x:result.graph.view.x,y:result.graph.view.y};}applyGraph(result.graph);
@@ -177,10 +173,6 @@ export function createConversationCanvas({command,tauri,prompt,panels,isRunning,
       }else{
         await flush();if(saveFailure&&!force){setStatus('布局尚未保存，请重试后收起','error');return;}
         await command('canvas_close',{sessionId:id},true);if(ticket!==epoch)return;
-        pane.style.transition='opacity 160ms ease, transform 160ms ease';
-        pane.style.opacity='0';pane.style.transform='translateX(-14px)';
-        await new Promise(resolve=>setTimeout(resolve,160));
-        if(ticket!==epoch)return;
         opened=false;splitter.tabIndex=-1;splitDrag=null;workspace.classList.remove('canvas-resizing');pane.hidden=true;pane.style.opacity='1';pane.style.transform='';workspace.classList.remove('canvas-expanded');handle.setAttribute('aria-expanded','false');handle.title='展开对话画布';closeSource();clearReference();
         if(!keepExpanded){await paintWorkspace();}
       }
@@ -213,10 +205,10 @@ export function createConversationCanvas({command,tauri,prompt,panels,isRunning,
     async session(next,enabled,backendOpen=false,name='',entryEnabled=enabled){
       q('title').textContent=name||'当前对话';
       // Discoverability follows the learning entry; permission still gates every operation.
-      handle.hidden=entryEnabled!==true;
+      handle.hidden=false;
       handle.title=enabled===true?(opened?'收起对话画布':'展开对话画布'):'启用对话画布';
       handle.setAttribute('aria-label',handle.title);
-      shell.classList.toggle('canvas-available',entryEnabled===true);
+      shell.classList.add('canvas-available');
       if(next===sessionId&&enabled===available){if(opened&&!backendOpen&&!transitioning){try{await command('canvas_open',{sessionId},true);}catch(error){setStatus(error.message,'error');}}return;}
       const wasOpen=opened;epoch++;sourceEpoch++;clearTimeout(zoomTimer);available=false;closeSource();clearReference();rename.close();candidates.close();graph=null;deferredGraph=null;gesture=null;selected=null;dirtyNodes.clear();dirtyView=null;saveFailure=false;viewTouched=false;nodeElements.clear();q('nodes').replaceChildren();q('edges').replaceChildren();
       opened=false;transitioning=false;splitter.tabIndex=-1;splitDrag=null;splitRatio=0;workspace.classList.remove('canvas-resizing');pane.hidden=true;workspace.classList.remove('canvas-expanded');handle.setAttribute('aria-expanded','false');sessionId=next||'';available=enabled===true;

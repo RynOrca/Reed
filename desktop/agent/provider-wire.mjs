@@ -89,7 +89,7 @@ export function createWireAttempt({taskId, index, model, signal, diagnostic=()=>
       if(choice.finish_reason){state.finishReason=code(choice.finish_reason)||'unknown';if(!state.finishReasons.includes(state.finishReason))state.finishReasons.push(state.finishReason);terminal=true;stamp('terminal');}
       const d=choice.delta||choice.message||{};
       state.contentBytes+=typeof d.content==='string'?Buffer.byteLength(d.content):0;
-      const reasoning=d.reasoning_content||d.reasoning;
+      const reasoning=d.reasoning_content||d.reasoning||d.reasoning_text;
       state.reasoningBytes+=typeof reasoning==='string'?Buffer.byteLength(reasoning):0;
       if(typeof reasoning==='string'&&reasoning){
         const verdict=guard.push(reasoning);
@@ -197,7 +197,7 @@ export function createWireAttempt({taskId, index, model, signal, diagnostic=()=>
                   if(parser.chunks.length||parser.event.data!==undefined||parser.event.event!==undefined)failure('transport_incomplete');
                   state.transportComplete=state.done&&!parserError&&state.errorCode!=='transport_incomplete';finalize();cleanup();parser.destroy();
                   if(state.status==='completed'||state.status==='limited'){
-                    for(const frame of buffered){const normalized=structuredClone(frame);for(const c of normalized.choices||[]){if(c.delta)for(const key of ['content','reasoning','reasoning_content','role'])delete c.delta[key];if(state.status==='limited'){if(c.delta)delete c.delta.tool_calls;if(c.message)delete c.message.tool_calls;c.finish_reason='length';}}out.enqueue(encode(normalized));}
+                    for(const frame of buffered){const normalized=structuredClone(frame);for(const c of normalized.choices||[]){if(c.delta)for(const key of ['content','reasoning','reasoning_content','reasoning_text','role'])delete c.delta[key];if(state.status==='limited'){if(c.delta)delete c.delta.tool_calls;if(c.message)delete c.message.tool_calls;c.finish_reason='length';}}out.enqueue(encode(normalized));}
                     out.enqueue(encoder.encode('data: [DONE]\n\n'));out.close();
                   }else out.error(error());
                   return;
