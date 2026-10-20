@@ -533,7 +533,11 @@ async function viewRecord(id=visibleSessionId){
   if(viewRecords.has(id))return viewRecords.get(id);
   const info=(await SessionManager.listAll(sessionsDir)).find(item=>item.id===id);
   if(!info)throw Error('找不到该会话');
-  const saved=metadata[id]||{},project=saved.projectPath??((info.cwd===neutralWorkspace||info.cwd===process.env.SUMMON_WORKSPACE)?null:info.cwd);
+  const saved=metadata[id]||{};
+  // The session file records the real cwd; metadata can lag behind when the app
+  // switches projects, so prefer cwd and only fall back for no-project sessions.
+  const native=(info.cwd===neutralWorkspace||info.cwd===process.env.SUMMON_WORKSPACE)?null:info.cwd;
+  const project=native??saved.projectPath??null;
   const manager=SessionManager.open(info.path,sessionsDir,project||neutralWorkspace),branch=manager.getBranch();
   const previousModel=branch.findLast(entry=>entry.type==='model_change');
   const previousThinking=branch.findLast(entry=>entry.type==='thinking_level_change');
@@ -555,9 +559,10 @@ async function showView(record){
   else send({type:'session_sync',sessionId:record.id,busy:busy&&record.id===session?.sessionId,turnId:record.id===session?.sessionId?activeTurnId:null});
 }
 async function activateView(record){
-  if(session?.sessionId===record.id)return;
-  if(busy)throw Error('上一会话仍在结束，请稍后重试');
+  // Keep the workspace and the active session's project in lockstep even when
+  // the session is already active; goals read this value.
   cwd=record.projectPath||neutralWorkspace;projectPath=record.projectPath||null;
+  if(session?.sessionId===record.id)return;
   roles.activeId=roles.roles.some(r=>r.id===record.roleId)?record.roleId:'agent';
   suppressRuntimePresentation=true;
   try{
@@ -614,9 +619,13 @@ async function dispatch(command){
     if(session&&['get_goals','save_goals'].includes(command.type)){
       const record=await viewRecord(command.sessionId||visibleSessionId),role=roles.roles.find(r=>r.id===record.roleId);
       const enabled=role?.learningGoalsEnabled===true;
+      // Read/keep goals for the project the UI shows; fall back to the session
+      // project only when the UI has no project selected.
+      const requested=typeof command.projectPath==='string'&&command.projectPath?await realpath(resolve(command.projectPath)).catch(()=>null):null;
+      const target=requested||record.projectPath;
       if(command.type==='save_goals'&&!enabled)throw Error('当前角色未启用学习目标');
-      if(command.type==='save_goals'&&command.projectPath!==record.projectPath)throw Error('项目已切换，草稿未写入');
-      const goal=command.type==='save_goals'?await goals.save(record.projectPath,command.body,command.revision):enabled&&record.projectPath?await goals.read(record.projectPath):null;
+      if(command.type==='save_goals'&&requested&&record.projectPath&&requested!==record.projectPath)throw Error('项目已切换，草稿未写入');
+      const goal=command.type==='save_goals'?await goals.save(target,command.body,command.revision):enabled&&target?await goals.read(target):null;
       send({type:'goals',sessionId:record.id,id:command.id,goal,enabled});return;
     }
     if(command.type==='abort'&&pendingSessionPrompts.has(command.sessionId)){
@@ -1058,7 +1067,8 @@ async function handle(command) {
         if (typeof command.sessionId !== "string") throw new Error("Session ID is required");
         const info = (await SessionManager.listAll(sessionsDir)).find((item) => item.id === command.sessionId);
         if (!info) throw new Error("找不到该会话");
-        projectPath = metadata[info.id] ? metadata[info.id].projectPath : ((info.cwd === neutralWorkspace || info.cwd === process.env.SUMMON_WORKSPACE) ? null : info.cwd);
+        const nativeProject = (info.cwd === neutralWorkspace || info.cwd === process.env.SUMMON_WORKSPACE) ? null : info.cwd;
+        projectPath = nativeProject ?? (metadata[info.id] ? metadata[info.id].projectPath : null);
         cwd = projectPath || neutralWorkspace;
         await openSession(undefined, undefined, SessionManager.open(info.path, sessionsDir, cwd));
         send({ type: "ack", id });

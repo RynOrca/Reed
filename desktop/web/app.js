@@ -479,11 +479,17 @@ function renderSessions(sessions) {
   if (!loose.length) { const e = document.createElement("p"); e.className = "history-empty"; e.textContent = "暂无无项目对话"; looseGroup.append(e); }
   const projectGroup=section("projects","项目");
   const projects = new Map();
+  const projectCreated = new Map();
   for (const item of sessions.filter(item => item.projectPath)) {
     if (!projects.has(item.projectPath)) projects.set(item.projectPath, []);
     projects.get(item.projectPath).push(item);
+    const first = projectCreated.get(item.projectPath);
+    if (!first || String(item.id) < String(first)) projectCreated.set(item.projectPath, item.id);
   }
-  for (const [path, items] of projects) {
+  // Session ids are time-ordered, so the earliest session fixes a project's
+  // position in the history list; new projects append and older ones never move.
+  const orderedProjects = [...projects.entries()].sort((a, b) => String(projectCreated.get(a[0]) || "").localeCompare(String(projectCreated.get(b[0]) || "")));
+  for (const [path, items] of orderedProjects) {
     const group=section(path,path.split(/[\\/]/).filter(Boolean).pop(),projectGroup,true);const heading=group.querySelector('summary');heading.title=path;const add=document.createElement('button');add.type='button';add.className='history-project-new';add.title='在此项目新建会话';add.setAttribute('aria-label','在此项目新建会话');add.append(icon('new'));add.onclick=async e=>{e.preventDefault();e.stopPropagation();try{await command('change_workspace',{path},true);closeHistory();prompt.focus();}catch(error){$('history-error').textContent=error.message||String(error);$('history-error').hidden=false;}};heading.append(add);items.forEach(item => addConversation(group, item));
   }
 }
