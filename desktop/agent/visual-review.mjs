@@ -37,10 +37,10 @@ export function createVisualReview({ scope, send = () => {}, enabled = () => tru
   }
   function instruction(prompt = "") {
     if (!enabled()) return "浏览器能力已在设置中关闭：不要尝试 browser 或 visual_review，也不要声称网页产物已通过视觉验收；如实说明尚未验收。";
-    const short = "网页产物验收：写入或修改网页文件后，先调用 browser 工具（action=preview 打开本地文件，或 action=navigate 打开网址）预览，再调用同一个 browser 工具（action=screenshot）截图（桌面宽度至少 900px、窄屏至多 480px 各一次），最后调用 visual_review 提交逐项检查。修改后旧截图作废，需重新截图。注意：不存在名为 screenshot 的独立工具，截图是 browser 的 action。";
+    const short = "网页产物验收：日常浏览默认操作用户可见页；独立桌面/窄屏验收时，预览和截图均须显式指定 target=agent，避免改变用户页面。验收结束后如用户需要查看结果，再用默认 target=preview 展示。写入或修改网页文件后，先调用 browser 工具（action=preview 打开本地文件，或 action=navigate 打开网址）预览，再调用同一个 browser 工具（action=screenshot）截图（桌面宽度至少 900px、窄屏至多 480px 各一次），最后调用 visual_review 提交逐项检查。修改后旧截图作废，需重新截图。注意：不存在名为 screenshot 的独立工具，截图是 browser 的 action。";
     const relevant = state.files.size > 0 || state.failedWrites.size > 0 || /html|网页|页面|站点|网站|css|jsx|tsx|vue|svelte|svg|动画|animation|预览|截图|screenshot|landing/i.test(prompt || "");
     if (!relevant) return short;
-    return `browser失败时先核对参数和错误，只允许一次纠正后重试；连续两次或本轮累计三次失败必须停止浏览器验收并如实报告，不能反复换参数重试或声称验收通过。网页产物验收规则：写入/修改网页后，先调用 browser 工具（action=preview 或 action=navigate）预览，再调用同一个 browser 工具（action=screenshot）获取真实图片；桌面宽度至少 900px、窄屏宽度至多 480px各一次。动画还需等待至少 1000ms后再次截图。仔细查看图片，按用户要求检查裁切、布局、可读性、运动和交互，调用 visual_review 记录逐项检查与问题。发现问题应修复并重新截图；修改后旧截图无效。最多 ${maxRounds} 次评审，停滞时明确报告剩余问题。不得把写文件成功或未经截图的猜测当作验收通过。不存在名为 screenshot 的独立工具——截图是 browser 工具的 action=screenshot。当前验收状态：${JSON.stringify(snapshot())}`;
+    return `browser失败时先核对参数和错误，只允许一次纠正后重试；连续两次或本轮累计三次失败必须停止浏览器验收并如实报告，不能反复换参数重试或声称验收通过。网页产物验收规则：日常浏览默认用户可见页；独立桌面/窄屏验收的预览和截图均须显式指定 target=agent，完成后按用户需要以 target=preview 展示结果。写入/修改网页后，先调用 browser 工具（action=preview 或 action=navigate）预览，再调用同一个 browser 工具（action=screenshot）获取真实图片；桌面宽度至少 900px、窄屏宽度至多 480px各一次。动画还需等待至少 1000ms后再次截图。仔细查看图片，按用户要求检查裁切、布局、可读性、运动和交互，调用 visual_review 记录逐项检查与问题。发现问题应修复并重新截图；修改后旧截图无效。最多 ${maxRounds} 次评审，停滞时明确报告剩余问题。不得把写文件成功或未经截图的猜测当作验收通过。不存在名为 screenshot 的独立工具——截图是 browser 工具的 action=screenshot。当前验收状态：${JSON.stringify(snapshot())}`;
   }
   return {
     begin: reset,
