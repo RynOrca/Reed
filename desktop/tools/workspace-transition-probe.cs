@@ -18,7 +18,7 @@ public static class WorkspaceTransitionProbe {
   [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr h,IntPtr dc,uint flags);
   struct Rect { public int Left,Top,Right,Bottom; }
   public class Sample {
-    public long ms;public int width,height;public double leftWhite,rightWhite;public string mode;public bool leftOwned,rightOwned;
+    public long ms;public int width,height,left,top;public double leftWhite,rightWhite;public string mode;public bool leftOwned,rightOwned;
   }
   static double White(Bitmap b,int offset) {
     int white=0,total=0;
@@ -55,7 +55,7 @@ public static class WorkspaceTransitionProbe {
               g.DrawImage(full,new Rectangle(160,0,160,120),new Rectangle(right,top,160,120),GraphicsUnit.Pixel);
             }
           }
-          var sample=new Sample{ms=watch.ElapsedMilliseconds,width=width,height=height,leftWhite=White(patch,0),rightWhite=White(patch,160),mode=mode,
+          var sample=new Sample{ms=watch.ElapsedMilliseconds,width=width,height=height,left=rect.Left,top=rect.Top,leftWhite=White(patch,0),rightWhite=White(patch,160),mode=mode,
             leftOwned=mode=="PrintWindow"||(leftOwned&&GetAncestor(WindowFromPoint(lp),2)==hwnd),rightOwned=mode=="PrintWindow"||(rightOwned&&GetAncestor(WindowFromPoint(rp),2)==hwnd)};
           if(mode=="screen"&&sample.rightOwned&&sample.rightWhite>.85){
             Rect now;GetWindowRect(hwnd,out now);
