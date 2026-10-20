@@ -31,7 +31,7 @@ ${alignRight?`Add-Type -AssemblyName System.Windows.Forms
 $taskArea=[Windows.Forms.Screen]::FromHandle($taskWindow).WorkingArea
 $taskRect=New-Object ReedTestResize+Rect
 [ReedTestResize]::GetWindowRect($taskWindow,[ref]$taskRect)|Out-Null
-if(-not [ReedTestResize]::SetWindowPos($taskWindow,[IntPtr]::Zero,[int]($taskArea.Right-($taskRect.Right-$taskRect.Left)-32*$taskScale),$taskRect.Top,0,0,0x15)){throw 'Owned window placement failed'}`:''}
+if(-not [ReedTestResize]::SetWindowPos($taskWindow,[IntPtr]::Zero,[int](${process.env.SUMMON_TEST_DRAWER_SIDE==='right'?'$taskArea.Left+32*$taskScale':'$taskArea.Right-($taskRect.Right-$taskRect.Left)-32*$taskScale'}),$taskRect.Top,0,0,0x15)){throw 'Owned window placement failed'}`:''}
 ${capture?`Add-Type -AssemblyName System.Drawing
 [ReedTestResize]::SetForegroundWindow($taskWindow)|Out-Null
 Start-Sleep -Milliseconds 200
@@ -120,7 +120,7 @@ try{
     await command('prompt',{text:'NATIVE_OPEN_TEST'});
     const link=page.locator('a[data-local-file]').filter({hasText:'在内置浏览器打开 HTML'});await link.waitFor();
     const opening=Date.now();await link.click();
-    await page.waitForFunction(()=>document.querySelector('.browser-pane:not(.workspace-outgoing)')?.dataset.state==='ready'&&!document.querySelector('[data-browser=read]').disabled,{timeout:30000});timings.openPreviewMs=Date.now()-opening;assert.equal(await page.locator('.reed-workspace').getAttribute('data-drawer-side'),'left');checks.push('左侧有空间时默认向左展开，用户聊天屏幕位置保持不变');
+    await page.waitForFunction(()=>document.querySelector('.browser-pane:not(.workspace-outgoing)')?.dataset.state==='ready'&&!document.querySelector('[data-browser=read]').disabled,{timeout:30000});timings.openPreviewMs=Date.now()-opening;assert.equal(await page.locator('.reed-workspace').getAttribute('data-drawer-side'),process.env.SUMMON_TEST_DRAWER_SIDE==='right'?'right':'left');checks.push('按屏幕余量选择展开方向，用户聊天屏幕位置保持不变');
     assert.equal(await evaluate('document.title'),'Reed 原生浏览器合成验收');
     assert.equal(await evaluate("getComputedStyle(document.body).backgroundColor"),'rgb(246, 242, 229)');checks.push('聊天HTML链接在独立原生预览打开，CSS/JS资源加载');
     await evaluate("document.getElementById('counter').click();true");assert.equal(await evaluate("document.getElementById('value').textContent"),'1');checks.push('HTML交互真实执行');
