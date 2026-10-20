@@ -128,3 +128,10 @@ test('long varied reasoning and its tool call are never interrupted',async()=>{
   assert.equal(f.wire.validToolCallCount,1);
   assert.equal(f.wire.thinkingStop,null);
 });
+
+test('reasoning_text 与其他思考字段一样计数且末帧不重复转发',async()=>{
+  for(const field of ['reasoning_text','reasoning_content','reasoning']){
+    const f=await fixture([frame(choice({[field]:'合成思考文本',content:'正文'},'stop')),done]);
+    assert.equal(f.wire.reasoningBytes,Buffer.byteLength('合成思考文本'));assert.equal(f.text.split('合成思考文本').length-1,1);assert.equal(f.wire.status,'completed');
+  }
+});
