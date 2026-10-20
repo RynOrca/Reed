@@ -269,10 +269,11 @@ checks.push('动画中五次反向/跨面板点击仅落实最后关闭目标，
       await emit({type:'started',id:'test-color-turn',turnId:'test-color-turn'});
       const thinking=await emit({type:'delta',kind:'thinking',text:'合成状态测试'});
       const done=await emit({type:'done',turnId:'test-color-turn',outcome:{status:'complete'}});
+      const aborted=await emit({type:'done',outcome:{status:'aborted',wire:{cancelled:false,rawFinishReason:'cancelled'}}});
       const error=await emit({type:'error',message:'合成异常中断',busy:false});
-      await emit({type:'history',messages:[]});return {waiting,thinking,done,error};
+      await emit({type:'history',messages:[]});return {waiting,thinking,done,aborted,error};
     });
-    assert.deepEqual(Object.fromEntries(Object.entries(statusModes).map(([key,value])=>[key,value.state])),{waiting:'waiting',thinking:'busy',done:'ready',error:'error'});
+    assert.deepEqual(Object.fromEntries(Object.entries(statusModes).map(([key,value])=>[key,value.state])),{waiting:'waiting',thinking:'busy',done:'ready',aborted:'error',error:'error'});
     assert.notEqual(statusModes.thinking.animation,'none');assert.equal(statusModes.done.animation,'none');assert.notEqual(statusModes.waiting.color,statusModes.done.color);assert.notEqual(statusModes.error.color,statusModes.done.color);
     checks.push('合成状态事件验证黄色等待、闪绿思考、常绿完成与红色异常，窄窗状态可聚焦读说明');
     assert.equal(await page.locator('#role-button .compact-button-label').innerText(),'角色');checks.push('窄聊天列角色按钮显示角色，不将Agent角色名当模式');

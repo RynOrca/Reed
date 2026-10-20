@@ -743,7 +743,7 @@ function onEvent(event) {
         setRecoveredStatus(r.key,'已发送你的回答：'+r.answer);
       }
       if (response.outcome && response.outcome.status !== "complete") {
-        status(outcomeLabel(response.outcome),response.outcome.status==="aborted"?"waiting":"error");
+        status(outcomeLabel(response.outcome),response.outcome.status==="aborted"&&(response.outcome.wire?.cancelled===true||cancelledTurnId&&(!response.turnId||cancelledTurnId===response.turnId))?"waiting":"error");
         if (response.outcome.status !== "aborted" && !turnErrorShown) errorRow(response.outcome.message || outcomeLabel(response.outcome));
       }
       assistantRow = null; thinkingRow = null; break;
