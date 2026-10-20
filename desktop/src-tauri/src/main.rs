@@ -738,7 +738,7 @@ fn run_desktop() -> tauri::Result<()> {
         .plugin(tauri_plugin_process::init())
         .invoke_handler(move |invoke:tauri::ipc::Invoke|{
                 if !["main","settings"].contains(&invoke.message.webview_ref().label()) {invoke.resolver.reject("网页不能调用Reed应用命令");return true;}
-                let handler: Box<dyn Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync> = Box::new(tauri::generate_handler![browser_workspace::browser_host,browser_workspace::choose_html_file,canvas_window::set_canvas_window,canvas_window::cancel_canvas_transition, dismiss, window_pinned, set_window_pinned, agent_command, choose_workspace, open_local_file, desktop_preferences, set_shortcut, set_autostart, open_settings, capture_shortcut, drag_window, resize_window, update_brand_icon, set_appearance, ui_ready, app_version, update_key_configured, open_external_url]); handler(invoke)
+                let handler: Box<dyn Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync> = Box::new(tauri::generate_handler![browser_workspace::browser_host,browser_workspace::choose_html_file,canvas_window::workspace_geometry,canvas_window::set_canvas_window,canvas_window::cancel_canvas_transition, dismiss, window_pinned, set_window_pinned, agent_command, choose_workspace, open_local_file, desktop_preferences, set_shortcut, set_autostart, open_settings, capture_shortcut, drag_window, resize_window, update_brand_icon, set_appearance, ui_ready, app_version, update_key_configured, open_external_url]); handler(invoke)
         })
         .setup(|app| {
             startup_log("Creating Tauri window");

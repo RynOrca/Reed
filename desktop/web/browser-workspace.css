@@ -24,3 +24,19 @@
 .browser-motion-image{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;pointer-events:none}
 .browser-toolbar input:focus{background:color-mix(in srgb,var(--ds-bg-primary) 90%,white);border-color:#85947b88;outline:2px solid #85947b33}
 .browser-pane[data-state=loading] .browser-toolbar{box-shadow:inset 0 -2px #85947b88}
+
+/* Drawer layout keeps transcript line breaks and screen coordinates stable. */
+.reed-workspace.workspace-drawer{display:block!important}
+.reed-workspace.workspace-drawer>.chat-shell{position:absolute!important;inset:0 0 0 auto!important;width:min(var(--resolved-chat-width,var(--workspace-chat-width)),100%)!important;display:flex!important;min-width:0!important;contain:layout}
+.reed-workspace.workspace-drawer>.browser-pane:not([hidden]),.reed-workspace.workspace-drawer>.canvas-pane:not([hidden]){position:absolute!important;inset:0 calc(min(var(--resolved-chat-width,var(--workspace-chat-width)),100%) + 6px) 0 0!important;display:flex!important;min-width:0;height:100%}
+.reed-workspace.workspace-drawer>.browser-splitter{position:absolute;inset:0 var(--resolved-chat-width,var(--workspace-chat-width)) 0 auto;width:6px}
+.reed-workspace.workspace-drawer>.canvas-splitter{right:var(--resolved-chat-width,var(--workspace-chat-width))!important}
+
+.chat-shell{container-type:inline-size;container-name:reed-chat}
+
+.reed-workspace.workspace-drawer[data-drawer-side=right]>.chat-shell{left:0!important;right:auto!important}
+.reed-workspace.workspace-drawer[data-drawer-side=right]>.browser-pane:not([hidden]),.reed-workspace.workspace-drawer[data-drawer-side=right]>.canvas-pane:not([hidden]){inset:0 0 0 calc(min(var(--resolved-chat-width,var(--workspace-chat-width)),100%) + 6px)!important}
+.reed-workspace.workspace-drawer[data-drawer-side=right]>.browser-splitter,.reed-workspace.workspace-drawer[data-drawer-side=right]>.canvas-splitter{left:var(--resolved-chat-width,var(--workspace-chat-width))!important;right:auto!important}
+
+.reed-workspace.workspace-drawer{--resolved-chat-width:var(--workspace-chat-width)}
+.reed-workspace.workspace-drawer:not(.workspace-transitioning):is(.browser-expanded,.canvas-expanded){--resolved-chat-width:min(var(--workspace-chat-width),calc(100% - 120px))}
