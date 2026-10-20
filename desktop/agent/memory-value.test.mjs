@@ -11,7 +11,7 @@ import { workMemoryExtension } from './work-memory.mjs';
 
 const decision = (id, extra={})=>({id,supported:true,durable:true,useful:true,requested:false,confidence:0.95,...extra});
 function fixture() {
-  const session={sessionId:'isolated',model:{provider:'test'},state:{messages:[{role:'user',content:'记住我的长期目标：学习操作系统'}]}};
+  const session={sessionId:'isolated',model:{provider:'test'},state:{messages:[{role:'user',content:'记住我的学习背景：学习操作系统'}]}};
   let current=session, learning=true, work=true, output, stopReason='stop', calls=0;
   const gate=createMemoryValueGate({currentSession:()=>current,learningEnabled:()=>learning,workEnabled:()=>work,runtime:async()=>({completeSimple:async (_model,context,options)=>{
     calls++;assert.equal(options.reasoning,'off');assert.ok(options.maxTokens>=1024,'兼容服务可能将低档思考也计入输出预算');assert.match(context.systemPrompt,/一次提问不表示不会/);
@@ -71,7 +71,7 @@ test('真实隔离存储：即时工具和后台均先审查再合并，跳过�
     await memory.load();await learner.load();let matching=0;
     memory.matchTopic=learner.matchTopic=memory.matchWorkTopic=async()=>{matching++;return null;};
     const register={registerTool:t=>tools[t.name]=t,on:(name,fn)=>events[name]=fn};
-    const candidate={kind:'goal',subject:'操作系统',detail:'长期学习操作系统',evidence:'学习操作系统'};
+    const candidate={kind:'concept',subject:'操作系统',detail:'长期学习操作系统',evidence:'学习操作系统'};
     const agent=createMemoryAgent({memory,learner,judgeValue:f.gate,currentSession:()=>f.session,send(){},runtime:async()=>({completeSimple:async()=>({content:[{type:'text',text:JSON.stringify({facts:[{key:'普通问题',content:'问了一个问题'}],notes:[{title:'助手讲解',body:'今天的答案'}],learningEvents:[candidate]})}]})})});
     agent.extension(register);learnerExtension({memory,learner,judgeValue:f.gate,currentSession:()=>f.session,send(){}})(register);
     workMemoryExtension({memory,learner,judgeValue:f.gate,currentSession:()=>f.session,roles:{current:()=>({learnerProfileEnabled:true})},reviewEnabled:()=>false,send(){}})(register);
@@ -84,9 +84,9 @@ test('真实隔离存储：即时工具和后台均先审查再合并，跳过�
     const reloaded=new MemoryStore(root,root);await reloaded.load();assert.equal(reloaded.snapshot().facts.length,0);
     f.setOutput(data=>{controller.abort();return JSON.stringify({decisions:data.candidates.map(c=>decision(c.id))});});
     const controller=new AbortController();
-    assert.equal((await tools.remember.execute('cancel',{layer:'profile',key:'长期目标',content:'学习操作系统'},controller.signal)).details.skipped,true);
+    assert.equal((await tools.remember.execute('cancel',{layer:'profile',key:'学习背景',content:'学习操作系统'},controller.signal)).details.skipped,true);
     assert.equal(memory.snapshot().facts.length,0,'用户中途停止不能继续保存');
-    f.setOutput(undefined);await tools.remember.execute('4',{layer:'profile',key:'长期目标',content:'学习操作系统'});await tools.record_learning_event.execute('5',candidate);
+    f.setOutput(undefined);await tools.remember.execute('4',{layer:'profile',key:'学习背景',content:'学习操作系统'});await tools.record_learning_event.execute('5',candidate);
     assert.equal(memory.snapshot().facts.length,1);assert.equal(learner.snapshot().eventCount,1);assert.equal(matching,2);
     agent.cancel();
   }finally {await rm(root,{recursive:true,force:true});}

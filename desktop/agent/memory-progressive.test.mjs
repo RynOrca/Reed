@@ -12,7 +12,7 @@ const fixture=async run=>{const root=await mkdtemp(join(tmpdir(),'reed-progressi
 test('同主题补充内容，区分不同章节，重读保留工作记忆',()=>fixture(async root=>{
   const memory=new MemoryStore(root,join(root,'sessions'));
   await memory.applyAgentUpdate({facts:[{key:'线性代数',content:'学习矩阵'}],notes:[{title:'Python 函数',body:'默认参数'}]},'a');
-  await memory.applyAgentUpdate({facts:[{key:'线性代数学习目标',content:'练习特征值'}],notes:[{title:'Python函数',body:'关键字参数'}]},'b');
+  await memory.applyAgentUpdate({facts:[{key:'线性代数',content:'练习特征值'}],notes:[{title:'Python函数',body:'关键字参数'}]},'b');
   assert.equal(memory.state.facts.length,1);assert.match(memory.state.facts[0].content,/矩阵[\s\S]*特征值/);assert.equal(memory.state.notes.length,1);assert.match(memory.state.notes[0].body,/默认参数[\s\S]*关键字/);
   assert.equal(similarTopic('线性代数第1章','线性代数第2章'),false);
   await memory.rememberWork({kind:'shell',title:'PowerShell 语法',body:'多条命令用换行分隔'},'tool');

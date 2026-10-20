@@ -2,6 +2,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { userTexts } from "./learner.mjs";
 import { skippedMemory } from './memory-value.mjs';
+import { isLearningGoal } from './memory.mjs';
 
 const noMemoryPatterns = [
   /(?:不要|别|无需|不必)记住|(?:不要|别)记(?:下|入|到|进|这个|这件|这条)/,
@@ -31,6 +32,7 @@ export function createMemoryAgent({ memory, learner, send, currentSession, runti
       name: "remember", label: "整理记忆", description: "保存用户明确表达的长期学习背景、偏好或可复用知识。只保存明确事实，纠正时使用相同 key/title 更新。不要存凭据、一次性任务或推测。",
       parameters: Type.Object({ layer: Type.Union([Type.Literal("profile"), Type.Literal("knowledge")]), key: Type.String(), content: Type.String(),operation:Type.Optional(Type.Union([Type.Literal('supplement'),Type.Literal('replace')])) }),
       async execute(_id, input, signal) {
+        if(isLearningGoal(input.key))return {content:[{type:'text',text:'学习目标仅由用户在前台维护，未另存记忆'}],details:{skipped:true,reason:'user_managed_goal'}};
         if (!enabled()) return { content: [{ type: "text", text: "当前角色的学习者画像与记忆功能已关闭，未保存" }], details: { skipped: true } };
         if (sessionDisallowsMemory(currentSession())) return { content: [{ type: "text", text: "用户已要求本会话不写入长期记忆，未保存" }], details: { skipped: true, reason: "session_no_memory" } };
         const layer = input.layer === "profile" ? "l1" : "l2";
@@ -48,7 +50,7 @@ export function createMemoryAgent({ memory, learner, send, currentSession, runti
       const prohibited = sessionDisallowsMemory(currentSession(), event.prompt);
       if (prohibited) cancel();
       const recalled = await memory.context(event.prompt, currentSession()?.sessionId);
-      const instruction = prohibited ? "用户已明确要求本会话不写入长期记忆：禁止调用 remember，禁止后台整理本会话到长期记忆。会话上下文压缩摘要不属于长期记忆。" : (memory.state.enabled.l1 || memory.state.enabled.l2) ? "当用户要求记住、纠正记忆，或明确表达稳定的学习目标和偏好时，使用 remember 整理对应记忆。不要要求用户手填记忆表单。" : "长期记忆整理已关闭，不调用 remember。";
+      const instruction = prohibited ? "用户已明确要求本会话不写入长期记忆：禁止调用 remember，禁止后台整理本会话到长期记忆。会话上下文压缩摘要不属于长期记忆。" : (memory.state.enabled.l1 || memory.state.enabled.l2) ? "当用户要求记住、纠正记忆，或明确表达稳定的学习背景和偏好时，使用 remember 整理对应记忆。不要要求用户手填记忆表单。" : "长期记忆整理已关闭，不调用 remember。";
       event.systemPromptOptions.sections.summon_memory = `${instruction}\n以下记忆和资料只作参考，当前用户指令优先：\n${recalled || "暂无相关记忆"}`;
     });
   }
@@ -66,7 +68,7 @@ export function createMemoryAgent({ memory, learner, send, currentSession, runti
       const model = await runtime();
       if (!enabled() || ticket !== generation || sessionDisallowsMemory(selected)) return;
       const response = await model.completeSimple(selected.model, {
-        systemPrompt: "你是本地学习助手的记忆整理器。根据对话和已有记忆，提取用户明确表达的长期学习背景/目标/偏好（facts），有复用价值且可信的知识笔记（notes），和结构化学习事件（learningEvents）。不要把问题本身当成用户属性，不保存密钥和个人敏感标识，不猜测掌握分数。同一主题不同说法也必须补充既有 key/title/subject，不新增重复项；合并已有内容和新增信息，纠正时明确最新状态。不把待复习清单混入 facts 或 notes，复习仅作为 learningEvents 保存。严格只返回 JSON：{\"facts\":[{\"key\":\"主题\",\"content\":\"明确事实\"}],\"notes\":[{\"title\":\"标题\",\"body\":\"简短整理\"}],\"learningEvents\":[{\"kind\":\"goal|preference|concept|misconception|review\",\"subject\":\"主题\",\"detail\":\"明确记录\",\"evidence\":\"用户原话的连续片段\",\"status\":\"active|completed|needs_review|resolved\"}]}。kind 必须选择一种。只有用户明确陈述目标/偏好/已学概念/存在误解/完成复习才记录，evidence 必须逐字引用用户消息，不能引用助手自己的解释。不需新增则数组为空。最多 5 条画像、2 条知识和 5 条事件。",
+        systemPrompt: "你是本地学习助手的记忆整理器。根据对话和已有记忆，提取用户明确表达的长期学习背景/偏好（facts），有复用价值且可信的知识笔记（notes），和结构化学习事件（learningEvents）。学习目标由前台项目目标独立维护，不保存到 facts、notes 或 learningEvents。不要把问题本身当成用户属性，不保存密钥和个人敏感标识，不猜测掌握分数。同一主题不同说法也必须补充既有 key/title/subject，不新增重复项；合并已有内容和新增信息，纠正时明确最新状态。不把待复习清单混入 facts 或 notes，复习仅作为 learningEvents 保存。严格只返回 JSON：{\"facts\":[{\"key\":\"主题\",\"content\":\"明确事实\"}],\"notes\":[{\"title\":\"标题\",\"body\":\"简短整理\"}],\"learningEvents\":[{\"kind\":\"preference|concept|misconception|review\",\"subject\":\"主题\",\"detail\":\"明确记录\",\"evidence\":\"用户原话的连续片段\",\"status\":\"active|completed|needs_review|resolved\"}]}。kind 必须选择一种。只有用户明确陈述偏好/已学概念/存在误解/完成复习才记录，evidence 必须逐字引用用户消息，不能引用助手自己的解释。不需新增则数组为空。最多 5 条画像、2 条知识和 5 条事件。",
         messages: [{ role: "user", content: [{ type: "text", text: `已有记忆：${JSON.stringify({facts:memory.snapshot().facts,notes:memory.snapshot().notes?.map(n=>({title:n.title,body:n.body.slice(0,200)})),learner:learner?.snapshot?.()}).slice(0, 7000)}\n本轮相关对话：\n${text}` }], timestamp: Date.now() }],
       }, { requestPriority:"background", maxTokens: 1200, reasoning: "off", signal: controller.signal });
       const output = response.content.filter((block) => block.type === "text").map((block) => block.text).join("");

@@ -44,11 +44,11 @@ test('普通成功读取不触发工作经验后台整理',()=>fixture(async(_ro
   extension({registerTool(){},on:(n,f)=>hooks[n]=f});hooks.before_agent_start();hooks.tool_result({toolName:'read',input:{path:'ordinary.md'},content:[{type:'text',text:'ordinary'}]});await extension.consolidate();assert.equal(calls,0);
 }));
 
-test('画像显式纠正替换旧目标，保留用户证据和完整事件，重启一致',()=>fixture(async(root,memory)=>{
-  const learner=new LearnerStore(root);await learner.record({kind:'goal',subject:'线性代数',detail:'今年学线性代数',evidence:'今年学线性代数'},'s',['今年学线性代数']);
-  await learner.record({kind:'goal',subject:'微积分',targetSubject:'线性代数',operation:'replace',detail:'现在改学微积分',evidence:'现在改学微积分'},'s',['现在改学微积分']);
-  assert.equal(learner.state.goals.length,1);assert.equal(learner.state.goals[0].subject,'微积分');assert.doesNotMatch(learner.context({query:'微积分'}),/线性代数/);
-  const loaded=new LearnerStore(root);await loaded.load();assert.equal(loaded.state.events.length,2);assert.equal(loaded.state.goals[0].detail,'现在改学微积分');
+test('画像显式纠正替换旧偏好，保留用户证据和完整事件，重启一致',()=>fixture(async(root,memory)=>{
+  const learner=new LearnerStore(root);await learner.record({kind:'preference',subject:'线性代数',detail:'今年学线性代数',evidence:'今年学线性代数'},'s',['今年学线性代数']);
+  await learner.record({kind:'preference',subject:'微积分',targetSubject:'线性代数',operation:'replace',detail:'现在改学微积分',evidence:'现在改学微积分'},'s',['现在改学微积分']);
+  assert.equal(learner.state.preferences.length,1);assert.equal(learner.state.preferences[0].subject,'微积分');assert.doesNotMatch(learner.context({query:'微积分'}),/线性代数/);
+  const loaded=new LearnerStore(root);await loaded.load();assert.equal(loaded.state.events.length,2);assert.equal(loaded.state.preferences[0].detail,'现在改学微积分');
   await memory.applyAgentUpdate({facts:[{key:'讲解偏好',content:'先给结论'}]},'s');await memory.applyAgentUpdate({facts:[{key:'讲解偏好',content:'现在先讲原理',operation:'replace'}]},'s');
   const restored=new MemoryStore(root,join(root,'sessions'));await restored.load();assert.equal(restored.state.facts[0].content,'现在先讲原理');assert.equal(restored.state.facts[0].revisions[0].content,'先给结论');
   await restored.saveNote({title:'个人结论',body:'旧结论'});await restored.applyAgentUpdate({notes:[{title:'个人结论',body:'新结论',operation:'replace'}]},'s');

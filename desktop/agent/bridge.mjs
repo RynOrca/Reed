@@ -616,7 +616,7 @@ async function dispatch(command){
       await showView(await viewRecord());send({type:'ack',id:command.id,sessionId:visibleSessionId});return;
     }
     if(session&&command.type==='get_history'){emitHistory(session.sessionManager,busy);send({type:'ack',id:command.id});return;}
-    if(session&&['get_goals','save_goals'].includes(command.type)){
+    if(session&&['get_goals','save_goals','get_settings_goals'].includes(command.type)){
       const record=await viewRecord(command.sessionId||visibleSessionId),role=roles.roles.find(r=>r.id===record.roleId);
       const enabled=role?.learningGoalsEnabled===true;
       // Read/keep goals for the project the UI shows; fall back to the session
@@ -626,7 +626,7 @@ async function dispatch(command){
       if(command.type==='save_goals'&&!enabled)throw Error('当前角色未启用学习目标');
       if(command.type==='save_goals'&&requested&&record.projectPath&&requested!==record.projectPath)throw Error('项目已切换，草稿未写入');
       const goal=command.type==='save_goals'?await goals.save(target,command.body,command.revision):enabled&&target?await goals.read(target):null;
-      send({type:'goals',sessionId:record.id,id:command.id,goal,enabled});return;
+      send({type:command.type==='get_settings_goals'?'ack':'goals',sessionId:record.id,id:command.id,goal,enabled});return;
     }
     if(command.type==='abort'&&pendingSessionPrompts.has(command.sessionId)){
       const waiting=pendingSessionPrompts.get(command.sessionId);pendingSessionPrompts.delete(command.sessionId);
@@ -765,9 +765,10 @@ async function handle(command) {
         for(const text of previous.followUp)await session.followUp(text);
         send({type:"queue",steering:session.getSteeringMessages(),followUp:session.getFollowUpMessages()});send({type:"ack",id});break;
       }
+      case "get_settings_goals":
       case "get_goals": {
         const enabled=roles.current().learningGoalsEnabled===true;
-        send({type:"goals",id,goal:enabled&&projectPath?await goals.read(projectPath):null,enabled});break;
+        send({type:command.type==='get_settings_goals'?'ack':'goals',id,goal:enabled&&projectPath?await goals.read(projectPath):null,enabled});break;
       }
       case "save_goals": {
         if(!roles.current().learningGoalsEnabled)throw new Error("当前角色未启用学习目标");
@@ -868,6 +869,10 @@ async function handle(command) {
         send({ type: "ack", id });
         break;
       }
+      case "learner_delete":
+        memoryAgent.cancel();
+        await learner.deleteItem(command.group,command.itemId);
+        send({type:'learner',state:learner.snapshot()});send({type:'ack',id});break;
       case "memory_enabled":
         memoryAgent.cancel();
         await memory.setEnabled(command.layer, command.enabled);await userConfig.set("memoryEnabled",memory.state.enabled);
