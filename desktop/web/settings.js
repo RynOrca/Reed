@@ -150,15 +150,18 @@ $("vault-query").addEventListener("input", () => {
   if ($("vault-query").value.trim()) return;
   $("vault-results").replaceChildren(); setSearchStatus("", ""); setBrowseVisible(true);
 });
-let goalRefresh=0;
+let goalRefresh=0,memoryGoalPath=null;
 async function refreshMemoryGoal(){
   const ticket=++goalRefresh;
   try{const result=await command('get_settings_goals');if(ticket!==goalRefresh)return;
-    $('memory-goal-project').textContent=result.goal?.projectName||'';
-    $('memory-goal-body').textContent=result.goal?.body||(result.enabled?'请在前台选择项目并填写学习目标。':'当前角色未启用学习目标。');
-  }catch(error){if(ticket===goalRefresh)$('memory-goal-body').textContent=`目标读取失败：${error.message}`;}
+    memoryGoalPath=result.goal?.exists?result.goal.path:null;
+    $('memory-goal-project').textContent=result.goal?.projectName||'未选择项目';
+    $('memory-goal-file').textContent=result.goal?.exists?result.goal.path.split(/[\\/]/).pop():(result.enabled?'请在前台填写并保存学习目标。':'当前角色未启用学习目标。');
+    $('memory-goal-file').title=memoryGoalPath||'';$('memory-goal-open').disabled=!memoryGoalPath;
+  }catch(error){if(ticket===goalRefresh){memoryGoalPath=null;$('memory-goal-open').disabled=true;$('memory-goal-file').textContent=`目标读取失败：${error.message}`;}}
 }
 $('memory-goal-refresh').onclick=()=>void refreshMemoryGoal();
+$('memory-goal-open').onclick=()=>action(async()=>{if(memoryGoalPath)await tauri.core.invoke('open_local_file',{path:memoryGoalPath});});
 function renderLearner(profile) {
   const groups = [["知识状态", profile.knowledge || [], "knowledge"], ["误解记录", profile.misconceptions || [], "misconceptions"], ["学习偏好", profile.preferences || [], "preferences"]];
   $("learner-overview").replaceChildren(); $("learner-profile").replaceChildren();

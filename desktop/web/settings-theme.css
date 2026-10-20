@@ -351,3 +351,16 @@ body.settings-shell {
   .settings-shell .setting-row > select { width: 200px; max-width: 46%; }
   .settings-shell .setting-row > .appearance-options select { width: 150px; }
 }
+
+/* Learning summary: three separate surfaces using the existing Reed palette. */
+.settings-shell .profile-overview {grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;border:0;margin-bottom:20px}
+.settings-shell .profile-count {border:1px solid var(--st-line);border-radius:14px;padding:20px;background:var(--st-panel);box-shadow:var(--st-shadow);min-width:0}
+.settings-shell .profile-count:last-child {border-right:1px solid var(--st-line)}
+.settings-shell .profile-count span {display:block;margin-bottom:12px;font-size:13px}
+.settings-shell .profile-count strong {font-size:30px;line-height:1.2;font-weight:650}
+.memory-goal-entry {display:flex;align-items:center;gap:10px;padding:14px 16px;margin-bottom:24px;border:1px solid var(--st-line);border-radius:12px;background:var(--st-panel)}
+.memory-goal-entry>div {flex:1;min-width:0}
+.memory-goal-entry strong,.memory-goal-entry .hint {display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.memory-goal-entry .hint {font-size:12px;margin-top:4px}
+.memory-goal-entry button {flex:none}
+@media(max-width:760px){.settings-shell .profile-overview{grid-template-columns:1fr;gap:10px}.settings-shell .profile-count{padding:16px}.memory-goal-entry{flex-wrap:wrap}.memory-goal-entry>div{flex-basis:100%}}
