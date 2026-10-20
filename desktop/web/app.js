@@ -1,5 +1,4 @@
 import {renderLearning,replyText} from './learning-blocks.js';
-import {renderLearningFailure} from './learning-fallback.js';
 import {createLearningMode} from './learning-mode.js';
 import {requestStatus} from './request-status.js';
 import {cancellationStatus,cancellationApplies} from './cancellation-status.js';
@@ -88,7 +87,6 @@ const recoveredIndex=()=>{const index={};for(const [key,text] of recoveredQuesti
 function updateRecoveredStates(){for(const [key,state] of Object.entries(loadRecoveredAnswers(recoveredIndex())))if(!recoveredAnswerStates.has(key))recoveredAnswerStates.set(key,state);}
 
 function updateLearningAvailability(){for(const entry of learningRows.values()){
-  if(!running&&!entry.view&&entry.content.querySelector('.learning-pending'))entry.content.textContent=entry.fallback||'图解未完成，请继续阅读正文或通过输入框追问。';
   entry.view?.update();
 }}
 const permissionRows = new Map();
@@ -327,8 +325,7 @@ function pretty(value) {
 }
 function toolStart(event) {
   if(event.name==='show_learning'){
-    const content=messageRow('assistant');content.append(Object.assign(document.createElement('p'),{className:'learning-pending',textContent:'正在整理学习图解…'}));
-    learningRows.set(event.id,{content,sessionId:activeSessionId,fallback:typeof event.args?.fallbackText==='string'?event.args.fallbackText.slice(0,6000):''});return;
+    learningRows.set(event.id,{sessionId:activeSessionId});return;
   }
   const detail = pretty(event.args);
   const row = disclosure({ kind: "tool", title: event.name==="browser"?`浏览器 · ${event.args?.target==="agent"?"后台验收":"当前网页"}`:event.name||"工具", summary: detail.replace(/\s+/g, " ").slice(0, 120), detail, state: "running", id: event.id });
@@ -339,6 +336,7 @@ function toolEnd(event) {
   if(learning){
     const spec=!event.isError&&event.result?.details?.learning;
     if(spec){
+      learning.content=messageRow('assistant');
       const question=spec.blocks?.find(b=>['choices','fill'].includes(b.type));
       if(question){learningCandidate={toolCallId:event.id,blockId:question.id,sessionId:learning.sessionId};status('等待你的回答','waiting');}
       const view=renderLearning(spec,{
@@ -347,10 +345,7 @@ function toolEnd(event) {
         isAvailable:b=>!running&&learningCandidate?.toolCallId===event.id&&learningCandidate.blockId===b.id&&learning.sessionId===activeSessionId,
         onReply:(block,option)=>void sendUserMessage(replyText(block,option),{learningReply:{sessionId:learning.sessionId,toolCallId:event.id,blockId:block.id,...(block.type==='fill'?{answer:option}:{optionId:option.id})}})});
       learning.content.replaceChildren(view.root);learning.view=view;updateLearningAvailability();
-    }else{
-      const blocks=Array.isArray(event.result)?event.result:event.result?.content||[];
-      renderLearningFailure(learning.content,{fallback:learning.fallback,content:blocks});
-    }
+    }else{learningRows.delete(event.id);}
     scrollToLatest();return;
   }
   const row = toolRows.get(event.id);
