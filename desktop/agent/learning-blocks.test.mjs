@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {runToolCall} from '@earendil-works/pi-agent-core';
 import {validateToolArguments} from '@earendil-works/pi-ai';
-import {validateLearningSpec,learningReceipt,latestLearningQuestion,validateLearningReply,learningReplyText,learningBlockExtension} from './learning-blocks.mjs';
+import {validateLearningSpec,prepareLearningArguments,learningReceipt,latestLearningQuestion,validateLearningReply,learningReplyText,learningBlockExtension} from './learning-blocks.mjs';
 const question={id:'q',type:'choices',title:'gcd 返回 3 时会进入分支吗？',fallbackText:'请说明非零整数的真值。',options:[{id:'yes',label:'会',replyText:'会，非零整数为真。'},{id:'unsure',label:'不确定',replyText:'我还不确定。'}]};
 const spec={schemaVersion:1,fallbackText:'判断的是非零整数。',blocks:[question]};
 const result={role:'toolResult',toolName:'show_learning',toolCallId:'call-1',details:{learning:spec}};
@@ -39,7 +39,7 @@ test('真实 SDK 兼容保留现有字段，生成 ID 避让，标签受长度�
   assert.deepEqual((await runLearning(spec)).result.details.learning,spec);
 });
 
-test('真实 SDK 拒绝非法选项并给出对应类型字段，不泄露整段参数',async()=>{
+test('非法选项保留精确内部诊断，SDK无修正模型时请求转文本且不发布错误图解',async()=>{
   for(const [block,pattern] of [
     [{...question,options:[{replyText:''}]},/blocks\[0\]\.options\[0\]\.replyText/],
     [{...question,options:[{id:'a',label:'甲'}]},/blocks\[0\]\.options\[0\].*replyText/],
@@ -50,9 +50,9 @@ test('真实 SDK 拒绝非法选项并给出对应类型字段，不泄露整段
     [{...question,options:[question.options[0],question.options[0]]},/选项 ID 必须唯一/],
   ]){
     const output=await runLearning({...spec,blocks:[block]});
-    assert.equal(output.isError,true);
-    const message=output.result.content.map(b=>b.text||'').join('\n');
-    assert.match(message,pattern);assert.doesNotMatch(message,/Received arguments|must have required properties nodes/);
+    assert.throws(()=>prepareLearningArguments({...spec,blocks:[block]}),pattern);
+    assert.equal(output.isError,false);assert.equal(output.result.details.learning,undefined);assert.equal(output.result.details.learningFallback,true);
+    const message=output.result.content.map(b=>b.text||'').join('\n');assert.match(message,/普通文本/);assert.doesNotMatch(message,/Received arguments|root:|must have required properties nodes/);
   }
   assert.throws(()=>validateLearningSpec({...spec,blocks:[{...question,options:[{replyText:'甲'}]}]}),/缺少 id/,'历史回执不隐式补全');
 });
