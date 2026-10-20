@@ -22,14 +22,12 @@ public static class WorkspaceTransitionProbe {
   [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr region);
   struct Rect { public int Left,Top,Right,Bottom; }
   public class Sample {
-    public long ms;public int width,height,left,top,visibleWidth,clipLeft;public double leftWhite,rightWhite;public string mode;public bool leftOwned,rightOwned;
+    public long ms;public int width,height,left,top,visibleWidth,clipLeft;public double leftWhite,rightWhite,leftCanary,rightCanary;public string mode;public bool leftOwned,rightOwned;
   }
-  static double White(Bitmap b,int offset) {
-    int white=0,total=0;
-    for(int x=offset+4;x<offset+160;x+=8)for(int y=4;y<120;y+=8){
-      Color c=b.GetPixel(x,y);if(c.R>=250&&c.G>=250&&c.B>=250)white++;total++;
-    }
-    return (double)white/total;
+  static void Ratios(byte[] pixels,int stride,int offset,out double whiteRatio,out double canaryRatio){
+    int white=0,hits=0,total=0;
+    for(int x=offset+4;x<offset+160;x+=4)for(int y=4;y<120;y+=4){int i=y*stride+x*4;int b=pixels[i],g=pixels[i+1],r=pixels[i+2];if(r>=250&&g>=250&&b>=250)white++;if(r>180&&b>130&&g<70)hits++;total++;}
+    whiteRatio=(double)white/total;canaryRatio=(double)hits/total;
   }
   public static Sample[] Run(int pid,string output,int duration) {
     SetProcessDPIAware();Directory.CreateDirectory(output);
@@ -49,10 +47,16 @@ public static class WorkspaceTransitionProbe {
         string mode="screen";
         using(var patch=new Bitmap(320,120))using(var g=Graphics.FromImage(patch)){
           Point lp=new Point(rect.Left+left+80,rect.Top+top+60),rp=new Point(rect.Left+right+80,rect.Top+top+60);
-          bool leftOwned=GetAncestor(WindowFromPoint(lp),2)==hwnd,rightOwned=GetAncestor(WindowFromPoint(rp),2)==hwnd;
-          if(GetAncestor(GetForegroundWindow(),2)==hwnd){
-            g.CopyFromScreen(rect.Left+left,rect.Top+top,0,0,new Size(160,120));
-            g.CopyFromScreen(rect.Left+right,rect.Top+top,160,0,new Size(160,120));
+          // GA_ROOTOWNER includes Reed's temporary native chat cover. Capturing
+          // only the underlying main HWND would omit the visible protection.
+          bool leftOwned=GetAncestor(WindowFromPoint(lp),3)==hwnd,rightOwned=GetAncestor(WindowFromPoint(rp),3)==hwnd;
+          if(GetAncestor(GetForegroundWindow(),3)==hwnd){
+            // One GPU readback per frame; two readbacks serialize refresh waits.
+            using(var strip=new Bitmap(width,120))using(var sg=Graphics.FromImage(strip)){
+              sg.CopyFromScreen(rect.Left,rect.Top+top,0,0,new Size(width,120));
+              g.DrawImage(strip,new Rectangle(0,0,160,120),new Rectangle(left,0,160,120),GraphicsUnit.Pixel);
+              g.DrawImage(strip,new Rectangle(160,0,160,120),new Rectangle(right,0,160,120),GraphicsUnit.Pixel);
+            }
           }else{
             mode="PrintWindow";
             using(var full=new Bitmap(width,height))using(var fg=Graphics.FromImage(full)){
@@ -61,8 +65,10 @@ public static class WorkspaceTransitionProbe {
               g.DrawImage(full,new Rectangle(160,0,160,120),new Rectangle(right,top,160,120),GraphicsUnit.Pixel);
             }
           }
-          var sample=new Sample{ms=watch.ElapsedMilliseconds,width=width,height=height,left=rect.Left,top=rect.Top,visibleWidth=clip.Right-clip.Left,clipLeft=clip.Left,leftWhite=White(patch,0),rightWhite=White(patch,160),mode=mode,
-            leftOwned=mode=="PrintWindow"||(leftOwned&&GetAncestor(WindowFromPoint(lp),2)==hwnd),rightOwned=mode=="PrintWindow"||(rightOwned&&GetAncestor(WindowFromPoint(rp),2)==hwnd)};
+          double lw,rw,lc,rc;var locked=patch.LockBits(new Rectangle(0,0,320,120),ImageLockMode.ReadOnly,PixelFormat.Format32bppArgb);
+          try{var pixels=new byte[locked.Stride*120];Marshal.Copy(locked.Scan0,pixels,0,pixels.Length);Ratios(pixels,locked.Stride,0,out lw,out lc);Ratios(pixels,locked.Stride,160,out rw,out rc);}finally{patch.UnlockBits(locked);}
+          var sample=new Sample{ms=watch.ElapsedMilliseconds,width=width,height=height,left=rect.Left,top=rect.Top,visibleWidth=clip.Right-clip.Left,clipLeft=clip.Left,leftWhite=lw,rightWhite=rw,leftCanary=lc,rightCanary=rc,mode=mode,
+            leftOwned=mode=="PrintWindow"||(leftOwned&&GetAncestor(WindowFromPoint(lp),3)==hwnd),rightOwned=mode=="PrintWindow"||(rightOwned&&GetAncestor(WindowFromPoint(rp),3)==hwnd)};
           if(mode=="screen"&&sample.rightOwned&&sample.rightWhite>.85){
             Rect now;GetWindowRect(hwnd,out now);
             using(var evidence=new Bitmap(now.Right-now.Left,now.Bottom-now.Top))using(var eg=Graphics.FromImage(evidence)){

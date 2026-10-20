@@ -23,7 +23,7 @@ export function createConversationCanvas({command,tauri,prompt,panels,isRunning,
   const splitKey='reed-canvas-split';
   let scale=1,pan={x:0,y:0},viewTouched=false,gesture=null,zoomTimer=null,saveQueue=Promise.resolve(),dirtyView=null,dirtyNodes=new Map(),saveFailure=false,state='ready';
   let windowQueue=Promise.resolve(),deferredGraph=null;
-  function nativeWindow(expanded){const task=windowQueue.then(()=>tauri.core.invoke('set_canvas_window',{expanded,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:320}));windowQueue=task.catch(()=>{});return task;}
+  function nativeWindow(expanded){const task=windowQueue.then(()=>tauri.core.invoke('set_canvas_window',{expanded,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:(expanded?320:213)}));windowQueue=task.catch(()=>{});return task;}
   const ns='http://www.w3.org/2000/svg',nodeElements=new Map();
   function setStatus(text,next=state){state=next;q('status').textContent=text;q('retry').hidden=next!=='error';pane.dataset.state=next;}
   function clampSplit(width){

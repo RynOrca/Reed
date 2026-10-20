@@ -2,6 +2,8 @@
 
 mod profile;
 mod canvas_window;
+#[cfg(windows)]
+mod collapse_cover;
 mod native_ui;
 mod browser_workspace;
 

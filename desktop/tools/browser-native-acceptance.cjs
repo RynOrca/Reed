@@ -99,7 +99,7 @@ try{
         const invoke=window.__TAURI__.core.invoke,width=chat.getBoundingClientRect().width,results=[];
         root.style.setProperty('--workspace-chat-width',width+'px');root.dataset.drawerSide=(await invoke('workspace_geometry')).side;
         root.classList.add('workspace-drawer','workspace-transitioning');pane.hidden=false;root.classList.add('browser-expanded');
-        for(let i=0;i<5;i++)for(const expanded of [true,false]){const result=await invoke('set_canvas_window',{expanded,durationMs:320,chatWidth:width});results.push({expanded,...result});await new Promise(resolve=>setTimeout(resolve,100));}
+        for(let i=0;i<5;i++)for(const expanded of [true,false]){const result=await invoke('set_canvas_window',{expanded,durationMs:expanded?320:213,chatWidth:width});results.push({expanded,...result});await new Promise(resolve=>setTimeout(resolve,100));}
         return results;
       });
       await fs.writeFile(path.join(out,'motion-only.json'),JSON.stringify(motion,null,2));
@@ -220,6 +220,7 @@ checks.push('动画中五次反向/跨面板点击仅落实最后关闭目标，
     await page.emulateMedia({reducedMotion:'reduce'});await page.locator('#browser-button').click();await page.waitForFunction(()=>!document.querySelector('.reed-workspace').classList.contains('workspace-transitioning'));
     assert.equal((await native('preview','visibility')).visible,true);await page.emulateMedia({reducedMotion:'no-preference'});checks.push('减少动态效果模式可直接切换且原生页面正常显示');
     if(process.env.SUMMON_TEST_TRANSITIONS==='1'){
+      await evaluate("(()=>{const marker=document.createElement('div');marker.id='transition-canary';Object.assign(marker.style,{position:'fixed',inset:'0',background:'#ef00ca',zIndex:'2147483647'});document.body.append(marker);return true;})()");
       await page.evaluate(()=>{
         // Tauri's exported invoke is read-only. Observe actual IPC fetches,
         // recording only the geometry flag, never invoke keys or other payloads.
@@ -250,7 +251,10 @@ checks.push('动画中五次反向/跨面板点击仅落实最后关闭目标，
         const gaps=frames.slice(1).map((frame,i)=>frame.ms-frames[i].ms),maxGap=Math.max(...gaps);
         assert.ok(maxGap<250,'Native sampling gap too large');
         assert.ok(frames.filter(frame=>frame[owned]).length>=20,'Insufficient owned chat-area samples');
+        assert.ok(frames.filter(frame=>frame[owned]&&frame.mode==='screen').length>=20,'Insufficient actual screen-composite chat samples');
         assert.equal(frames.filter(frame=>frame[owned]&&frame[white]>.85).length,0,'White flash in owned native chat patch');
+        const canary=opensRight?'leftCanary':'rightCanary';
+        assert.equal(frames.filter(frame=>frame[owned]&&frame.mode==='screen'&&frame[canary]>.05).length,0,'Browser surface leaked into chat during native collapse');
         const layout=await page.evaluate(()=>{window.__samplingLayout=false;return window.__layoutFrames;});
         await fs.writeFile(path.join(directory,'layout.json'),JSON.stringify(layout,null,2));
         for(const key of ['textX','textY','textHeight','scroll']){const values=layout.map(frame=>frame[key]).filter(v=>typeof v==='number');assert.ok(Math.max(...values)-Math.min(...values)<3,'Transcript moved during drawer motion: '+key);}
@@ -267,13 +271,13 @@ checks.push('动画中五次反向/跨面板点击仅落实最后关闭目标，
           assert.ok(motion.length>0,'No native reveal frame telemetry');
           for(const times of motion){
             const intervals=times.slice(1).map((t,i)=>t-times[i]).sort((a,b)=>a-b);
-            assert.ok(times.length>=15,'Insufficient reveal frames: '+times.length);
+            assert.ok(times.length>=(calls.some(call=>call.expanded===false)?10:15),'Insufficient reveal frames: '+times.length);
             assert.ok(intervals[Math.floor(intervals.length*.95)]<34,'Reveal p95 frame interval exceeds 34ms: '+JSON.stringify(intervals));
             assert.ok(Math.max(...intervals)<65,'Reveal has a long frame stall: '+JSON.stringify(intervals));
           }
         }
         if(handoff){assert.equal(new Set(frames.map(frame=>frame.width)).size,1,'Panel handoff resized native window');assert.ok(calls.every(call=>call.expanded===true),'Panel handoff collapsed before expansion');}
-        summaries.push({name,frames:frames.length,ownedChatSamples:frames.filter(frame=>frame[owned]).length,maxGapMs:maxGap,widths:[...new Set(frames.map(frame=>frame.width))],clipWidths:[...new Set(frames.map(frame=>frame.visibleWidth))],calls,modes:[...new Set(frames.map(frame=>frame.mode))],whiteFlashSamples:0});
+        summaries.push({name,frames:frames.length,ownedChatSamples:frames.filter(frame=>frame[owned]).length,maxGapMs:maxGap,widths:[...new Set(frames.map(frame=>frame.width))],clipWidths:[...new Set(frames.map(frame=>frame.visibleWidth))],calls,modes:[...new Set(frames.map(frame=>frame.mode))],whiteFlashSamples:0,browserLeakSamples:0,sourceCanarySamples:frames.filter(frame=>frame[opensRight?'rightCanary':'leftCanary']>.05).length});
       }
       for(const theme of ['dark','light']){
         await page.evaluate(theme=>window.__TAURI__.core.invoke('set_appearance',{style:'glass',theme}),theme);
@@ -286,6 +290,9 @@ checks.push('动画中五次反向/跨面板点击仅落实最后关闭目标，
         await recordTransition(theme+'-chat-browser','#browser-button');
       }
       await fs.writeFile(path.join(out,'transitions.json'),JSON.stringify(summaries,null,2));
+      assert.ok(summaries.some(group=>group.sourceCanarySamples>0),'Native browser canary positive control was not observed');
+      checks.push('网页高饱和标记在真实浏览器区域可见，收回全过程聊天采样无网页颜色串入');
+      await evaluate("document.getElementById('transition-canary')?.remove()");
       checks.push('深浅主题12组切换连续原生采样聊天区域无白屏，面板互切窗口宽度恒定且无收窄命令');
     }
     const statusModes=await page.evaluate(async()=>{

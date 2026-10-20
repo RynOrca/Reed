@@ -1,0 +1,84 @@
+// A native image of the chat covers the one-time HWND resize. WebView2 can
+// otherwise present the old wide backing surface, whose left side is the page,
+// at the new narrow window origin before its next renderer frame arrives.
+use serde_json::{json,Value};
+use base64::Engine;
+use tauri::WebviewWindow;
+
+fn cdp(window:&WebviewWindow,method:&str,params:Value)->Result<Value,String>{
+    use webview2_com::{CallDevToolsProtocolMethodCompletedHandler,CoTaskMemPWSTR};
+    let(tx,rx)=std::sync::mpsc::channel();let failure=tx.clone();let method=method.to_owned();
+    window.with_webview(move|platform|{
+        let result=(||->windows::core::Result<()>{unsafe{
+            let core=platform.controller().CoreWebView2()?;
+            let method=CoTaskMemPWSTR::from(method.as_str());let params=params.to_string();let params=CoTaskMemPWSTR::from(params.as_str());
+            let callback=CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move|status,result|{
+                let value=if status.is_ok(){serde_json::from_str(&result).map_err(|e|e.to_string())}else{Err(format!("{status:?}"))};
+                let _=tx.send(value);Ok(())
+            }));
+            core.CallDevToolsProtocolMethod(*method.as_ref().as_pcwstr(),*params.as_ref().as_pcwstr(),&callback)?;Ok(())
+        }})();if let Err(error)=result{let _=failure.send(Err(error.to_string()));}
+    }).map_err(|e|e.to_string())?;
+    rx.recv_timeout(std::time::Duration::from_secs(3)).map_err(|_|"聊天换帧超时".to_owned())?
+}
+
+#[repr(C)]
+struct BitmapInfo{size:u32,width:i32,height:i32,planes:u16,bits:u16,compression:u32,image_size:u32,xppm:i32,yppm:i32,used:u32,important:u32,color:u32}
+#[link(name="gdi32")]
+extern "system"{fn CreateDIBSection(dc:isize,info:*const BitmapInfo,usage:u32,bits:*mut *mut u8,section:isize,offset:u32)->isize;fn DeleteObject(object:isize)->i32;}
+#[link(name="user32")]
+extern "system"{
+    fn CreateWindowExW(ex:u32,class:*const u16,title:usize,style:u32,x:i32,y:i32,w:i32,h:i32,parent:isize,menu:usize,instance:usize,param:usize)->isize;
+    fn SendMessageW(hwnd:isize,msg:u32,wparam:usize,lparam:isize)->isize;
+    fn RedrawWindow(hwnd:isize,rect:usize,region:usize,flags:u32)->i32;
+    fn DestroyWindow(hwnd:isize)->i32;
+}
+
+pub struct CollapseCover{pub hwnd:isize,bitmap:isize,window:WebviewWindow}
+impl CollapseCover{
+    pub fn capture(window:&WebviewWindow,chat_width:u32,rightward:bool)->Result<Self,String>{
+        let size=window.inner_size().map_err(|e|e.to_string())?;let scale=window.scale_factor().map_err(|e|e.to_string())?;
+        let x=if rightward{0}else{size.width.saturating_sub(chat_width)};
+        let shot=cdp(window,"Page.captureScreenshot",json!({"format":"png","fromSurface":true,"captureBeyondViewport":false,"optimizeForSpeed":true,"clip":{"x":x as f64/scale,"y":0,"width":chat_width as f64/scale,"height":size.height as f64/scale,"scale":1}}))?;
+        let bytes=base64::engine::general_purpose::STANDARD.decode(shot["data"].as_str().ok_or("聊天截图为空")?).map_err(|e|e.to_string())?;
+        let image=tauri::image::Image::from_bytes(&bytes).map_err(|e|e.to_string())?;
+        if image.width()!=chat_width||image.height()!=size.height{return Err("聊天截图尺寸与原生窗口不一致".into());}
+        let info=BitmapInfo{size:40,width:image.width() as i32,height:-(image.height() as i32),planes:1,bits:32,compression:0,image_size:0,xppm:0,yppm:0,used:0,important:0,color:0};
+        let mut bits=std::ptr::null_mut();let bitmap=unsafe{CreateDIBSection(0,&info,0,&mut bits,0,0)};
+        if bitmap==0||bits.is_null(){return Err(std::io::Error::last_os_error().to_string());}
+        unsafe{let destination=std::slice::from_raw_parts_mut(bits,image.rgba().len());for(source,target)in image.rgba().chunks_exact(4).zip(destination.chunks_exact_mut(4)){target.copy_from_slice(&[source[2],source[1],source[0],source[3]]);}}
+        let parent=window.hwnd().map_err(|e|e.to_string())?.0 as isize;
+        let origin=window.outer_position().map_err(|e|e.to_string())?;
+        let radius=(14.0*scale) as i32;
+        let(tx,rx)=std::sync::mpsc::channel();
+        window.run_on_main_thread(move||{
+            let class=[83u16,84,65,84,73,67,0];
+            // An owned popup has its own compositor surface. A child STATIC
+            // shares the parent's resize invalidation and can expose the old
+            // WebView texture before its next GDI paint.
+            let hwnd=unsafe{CreateWindowExW(0x080000a0,class.as_ptr(),0,0x80000000|0x10000000|0x08000000|0x0e,origin.x+x as i32,origin.y,chat_width as i32,size.height as i32,parent,0,0,0)};
+            if hwnd!=0{unsafe{
+                #[link(name="gdi32")]extern "system"{fn CreateRoundRectRgn(l:i32,t:i32,r:i32,b:i32,w:i32,h:i32)->isize;}
+                #[link(name="user32")]extern "system"{fn SetWindowRgn(hwnd:isize,region:isize,redraw:i32)->i32;}
+                let region=CreateRoundRectRgn(0,0,chat_width as i32+1,size.height as i32+1,radius*2,radius*2);
+                if region!=0&&SetWindowRgn(hwnd,region,0)==0{DeleteObject(region);}
+                SendMessageW(hwnd,0x172,0,bitmap);RedrawWindow(hwnd,0,0,0x101);
+            }}
+            let _=tx.send(hwnd);
+        }).map_err(|e|{unsafe{DeleteObject(bitmap);};e.to_string()})?;
+        let hwnd=rx.recv().map_err(|e|e.to_string())?;
+        if hwnd==0{unsafe{DeleteObject(bitmap);};return Err("无法准备聊天换帧保护".into());}
+        // Present the independent cover before moving the window underneath it.
+        #[link(name="dwmapi")]extern "system"{fn DwmFlush()->i32;}
+        unsafe{DwmFlush();}
+        Ok(Self{hwnd,bitmap,window:window.clone()})
+    }
+    pub fn wait_for_chat_frame(&self)->Result<(),String>{
+        cdp(&self.window,"Runtime.evaluate",json!({"expression":"new Promise(resolve=>{let done=false;const finish=()=>{if(!done){done=true;resolve(innerWidth);}};requestAnimationFrame(()=>requestAnimationFrame(finish));setTimeout(finish,150);})","awaitPromise":true,"returnByValue":true}))?;
+        // Force the resized renderer's raster before uncovering the live chat.
+        cdp(&self.window,"Page.captureScreenshot",json!({"format":"png","fromSurface":true,"captureBeyondViewport":false,"optimizeForSpeed":true}))?;
+        #[link(name="dwmapi")]extern "system"{fn DwmFlush()->i32;}
+        unsafe{DwmFlush();}Ok(())
+    }
+}
+impl Drop for CollapseCover{fn drop(&mut self){let hwnd=self.hwnd;let bitmap=self.bitmap;let _=self.window.run_on_main_thread(move||unsafe{DestroyWindow(hwnd);DeleteObject(bitmap);});}}

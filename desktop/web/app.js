@@ -107,7 +107,7 @@ $("goals-button").append(icon("book"));
 $("goals-button").onclick = () => goalsPanel.open();
 
 const projectPicker=createProjectPicker({button:$('workspace-button'),command,tauri,isRunning:()=>running,onError:errorRow,onSelect:()=>{closeHistory();prompt.focus();}});
-const workspacePanels=createWorkspacePanels({prepare:()=>tauri.core.invoke('workspace_geometry'),onExpanded:()=>tauri.core.invoke('set_canvas_window',{expanded:true,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:320}),onInterrupt:()=>{void tauri.core.invoke('cancel_canvas_transition').catch(errorRow);},onEmpty:()=>tauri.core.invoke('set_canvas_window',{expanded:false,chatWidth:document.querySelector('.chat-shell').getBoundingClientRect().width,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:320})});
+const workspacePanels=createWorkspacePanels({prepare:()=>tauri.core.invoke('workspace_geometry'),onExpanded:()=>tauri.core.invoke('set_canvas_window',{expanded:true,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:320}),onInterrupt:()=>{void tauri.core.invoke('cancel_canvas_transition').catch(errorRow);},onEmpty:()=>tauri.core.invoke('set_canvas_window',{expanded:false,chatWidth:document.querySelector('.chat-shell').getBoundingClientRect().width,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:213})});
 const canvasPanel = createConversationCanvas({command,tauri,prompt,panels:workspacePanels,isRunning:()=>running,reportError:errorRow,onUnavailable:()=>{
   const role=roles.find(item=>item.id===activeRoleId);
   if(!role){void command('get_state').catch(roleError);return;}
