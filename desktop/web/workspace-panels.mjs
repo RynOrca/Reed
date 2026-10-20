@@ -1,3 +1,4 @@
+const workspaceRoot=()=>typeof document!=='undefined'&&typeof document.querySelector==='function'?document.querySelector('.reed-workspace'):null;
 // Semantic transitions are serialized; pending clicks only update the destination.
 export function paintWorkspace(){
   return new Promise(resolve=>{
@@ -21,7 +22,7 @@ export function createWorkspacePanels({onEmpty=async()=>{},onInterrupt=()=>{},on
         interrupted=false;
         if(active())await onExpanded();else await onEmpty();
         if(interrupted||desired!==active())continue;
-        if(!active()&&typeof document!=='undefined')document.querySelector('.reed-workspace')?.classList.remove('workspace-drawer');
+        if(!active()&&typeof document!=='undefined')workspaceRoot()?.classList.remove('workspace-drawer');
         return;
       }
       const target=desired,work=operation;operation=null;
@@ -38,10 +39,10 @@ export function createWorkspacePanels({onEmpty=async()=>{},onInterrupt=()=>{},on
     if(running&&desired!==target){interrupted=true;onInterrupt();}
     desired=target;operation=work;
     if(!running){
-      if(typeof document!=='undefined'){const root=document.querySelector('.reed-workspace'),chat=root?.querySelector('.chat-shell');if(chat)root.style.setProperty('--workspace-chat-width',chat.getBoundingClientRect().width+'px');root?.classList.add('workspace-transitioning');}
+      if(typeof document!=='undefined'){const root=workspaceRoot(),chat=root?.querySelector('.chat-shell');if(chat)root.style.setProperty('--workspace-chat-width',chat.getBoundingClientRect().width+'px');root?.classList.add('workspace-transitioning');}
       running=Promise.resolve().then(reconcile).finally(()=>{
         running=null;
-        if(typeof document!=='undefined'){const root=document.querySelector('.reed-workspace');root?.classList.remove('workspace-moving','workspace-transitioning');root?.style.removeProperty('--motion-chat-width');}
+        if(typeof document!=='undefined'){const root=workspaceRoot();root?.classList.remove('workspace-moving','workspace-transitioning');root?.style.removeProperty('--motion-chat-width');}
       });
     }
     return running;
@@ -56,7 +57,7 @@ export function createWorkspacePanels({onEmpty=async()=>{},onInterrupt=()=>{},on
 
 // The live chat keeps one width through native expansion, handoff and collapse.
 async function beginWorkspaceMotion(prepare){
-  const root=document.querySelector('.reed-workspace'),chat=root?.querySelector('.chat-shell');
+  const root=workspaceRoot(),chat=root?.querySelector('.chat-shell');
   if(!root||!chat)return ()=>{};
   const width=chat.getBoundingClientRect().width;
   if(!root.classList.contains('workspace-drawer')){const geometry=await prepare();root.dataset.drawerSide=geometry.side||'left';}
