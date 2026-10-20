@@ -52,7 +52,7 @@ export function createGoals({ command, onChange = () => {} }) {
     if(!enabled)return;
     if(dirty()&&!confirmReload){confirmReload=true;el("reload").textContent="确认放弃草稿";el("reload").classList.add("confirm");clearTimeout(reloadTimer);reloadTimer=setTimeout(()=>{confirmReload=false;el("reload").textContent="重新加载文件";el("reload").classList.remove("confirm");},3000);return;}
     confirmReload=false;clearTimeout(reloadTimer);el("reload").textContent="重新加载文件";el("reload").classList.remove("confirm");const ticket=loading;
-    try{const result=await command("get_goals",{},true);if(ticket!==loading)return;goal=result.goal;draft=goal?.body||"";drafts.delete(project);mode(false);render();report();}catch(e){report(e.message);}
+    try{const result=await command("get_goals",{projectPath:project},true);if(ticket!==loading)return;goal=result.goal;draft=goal?.body||"";drafts.delete(project);mode(false);render();report();}catch(e){report(e.message);}
   };
   button.onclick=open;veil.onclick=close;el("close").onclick=close;el("edit").onclick=()=>mode(true);editor.oninput=state;
   el("save").onclick=save;el("save-edit").onclick=save;el("cancel").onclick=()=>{if(editor.value!==draft){closeAfter=false;notice.hidden=false;}else mode(false)};
@@ -68,7 +68,7 @@ export function createGoals({ command, onChange = () => {} }) {
     if(!enabled){hide();doc.replaceChildren();editor.value="";el("project").textContent="";el("path").textContent="";el("path").removeAttribute("title");notify();return;}
     if(!project){hide();notify();return;}
     el("project").textContent=next.replace(/[\\/]+$/,"").split(/[\\/]/).pop();el("path").textContent=next;el("path").title=next;
-    try{const result=await command("get_goals",{},true);if(ticket!==loading)return;goal=result.goal;if(!goal)return;
+    try{const result=await command("get_goals",{projectPath:project},true);if(ticket!==loading)return;goal=result.goal;if(!goal)return;
       const stash=drafts.get(next);draft=stash?.body??goal.body;
       if(stash && stash.revision!==goal.revision){goal.revision=stash.revision;report("此项目还有未保存草稿，原文件也已更新。请复制草稿后重新打开目标，再合并修改。");}
       render();
