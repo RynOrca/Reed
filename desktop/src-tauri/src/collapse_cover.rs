@@ -67,7 +67,6 @@ pub struct CollapseCover{pub hwnd:isize,bitmap:isize,window:WebviewWindow}
 impl CollapseCover{
     pub fn capture(window:&WebviewWindow,chat_width:u32,rightward:bool)->Result<Self,String>{
         let size=window.inner_size().map_err(|e|e.to_string())?;let scale=window.scale_factor().map_err(|e|e.to_string())?;
-        let x=if rightward{0}else{size.width.saturating_sub(chat_width)};
         // Crop the native preview in memory, leaving the live raster unchanged.
         let bytes=preview(window)?;
         if let Some(out)=std::env::var_os("SUMMON_TEST_COVER_OUT"){
@@ -75,9 +74,15 @@ impl CollapseCover{
             let _=std::fs::write(std::path::PathBuf::from(out).join(format!("cover-{stamp}.png")),&bytes);
         }
         let image=tauri::image::Image::from_bytes(&bytes).map_err(|e|e.to_string())?;
-        if image.width()!=size.width||image.height()!=size.height||x+chat_width>image.width(){return Err("聊天截图尺寸与原生窗口不一致".into());}
+        // WebView2 rounds its DPI-scaled viewport independently from Tauri's
+        // physical inner size. At 150% scaling the preview can be one pixel
+        // wider; anchor the crop to the preview without shifting its screen
+        // origin by that rounding difference.
+        if image.height()!=size.height||image.width().abs_diff(size.width)>2||chat_width>size.width{return Err(format!("聊天截图尺寸与原生窗口不一致：预览{}×{}，窗口{}×{}，聊天宽度{}",image.width(),image.height(),size.width,size.height,chat_width));}
+        let crop_x=if rightward{0}else{image.width().saturating_sub(chat_width)};
+        let screen_x=if rightward{0}else{size.width.saturating_sub(chat_width)};
         let mut rgba=Vec::with_capacity(chat_width as usize*size.height as usize*4);
-        for row in image.rgba().chunks_exact(image.width() as usize*4){rgba.extend_from_slice(&row[x as usize*4..(x+chat_width) as usize*4]);}
+        for row in image.rgba().chunks_exact(image.width() as usize*4){rgba.extend_from_slice(&row[crop_x as usize*4..(crop_x+chat_width) as usize*4]);}
         let info=BitmapInfo{size:40,width:chat_width as i32,height:-(size.height as i32),planes:1,bits:32,compression:0,image_size:0,xppm:0,yppm:0,used:0,important:0,color:0};
         let mut bits=std::ptr::null_mut();let bitmap=unsafe{CreateDIBSection(0,&info,0,&mut bits,0,0)};
         if bitmap==0||bits.is_null(){return Err(std::io::Error::last_os_error().to_string());}
@@ -94,7 +99,7 @@ impl CollapseCover{
             // Upload the complete image before showing this surface. A visible
             // STATIC + STM_SETIMAGE can expose an unpainted DWM surface while
             // the owner is resized, even after synchronous WM_PAINT.
-            let mut hwnd=unsafe{CreateWindowExW(0x080800a0,class.as_ptr(),0,0x80000000|0x08000000,origin.x+x as i32,origin.y,chat_width as i32,size.height as i32,parent,0,0,0)};
+            let mut hwnd=unsafe{CreateWindowExW(0x080800a0,class.as_ptr(),0,0x80000000|0x08000000,origin.x+screen_x as i32,origin.y,chat_width as i32,size.height as i32,parent,0,0,0)};
             if hwnd!=0{unsafe{
                 #[link(name="gdi32")]extern "system"{fn CreateRoundRectRgn(l:i32,t:i32,r:i32,b:i32,w:i32,h:i32)->isize;}
                 #[link(name="user32")]extern "system"{fn SetWindowRgn(hwnd:isize,region:isize,redraw:i32)->i32;}
@@ -102,7 +107,7 @@ impl CollapseCover{
                 if region!=0&&SetWindowRgn(hwnd,region,0)==0{DeleteObject(region);}
                 let dc=CreateCompatibleDC(0);
                 let previous=if dc!=0{SelectObject(dc,bitmap)}else{0};
-                let destination=Point{x:origin.x+x as i32,y:origin.y};let source=Point{x:0,y:0};
+                let destination=Point{x:origin.x+screen_x as i32,y:origin.y};let source=Point{x:0,y:0};
                 let dimensions=Size{width:chat_width as i32,height:size.height as i32};
                 let uploaded=if dc!=0{UpdateLayeredWindow(hwnd,0,&destination,&dimensions,dc,&source,0,0,4)}else{0};
                 if dc!=0{SelectObject(dc,previous);DeleteDC(dc);}

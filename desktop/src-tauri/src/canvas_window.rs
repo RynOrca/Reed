@@ -158,7 +158,7 @@ fn change_window(window:tauri::WebviewWindow,expanded:bool,duration:u64,chat_wid
         // Expanding to the left moves the HWND origin. Until WebView2 paints
         // its wider, right-anchored layout, DWM can show the narrow old texture
         // at that new origin. Keep the original chat on an independent surface.
-        #[cfg(windows)]let opening_cover=if !rightward&&next.width>chat{Some(crate::collapse_cover::CollapseCover::capture(&window,chat,false)?)}else{None};
+        #[cfg(windows)]let opening_cover=if !rightward&&next.width>chat{Some(crate::collapse_cover::CollapseCover::capture(&window,chat,false).map_err(|error|{crate::startup_log(&format!("Workspace expand cover: {error}"));error})?)}else{None};
         state.clipping.store(true,Ordering::SeqCst);
         *active=Some(Expanded{original_width,chat_width:chat as f64/scale,was_maximized,target:next,settled:false,rightward,visible_width:chat});
         place_clipped(&window,next,chat,rightward)?;
@@ -182,7 +182,7 @@ fn change_window(window:tauri::WebviewWindow,expanded:bool,duration:u64,chat_wid
         let (visible,frames)=reveal(&window,before,saved.visible_width,width,saved.rightward,duration,revision)?;
         saved.visible_width=visible;*active=Some(saved);
         if visible!=width{return Ok(json!({"expanded":true,"interrupted":true,"chatWidth":saved.chat_width,"revealFramesMs":frames}));}
-        #[cfg(windows)]let cover=crate::collapse_cover::CollapseCover::capture(&window,width,saved.rightward)?;
+        #[cfg(windows)]let cover=crate::collapse_cover::CollapseCover::capture(&window,width,saved.rightward).map_err(|error|{crate::startup_log(&format!("Workspace collapse cover: {error}"));error})?;
         if state.revision.load(Ordering::SeqCst)!=revision{return Ok(json!({"expanded":true,"interrupted":true,"chatWidth":saved.chat_width,"revealFramesMs":frames}));}
         place_clipped(&window,Frame{x,width,..before},width,saved.rightward)?;
         #[cfg(windows)]if let Err(error)=cover.wait_for_chat_frame(){crate::startup_log(&format!("Workspace collapse frame: {error}"));}
