@@ -2,8 +2,35 @@
 // otherwise present the old wide backing surface, whose left side is the page,
 // at the new narrow window origin before its next renderer frame arrives.
 use serde_json::{json,Value};
-use base64::Engine;
 use tauri::WebviewWindow;
+
+// CapturePreview reads the current WebView surface without the DevTools
+// screenshot command's temporary compositor overrides.
+fn preview(window:&WebviewWindow)->Result<Vec<u8>,String>{
+    use webview2_com::{CapturePreviewCompletedHandler,Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG};
+    use windows::Win32::{Foundation::HGLOBAL,System::Com::{StructuredStorage::CreateStreamOnHGlobal,STATSTG,STATFLAG_NONAME,STREAM_SEEK_SET}};
+    let(tx,rx)=std::sync::mpsc::channel();let failure=tx.clone();
+    window.with_webview(move|platform|{
+        let result=(||->windows::core::Result<()>{unsafe{
+            let core=platform.controller().CoreWebView2()?;
+            let stream=CreateStreamOnHGlobal(HGLOBAL::default(),true)?;
+            let captured=stream.clone();
+            let callback=CapturePreviewCompletedHandler::create(Box::new(move|status|{
+                let result=(||->Result<Vec<u8>,String>{
+                    status.map_err(|e|e.to_string())?;
+                    let mut stat=STATSTG::default();captured.Stat(&mut stat,STATFLAG_NONAME).map_err(|e|e.to_string())?;
+                    if stat.cbSize==0||stat.cbSize>64*1024*1024{return Err("聊天预览尺寸无效".into());}
+                    captured.Seek(0,STREAM_SEEK_SET,None).map_err(|e|e.to_string())?;
+                    let mut bytes=vec![0;stat.cbSize as usize];let mut read=0;
+                    captured.Read(bytes.as_mut_ptr().cast(),bytes.len() as u32,Some(&mut read)).ok().map_err(|e|e.to_string())?;
+                    if read as usize!=bytes.len(){return Err("聊天预览读取不完整".into());}Ok(bytes)
+                })();let _=tx.send(result);Ok(())
+            }));
+            core.CapturePreview(COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,&stream,&callback)?;Ok(())
+        }})();if let Err(error)=result{let _=failure.send(Err(error.to_string()));}
+    }).map_err(|e|e.to_string())?;
+    rx.recv_timeout(std::time::Duration::from_secs(3)).map_err(|_|"聊天预览超时".to_owned())?
+}
 
 fn cdp(window:&WebviewWindow,method:&str,params:Value)->Result<Value,String>{
     use webview2_com::{CallDevToolsProtocolMethodCompletedHandler,CoTaskMemPWSTR};
@@ -41,10 +68,8 @@ impl CollapseCover{
     pub fn capture(window:&WebviewWindow,chat_width:u32,rightward:bool)->Result<Self,String>{
         let size=window.inner_size().map_err(|e|e.to_string())?;let scale=window.scale_factor().map_err(|e|e.to_string())?;
         let x=if rightward{0}else{size.width.saturating_sub(chat_width)};
-        // A CDP clip with nonzero x temporarily repositions WebView2's raster
-        // during capture. Capture the unchanged viewport, then crop in memory.
-        let shot=cdp(window,"Page.captureScreenshot",json!({"format":"png","fromSurface":true,"captureBeyondViewport":false,"optimizeForSpeed":true}))?;
-        let bytes=base64::engine::general_purpose::STANDARD.decode(shot["data"].as_str().ok_or("聊天截图为空")?).map_err(|e|e.to_string())?;
+        // Crop the native preview in memory, leaving the live raster unchanged.
+        let bytes=preview(window)?;
         if let Some(out)=std::env::var_os("SUMMON_TEST_COVER_OUT"){
             let stamp=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis();
             let _=std::fs::write(std::path::PathBuf::from(out).join(format!("cover-{stamp}.png")),&bytes);
@@ -95,7 +120,7 @@ impl CollapseCover{
     pub fn wait_for_chat_frame(&self)->Result<(),String>{
         cdp(&self.window,"Runtime.evaluate",json!({"expression":"new Promise(resolve=>{let done=false;const finish=()=>{if(!done){done=true;resolve(innerWidth);}};requestAnimationFrame(()=>requestAnimationFrame(finish));setTimeout(finish,150);})","awaitPromise":true,"returnByValue":true}))?;
         // Force the resized renderer's raster before uncovering the live chat.
-        cdp(&self.window,"Page.captureScreenshot",json!({"format":"png","fromSurface":true,"captureBeyondViewport":false,"optimizeForSpeed":true}))?;
+        preview(&self.window)?;
         #[link(name="dwmapi")]extern "system"{fn DwmFlush()->i32;}
         unsafe{DwmFlush();}Ok(())
     }
