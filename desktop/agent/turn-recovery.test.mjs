@@ -11,6 +11,14 @@ const thinkingOnly = {
   usage: { input: 100, output: 20, totalTokens: 120 },
 };
 
+test('完整传输但工具无效时，即使已有部分正文也只续接一次，不重复执行工具',async()=>{
+  const handlers=new Map(),recovery=createTurnRecovery({send(){}});recovery.extension({on:(name,fn)=>handlers.set(name,fn)});recovery.begin();
+  const partial={role:'assistant',stopReason:'error',content:[{type:'text',text:'合成部分正文'}],reedWire:{enforced:true,transportComplete:true,errorCode:'invalid_tool_call',status:'incomplete'}};
+  assert.equal(recovery.willRecover(partial),true);const result=await handlers.get('turn_end')({message:partial,messageEntryId:'test'});
+  assert.equal(result.continue,true);assert.deepEqual(result.entries[0].replacement.content,partial.content);assert.equal(recovery.willRecover(partial),false);
+  assert.equal(recovery.willRecover({...partial,content:[{type:'toolCall',name:'read'}]}),false);
+});
+
 test("malformed SSE recovery excludes visible answers, tool calls, aborts and unrelated errors", () => {
   const recovery = createTurnRecovery({ send() {} });
   recovery.begin();
