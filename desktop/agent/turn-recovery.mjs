@@ -52,7 +52,7 @@ export function createTurnRecovery({ send, diagnostic = async () => {},currentAt
   const willRecover = message => {
     if(message?.reedWire&&currentAttempt()&&message.reedWire.attempt_id!==currentAttempt())return false;
     const outcome = classifyAssistantOutcome(message);
-    const heldInvalidTool=message?.reedWire?.enforced&&message.reedWire.transportComplete&&message.reedWire.errorCode==='invalid_tool_call';
+    const heldInvalidTool=Boolean(message?.reedWire?.enforced&&message.reedWire.transportComplete&&message.reedWire.errorCode==='invalid_tool_call');
     return active && !attempted && outcome.status!=='aborted' && (!outcome.hasText||heldInvalidTool) && !outcome.hasToolCalls && (["truncated", "empty"].includes(outcome.status) || isMalformedStreamError(message) || isWireRecoverable(message?.reedWire));
   };
   return {
