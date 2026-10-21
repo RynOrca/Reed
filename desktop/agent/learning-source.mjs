@@ -2,7 +2,7 @@ import {readFile,stat} from 'node:fs/promises';
 import {basename,extname} from 'node:path';
 
 export async function readLearningSource(url,capabilities,workspace){
-  const match=/^summon-file:[^\r\n]+#L([1-9][0-9]*)$/.exec(String(url||''));
+  const match=/^summon-file:[^\r\n]+#L([1-9][0-9]*)(?:-L?([1-9][0-9]*))?$/.exec(String(url||''));
   if(!match||url.length>2400)throw Error('来源需包含有效的笔记行号');
   const path=await capabilities.resolveFile(url,workspace);
   if(!['.md','.txt'].includes(extname(path).toLowerCase()))throw Error('仅支持定位 Markdown 或文本笔记');

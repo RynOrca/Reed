@@ -22,12 +22,12 @@ public static class WorkspaceTransitionProbe {
   [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr region);
   struct Rect { public int Left,Top,Right,Bottom; }
   public class Sample {
-    public long ms;public int width,height,left,top,visibleWidth,clipLeft;public double leftWhite,rightWhite,leftCanary,rightCanary;public string mode;public bool leftOwned,rightOwned;
+    public long ms;public int width,height,left,top,visibleWidth,clipLeft;public double leftWhite,rightWhite,leftCanary,rightCanary,leftAnchor,rightAnchor;public string mode;public bool leftOwned,rightOwned;
   }
-  static void Ratios(byte[] pixels,int stride,int offset,out double whiteRatio,out double canaryRatio){
-    int white=0,hits=0,total=0;
-    for(int x=offset+4;x<offset+160;x+=4)for(int y=4;y<120;y+=4){int i=y*stride+x*4;int b=pixels[i],g=pixels[i+1],r=pixels[i+2];if(r>=250&&g>=250&&b>=250)white++;if(r>180&&b>130&&g<70)hits++;total++;}
-    whiteRatio=(double)white/total;canaryRatio=(double)hits/total;
+  static void Ratios(byte[] pixels,int stride,int offset,out double whiteRatio,out double canaryRatio,out double anchorRatio){
+    int white=0,hits=0,anchors=0,total=0;
+    for(int x=offset+4;x<offset+160;x+=4)for(int y=4;y<120;y+=4){int i=y*stride+x*4;int b=pixels[i],g=pixels[i+1],r=pixels[i+2];if(r>=250&&g>=250&&b>=250)white++;if(r>180&&b>130&&g<70)hits++;if(r<140&&g>140&&g<210&&b>210&&b>g+30)anchors++;total++;}
+    whiteRatio=(double)white/total;canaryRatio=(double)hits/total;anchorRatio=(double)anchors/total;
   }
   public static Sample[] Run(int pid,string output,int duration) {
     SetProcessDPIAware();Directory.CreateDirectory(output);
@@ -65,9 +65,9 @@ public static class WorkspaceTransitionProbe {
               g.DrawImage(full,new Rectangle(160,0,160,120),new Rectangle(right,top,160,120),GraphicsUnit.Pixel);
             }
           }
-          double lw,rw,lc,rc;var locked=patch.LockBits(new Rectangle(0,0,320,120),ImageLockMode.ReadOnly,PixelFormat.Format32bppArgb);
-          try{var pixels=new byte[locked.Stride*120];Marshal.Copy(locked.Scan0,pixels,0,pixels.Length);Ratios(pixels,locked.Stride,0,out lw,out lc);Ratios(pixels,locked.Stride,160,out rw,out rc);}finally{patch.UnlockBits(locked);}
-          var sample=new Sample{ms=watch.ElapsedMilliseconds,width=width,height=height,left=rect.Left,top=rect.Top,visibleWidth=clip.Right-clip.Left,clipLeft=clip.Left,leftWhite=lw,rightWhite=rw,leftCanary=lc,rightCanary=rc,mode=mode,
+          double lw,rw,lc,rc,la,ra;var locked=patch.LockBits(new Rectangle(0,0,320,120),ImageLockMode.ReadOnly,PixelFormat.Format32bppArgb);
+          try{var pixels=new byte[locked.Stride*120];Marshal.Copy(locked.Scan0,pixels,0,pixels.Length);Ratios(pixels,locked.Stride,0,out lw,out lc,out la);Ratios(pixels,locked.Stride,160,out rw,out rc,out ra);}finally{patch.UnlockBits(locked);}
+          var sample=new Sample{ms=watch.ElapsedMilliseconds,width=width,height=height,left=rect.Left,top=rect.Top,visibleWidth=clip.Right-clip.Left,clipLeft=clip.Left,leftWhite=lw,rightWhite=rw,leftCanary=lc,rightCanary=rc,leftAnchor=la,rightAnchor=ra,mode=mode,
             leftOwned=mode=="PrintWindow"||(leftOwned&&GetAncestor(WindowFromPoint(lp),3)==hwnd),rightOwned=mode=="PrintWindow"||(rightOwned&&GetAncestor(WindowFromPoint(rp),3)==hwnd)};
           if(mode=="screen"&&sample.rightOwned&&sample.rightWhite>.85){
             Rect now;GetWindowRect(hwnd,out now);

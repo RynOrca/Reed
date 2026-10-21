@@ -68,6 +68,8 @@ async function beginWorkspaceMotion(prepare){
   if(!root.classList.contains('workspace-drawer')){const geometry=await prepare();root.dataset.drawerSide=geometry.side||'left';}
   root.style.setProperty('--workspace-chat-width',width+'px');root.style.setProperty('--motion-chat-width',width+'px');
   root.classList.add('workspace-drawer','workspace-moving');
+  // Commit the fixed chat width and side before the native carrier changes.
+  await paintWorkspace();
   const finish=()=>paintWorkspace();
   finish.cancel=()=>{};return finish;
 }

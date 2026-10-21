@@ -40,7 +40,7 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
     });
     layoutQueue=task.catch(()=>{lastBounds='';});return task;
   }
-  function split(value,save=false){ratio=Math.max(.3,Math.min(.75,value));workspace.style.setProperty('--browser-width',Math.round(ratio*100)+'%');splitter.setAttribute('aria-valuenow',String(Math.round(ratio*100)));if(save){localStorage.setItem('reed-browser-ratio',String(ratio));workspace.style.setProperty('--workspace-chat-width',Math.max(240,workspace.clientWidth*(1-ratio)-6)+'px');}scheduleBounds();}
+  function split(value,save=false){ratio=Math.max(.3,Math.min(.75,value));workspace.style.setProperty('--browser-width',Math.round(ratio*100)+'%');splitter.setAttribute('aria-valuenow',String(Math.round(ratio*100)));if(dragging||save)workspace.style.setProperty('--workspace-chat-width',Math.max(240,workspace.clientWidth*(1-ratio)-6)+'px');if(save)localStorage.setItem('reed-browser-ratio',String(ratio));scheduleBounds();}
   async function show(){
     if(opened)return;
     opened=true;pane.hidden=false;splitter.hidden=false;workspace.classList.add('browser-expanded');entry.setAttribute('aria-expanded','true');split(ratio);
@@ -108,9 +108,10 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
     try{const response=await command('browser_read',{includeImages:true,maxSegments:6},true);if(revision!==ticket||!opened)return;await onPage(response.result);status(response.result.details.coverage.complete?'已加入页面内容，确认后发送':'已加入页面内容；长页或嵌入内容未全部覆盖');workspace.classList.remove('browser-mobile-page');prompt.focus();}catch(error){if(revision===ticket)status(String(error.message||error),'error');}finally{q('read').disabled=!ready;}
   };
   q('chat').onclick=()=>{workspace.classList.toggle('browser-mobile-page');scheduleBounds();if(!workspace.classList.contains('browser-mobile-page'))prompt.focus();};
-  splitter.addEventListener('pointerdown',event=>{if(event.button!==0)return;dragging=true;splitter.setPointerCapture(event.pointerId);scheduleBounds();});
+  splitter.addEventListener('pointerdown',event=>{if(event.button!==0)return;event.preventDefault();dragging=true;splitter.setPointerCapture(event.pointerId);scheduleBounds();});
   splitter.addEventListener('pointermove',event=>{if(dragging){const rect=workspace.getBoundingClientRect();split(workspace.dataset.drawerSide==='right'?1-(event.clientX-rect.left)/rect.width:(event.clientX-rect.left)/rect.width);}});
   const finish=()=>{if(!dragging)return;dragging=false;split(ratio,true);};splitter.addEventListener('pointerup',finish);splitter.addEventListener('lostpointercapture',finish);
+  splitter.addEventListener('pointercancel',finish);
   splitter.addEventListener('dblclick',()=>split(.6,true));splitter.addEventListener('keydown',event=>{if(['ArrowLeft','ArrowRight','Home'].includes(event.key)){event.preventDefault();split(event.key==='Home' ? .6 : ratio+(event.key==='ArrowRight' ? .03 : -.03),true);}});
   new ResizeObserver(scheduleBounds).observe(q('viewport'));
   new MutationObserver(scheduleBounds).observe(document.body,{subtree:true,attributes:true,attributeFilter:['open','hidden','class']});

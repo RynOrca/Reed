@@ -135,6 +135,25 @@ pub async fn set_canvas_window(window:tauri::WebviewWindow,expanded:bool,duratio
     tauri::async_runtime::spawn_blocking(move || change_window(window,expanded,duration_ms.unwrap_or(if expanded{320}else{213}).min(500),chat_width)).await.map_err(|e|e.to_string())?
 }
 fn change_window(window:tauri::WebviewWindow,expanded:bool,duration:u64,chat_width:Option<f64>)->Result<Value,String>{
+    let before=current(&window)?;
+    let previous=*window.state::<CanvasWindow>().active.lock().map_err(|e|e.to_string())?;
+    let result=change_window_inner(window.clone(),expanded,duration,chat_width);
+    let state=window.state::<CanvasWindow>();
+    if result.is_err(){
+        // A failed preview/resize must not leave a clipped window or a stale
+        // expanded state that makes subsequent clicks and edge resize fail.
+        let _=place_clipped(&window,before,before.width,true);
+        if let Ok(mut active)=state.active.lock(){*active=previous.map(|mut saved|{saved.target=before;saved.visible_width=before.width;saved.settled=true;saved});}
+        state.clipping.store(false,Ordering::SeqCst);
+        let _=persist(previous.is_some(),previous.map(|s|s.original_width).unwrap_or(before.width as f64/window.scale_factor().unwrap_or(1.0)),previous.is_some_and(|s|s.was_maximized),previous.is_some_and(|s|s.rightward));
+    }
+    if !state.is_clipping(){
+        if let Ok(mut sizes)=window.state::<crate::RoundedBounds>().0.lock(){sizes.remove(window.label());}
+        crate::round_window(&window);
+    }
+    result
+}
+fn change_window_inner(window:tauri::WebviewWindow,expanded:bool,duration:u64,chat_width:Option<f64>)->Result<Value,String>{
     if window.label()!="main"{return Err("画布只属于主窗口".into());}
     let state=window.state::<CanvasWindow>();let revision=state.revision.load(Ordering::SeqCst);let mut active=state.active.lock().map_err(|e|e.to_string())?;
     if expanded {
@@ -155,10 +174,17 @@ fn change_window(window:tauri::WebviewWindow,expanded:bool,duration:u64,chat_wid
         let original_width=original.width as f64/scale;
         persist(true,original_width,was_maximized,next.x==original.x&&next.width>original.width)?;
         let rightward=next.x==original.x&&next.width>original.width;
+        // Expanding to the left moves the HWND origin. Until WebView2 paints
+        // its wider, right-anchored layout, DWM can show the narrow old texture
+        // at that new origin. Keep the original chat on an independent surface.
+        #[cfg(windows)]let opening_cover=if !rightward&&next.width>chat{Some(crate::collapse_cover::CollapseCover::capture(&window,chat,false).map_err(|error|{crate::startup_log(&format!("Workspace expand cover: {error}"));error})?)}else{None};
         state.clipping.store(true,Ordering::SeqCst);
         *active=Some(Expanded{original_width,chat_width:chat as f64/scale,was_maximized,target:next,settled:false,rightward,visible_width:chat});
         place_clipped(&window,next,chat,rightward)?;
+        // Do not reveal the drawer until the expanded renderer has a raster.
+        #[cfg(windows)]if let Some(cover)=opening_cover.as_ref(){if let Err(error)=cover.wait_for_chat_frame(){crate::startup_log(&format!("Workspace expand preparation: {error}"));}}
         let (width,frames)=reveal(&window,next,chat,next.width,rightward,duration,revision)?;
+        #[cfg(windows)]if let Some(cover)=opening_cover{if let Err(error)=cover.wait_for_chat_frame(){crate::startup_log(&format!("Workspace expand frame: {error}"));}}
         if let Some(saved)=active.as_mut(){saved.visible_width=width;saved.settled=width==next.width;}
         if width==next.width{state.clipping.store(false,Ordering::SeqCst);}
         Ok(json!({"expanded":true,"chatWidth":chat as f64/scale,"revealFramesMs":frames}))
@@ -175,7 +201,7 @@ fn change_window(window:tauri::WebviewWindow,expanded:bool,duration:u64,chat_wid
         let (visible,frames)=reveal(&window,before,saved.visible_width,width,saved.rightward,duration,revision)?;
         saved.visible_width=visible;*active=Some(saved);
         if visible!=width{return Ok(json!({"expanded":true,"interrupted":true,"chatWidth":saved.chat_width,"revealFramesMs":frames}));}
-        #[cfg(windows)]let cover=crate::collapse_cover::CollapseCover::capture(&window,width,saved.rightward)?;
+        #[cfg(windows)]let cover=crate::collapse_cover::CollapseCover::capture(&window,width,saved.rightward).map_err(|error|{crate::startup_log(&format!("Workspace collapse cover: {error}"));error})?;
         if state.revision.load(Ordering::SeqCst)!=revision{return Ok(json!({"expanded":true,"interrupted":true,"chatWidth":saved.chat_width,"revealFramesMs":frames}));}
         place_clipped(&window,Frame{x,width,..before},width,saved.rightward)?;
         #[cfg(windows)]if let Err(error)=cover.wait_for_chat_frame(){crate::startup_log(&format!("Workspace collapse frame: {error}"));}

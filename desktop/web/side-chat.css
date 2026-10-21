@@ -1,0 +1,17 @@
+.side-chat-pane[hidden]{display:none!important}
+.side-chat-pane{position:absolute;top:62px;right:16px;bottom:16px;width:350px;display:flex;flex-direction:column;z-index:18;border:1px solid var(--rd-line,#85947b44);border-radius:10px;background:var(--ds-bg-primary);color:var(--ds-text);overflow:hidden;box-shadow:0 3px 16px #0000000a}
+.side-chat-pane>header{display:flex;align-items:center;justify-content:space-between;padding:14px 14px 10px;border-bottom:1px solid var(--rd-line,#85947b33)}
+.side-chat-pane strong{display:block;font-size:13px;font-weight:500}.side-chat-pane small{display:block;margin-top:5px;font-size:10px;opacity:.55}
+.side-chat-messages{flex:1;min-height:0;overflow:auto;padding:16px;font-size:13px;line-height:1.8;overflow-wrap:anywhere}
+.side-chat-intro{font-size:12px;opacity:.6}.side-chat-user{white-space:pre-wrap;padding:9px 12px;margin:8px 0 14px;background:#85947b16;border-radius:7px}.side-chat-answer{margin-bottom:24px;font-size:13px!important;line-height:1.8!important}
+.side-chat-pane form{padding:12px;border-top:1px solid var(--rd-line,#85947b33)}.side-chat-pane textarea{box-sizing:border-box;width:100%;resize:vertical;min-height:64px;max-height:180px;border:0;background:transparent;color:inherit;outline:none;font:13px/1.7 var(--sans,system-ui)}
+.side-chat-pane footer{display:flex;gap:10px;align-items:center;font-size:11px;margin-top:6px}.side-chat-pane footer span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.65}.side-chat-pane footer button{font:inherit;color:inherit;padding:5px 10px;border:1px solid #85947b44;border-radius:5px;background:#85947b14;cursor:pointer}.side-chat-pane button:disabled{opacity:.4;cursor:default}
+.chat-shell.side-chat-open>.chat-body{margin-right:380px}.chat-shell.side-chat-open>.composer-dock{width:calc(100% - 380px)}
+.chat-shell.side-chat-open .composer-shell{container-type:inline-size;container-name:reed-chat}
+@container reed-chat (max-width:1280px){
+  .chat-shell.side-chat-open.outline-visible>.chat-body{grid-template-columns:minmax(0,1fr)}
+  .chat-shell.side-chat-open .outline-rail{display:none!important}
+  .chat-shell.side-chat-open.outline-visible>.composer-dock{padding-right:26px}
+  .chat-shell.side-chat-open.outline-visible .message-navigation{right:5px}
+}
+#side-chat-button:disabled{opacity:.3;cursor:default}

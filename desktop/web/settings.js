@@ -12,7 +12,13 @@ let sequence = 0, templates = [], providers = [], editing = null, providerId = n
 const commandPrefix=`settings-${crypto.randomUUID()}-`;
 const pending = new Map();
 const thinkingHint=document.createElement('p');thinkingHint.className='hint';thinkingHint.id='thinking-protocol-hint';$("manual-levels").parentElement.after(thinkingHint);
-function explainThinkingProtocol(){const binary=["qwen","qwen-chat-template"].includes($("thinking-format").value);$("manual-levels").disabled=binary;thinkingHint.textContent=binary?"Qwen enable_thinking 仅控制开启/关闭，不区分 low、medium 等深度。仅在服务支持 reasoning_effort 时切换该协议。":"档位必须由模型服务支持；reasoning_effort 可配置 off、low、medium、high、xhigh。";}
+function explainThinkingProtocol(){
+  const binary=["qwen","qwen-chat-template"].includes($("thinking-format").value);
+  $("manual-levels").disabled=binary;
+  thinkingHint.textContent=binary?"Qwen enable_thinking 仅控制开启/关闭，不区分 low、medium 等深度。仅在服务支持 reasoning_effort 时切换该协议。":"档位必须由模型服务支持；reasoning_effort 可配置 off、low、medium、high、xhigh。";
+}
+$("base-url").addEventListener('input',explainThinkingProtocol);
+$("protocol").addEventListener('change',explainThinkingProtocol);
 $("thinking-format").onchange=()=>{const format=$("thinking-format").value;if(format)$("manual-reasoning").value="yes";if(format==="openai"&&["","medium"].includes($("manual-levels").value.trim()))$("manual-levels").value="low, medium, high, xhigh";explainThinkingProtocol();};
 let browseRoot=null,browseNext=0,browseVersion=0,browseBusy=false;
 const browseList=element("div"),browseMore=element("button","继续浏览","secondary"),browseStatus=element("p","","hint");
@@ -143,17 +149,30 @@ $("vault-query").addEventListener("input", () => {
   if ($("vault-query").value.trim()) return;
   $("vault-results").replaceChildren(); setSearchStatus("", ""); setBrowseVisible(true);
 });
+let goalRefresh=0,memoryGoalPath=null;
+async function refreshMemoryGoal(){
+  const ticket=++goalRefresh;
+  try{const result=await command('get_settings_goals');if(ticket!==goalRefresh)return;
+    memoryGoalPath=result.goal?.exists?result.goal.path:null;
+    $('memory-goal-project').textContent=result.goal?.projectName||'未选择项目';
+    $('memory-goal-file').textContent=result.goal?.exists?result.goal.path.split(/[\\/]/).pop():(result.enabled?'请在前台填写并保存学习目标。':'当前角色未启用学习目标。');
+    $('memory-goal-file').title=memoryGoalPath||'';$('memory-goal-open').disabled=!memoryGoalPath;
+  }catch(error){if(ticket===goalRefresh){memoryGoalPath=null;$('memory-goal-open').disabled=true;$('memory-goal-file').textContent=`目标读取失败：${error.message}`;}}
+}
+$('memory-goal-refresh').onclick=()=>void refreshMemoryGoal();
+$('memory-goal-open').onclick=()=>action(async()=>{if(memoryGoalPath)await tauri.core.invoke('open_local_file',{path:memoryGoalPath});});
 function renderLearner(profile) {
-  const groups = [["学习目标", profile.goals || []], ["知识状态", profile.knowledge || []], ["误解记录", profile.misconceptions || []], ["学习偏好", profile.preferences || []]];
+  const groups = [["知识状态", profile.knowledge || [], "knowledge"], ["误解记录", profile.misconceptions || [], "misconceptions"], ["学习偏好", profile.preferences || [], "preferences"]];
   $("learner-overview").replaceChildren(); $("learner-profile").replaceChildren();
-  for (const [title, items] of groups) {
+  for (const [title, items, group] of groups) {
     const count = element("div", undefined, "profile-count"); count.append(element("span", title), element("strong", String(items.length))); $("learner-overview").append(count);
     const section = element("details", undefined, "profile-section"); section.open = true; section.append(element("summary", `${title} · ${items.length}`));
     for (const item of items) {
       const row = element("div", undefined, "memory-item"), info = element("div");
       info.append(element("h3", item.subject), element("p", item.detail), element("small", "依据：“" + item.evidence + "” · 会话 " + (item.source || "").slice(0, 8)));
       if (item.nextReview) info.append(element("p", "建议复习：" + new Date(item.nextReview).toLocaleDateString() + " · 掌握程度尚未评估", "hint"));
-      const status = element("span", ({active:"进行中",completed:"已完成",needs_review:"待复习",resolved:"已纠正"})[item.status] || "已记录", "profile-status"); row.append(info, status); section.append(row);
+      const status = element("span", ({active:"进行中",completed:"已完成",needs_review:"待复习",resolved:"已纠正"})[item.status] || "已记录", "profile-status");
+      const actions=element('div',undefined,'row-actions');actions.append(status,deletionButton('删除',()=>command('learner_delete',{group,itemId:item.id})));row.append(info,actions);section.append(row);
     }
     if (!items.length) section.append(element("p", "Agent 会根据对话中的明确陈述自动整理。", "hint")); $("learner-profile").append(section);
   }
@@ -177,7 +196,7 @@ function editProvider(template, provider = null) {
   $("api-key").value = ""; $("api-key").placeholder = provider?.hasKey ? "已保存；留空保留当前 Key" : "无鉴权服务可留空";
   renderProviderModels(provider?.models || []);
   $("provider-form").scrollIntoView({ behavior: "smooth", block: "start" });
-  $("base-url").focus(); notice("");
+  explainThinkingProtocol(); $("base-url").focus(); notice("");
 }
 function renderProviders() {
   $("providers").replaceChildren();
@@ -274,7 +293,7 @@ function renderMemory() {
     for (const item of entries) {
       const row = document.createElement("div"); row.className = "memory-item";
       const content = document.createElement("div"), title = document.createElement("h3"), text = document.createElement("p"), source = document.createElement("small");
-      title.textContent = item.title || item.key; text.textContent = item.body || item.content;
+      title.textContent = item.title || item.key; if(id==="facts"&&/学习目标|长期目标|learning[_ -]?goals?/i.test(item.key||""))title.textContent+="（旧目标，已停止召回）"; text.textContent = item.body || item.content;
       source.textContent = item.updated ? `更新于 ${new Date(item.updated).toLocaleString()}${item.source ? " · 来源会话 " + item.source.slice(0, 8) : ""}` : "已有记忆";
       if(id==="working")source.textContent+=` · ${item.scope?"项目："+item.scope:"全局经验"}`;
       if(id==="working"){
@@ -385,7 +404,8 @@ if (tauri) {
       const r = event.payload;
       if (r.id && pending.has(r.id) && ["ack", "error"].includes(r.type)) { const p = pending.get(r.id); clearTimeout(p.timer); pending.delete(r.id); r.type === "error" ? p.reject(new Error(r.message)) : p.resolve(r); }
       if (r.type === "providers") { templates = r.templates || []; providers = r.providers || []; renderProviders(); renderOverviewModels(); }
-      if (r.type === "session") { overviewSessionModel={provider:r.model?.split("/")[0],id:r.model?.split("/").slice(1).join("/")}; renderOverviewModels(); }
+      if (r.type === "session") { overviewSessionModel={provider:r.model?.split("/")[0],id:r.model?.split("/").slice(1).join("/")}; renderOverviewModels(); void refreshMemoryGoal(); }
+      if (r.type === 'goals') void refreshMemoryGoal();
       if (r.type === "vault_overview_config") { overviewSavedSelection=r.selection||null; renderOverviewModels(overviewSavedSelection?JSON.stringify({providerId:overviewSavedSelection.providerId,modelId:overviewSavedSelection.modelId}):undefined); }
       if (r.type === "memory") { memory = r.state; renderMemory(); }
       if (r.type === "learner") renderLearner(r.state);

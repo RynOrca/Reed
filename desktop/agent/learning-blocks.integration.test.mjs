@@ -12,7 +12,7 @@ import {ConversationCanvasStore} from './conversation-canvas.mjs';
 import {visibleCanvasNodes} from '../web/canvas-geometry.js';
 
 test('真实 bridge 学习块：正文顺序、回执持久化、重启恢复、来源校验及旧题失效',{timeout:45000},async()=>{
-  const root=await mkdtemp(join(tmpdir(),'reed-learning-')),data=join(root,'data'),seen=[],waiters=new Set();let child,seq=0,calls=0;
+  const root=await mkdtemp(join(tmpdir(),'reed-learning-')),data=join(root,'data'),seen=[],waiters=new Set();let child,seq=0,calls=0,repairCalls=0;
   const question={id:'q',type:'choices',title:'非零整数的真值是什么？',fallbackText:'请选择真或不确定。',options:[{id:'yes',label:'真',replyText:'非零整数为真。'},{id:'unsure',label:'不确定',replyText:'我还不确定。'}]};
   const spec={schemaVersion:1,fallbackText:'gcd 返回整数，非零为真。',blocks:[{id:'flow',type:'flow',title:'条件判断过程',fallbackText:'输入 3，判断为真。',nodes:[{label:'输入',value:'3'},{label:'判断',value:'真'}]},question]};
   const fill={id:'fill',type:'fill',title:'补全加法',label:'c_sum =',fallbackText:'填入同态加法表达式。'};const fillSpec={schemaVersion:1,fallbackText:'填写 c_sum 的表达式。',blocks:[fill]};
@@ -22,11 +22,13 @@ test('真实 bridge 学习块：正文顺序、回执持久化、重启恢复、
     const userText=typeof user?.content==='string'?user.content:(user?.content||[]).map(b=>b.text||'').join('');
     res.writeHead(200,{'content-type':'text/event-stream'});
     const send=(delta,finish=null)=>res.write(`data: ${JSON.stringify({id:'synthetic',choices:[{index:0,delta,finish_reason:finish}]})}\n\n`);
-    if(!tool&&['解释非零条件','填空练习','缺字段选项','非法选项'].includes(userText)){
+    if(JSON.stringify(body.messages).includes('修正学习图解 JSON')){repairCalls++;send({role:'assistant',content:JSON.stringify(body.messages).includes('修正成功图')?JSON.stringify(spec):'not valid JSON'});send({},'stop');}
+    else if(!tool&&['解释非零条件','填空练习','缺字段选项','非法选项','修正成功图'].includes(userText)){
       assert.ok(body.tools.some(t=>t.function.name==='show_learning'));
       send({role:'assistant',content:'先看条件的输入与输出。'});
       let payload=userText==='填空练习'?fillSpec:spec;
       const id=({'填空练习':'fill-call','缺字段选项':'missing-call','非法选项':'invalid-call'})[userText]||'learning-call';
+      if(userText==='修正成功图')payload={schemaVersion:1,blocks:[{...spec.blocks[0],title:'修正成功图'}]};
       if(userText==='缺字段选项')payload={...spec,blocks:[{...question,options:question.options.map(({replyText})=>({replyText}))}]};
       if(userText==='非法选项')payload={...spec,blocks:[{...question,options:[{label:'错误选项'}]}]};
       send({tool_calls:[{index:0,id,type:'function',function:{name:'show_learning',arguments:JSON.stringify(payload)}}]});send({},'tool_calls');
@@ -77,11 +79,19 @@ test('真实 bridge 学习块：正文顺序、回执持久化、重启恢复、
     const repairedHistory=seen.findLast(e=>e.type==='history').messages;
     assert.deepEqual(repairedHistory.find(m=>m.toolCallId==='missing-call').details.learning.blocks[0],repaired);
     await command('prompt',{text:learningReplyText(repaired,repaired.options[0]),learningReply:{sessionId,toolCallId:'missing-call',blockId:'q',optionId:'choice-1'}});
+    const successStart=seen.length;const repairBefore=repairCalls;
+    await command('prompt',{text:'修正成功图'});
+    const fixed=seen.slice(successStart).filter(e=>e.type==='tool_end'&&e.result?.details?.learning);assert.equal(fixed.length,1);assert.deepEqual(fixed[0].result.details.learning,spec);assert.equal(repairCalls,repairBefore+1);
+    const failedBefore=repairCalls;
     await command('prompt',{text:'非法选项'});
-    const rejected=seen.find(e=>e.type==='tool_end'&&e.id==='invalid-call');assert.equal(rejected.isError,true);
-    const error=rejected.result.content.map(b=>b.text||'').join('\n');
-    assert.match(error,/blocks\[0\]\.options\[0\].*replyText/);
-    assert.doesNotMatch(error,/Received arguments|must have required properties nodes/);
+    assert.equal(repairCalls,failedBefore+3,'失败只允许3次内部模型修正');
+    assert.equal(seen.some(e=>e.type==='tool_end'&&e.id==='invalid-call'),false,'失败图解不可广播到界面');
+    assert.equal(seen.some(e=>e.type==='tool_start'&&e.id==='invalid-call'),false,'重试不可产生占位');
+    await command('get_history');
+    const cleaned=seen.findLast(e=>e.type==='history').messages;
+    assert.equal(cleaned.some(m=>m.toolCallId==='invalid-call'),false,'历史不展示失败回执');
+    assert.equal(cleaned.some(m=>m.content.some(b=>b.type==='toolCall'&&b.id==='invalid-call')),false);
+
 
   }finally{for(const w of waiters)clearTimeout(w.timer);await stop();server.closeAllConnections();await new Promise(r=>server.close(r));await rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
 });

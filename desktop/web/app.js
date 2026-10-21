@@ -1,5 +1,4 @@
 import {renderLearning,replyText} from './learning-blocks.js';
-import {renderLearningFailure} from './learning-fallback.js';
 import {createLearningMode} from './learning-mode.js';
 import {requestStatus} from './request-status.js';
 import {cancellationStatus,cancellationApplies} from './cancellation-status.js';
@@ -8,6 +7,7 @@ import {createGoals} from "./goals.js";
 import {createOutline} from "./reading-outline.js";
 import {createConversationCanvas} from "./conversation-canvas.js";
 import {createBrowserWorkspace} from './browser-workspace.js';
+import {createSideChatPanel} from './side-chat.js';
 import {createWorkspacePanels} from './workspace-panels.mjs';
 import {createProjectPicker} from "./project-picker.js";
 import {createMessageNavigation} from "./message-navigation.js";
@@ -88,7 +88,6 @@ const recoveredIndex=()=>{const index={};for(const [key,text] of recoveredQuesti
 function updateRecoveredStates(){for(const [key,state] of Object.entries(loadRecoveredAnswers(recoveredIndex())))if(!recoveredAnswerStates.has(key))recoveredAnswerStates.set(key,state);}
 
 function updateLearningAvailability(){for(const entry of learningRows.values()){
-  if(!running&&!entry.view&&entry.content.querySelector('.learning-pending'))entry.content.textContent=entry.fallback||'图解未完成，请继续阅读正文或通过输入框追问。';
   entry.view?.update();
 }}
 const permissionRows = new Map();
@@ -107,6 +106,7 @@ $("goals-button").append(icon("book"));
 $("goals-button").onclick = () => goalsPanel.open();
 
 const projectPicker=createProjectPicker({button:$('workspace-button'),command,tauri,isRunning:()=>running,onError:errorRow,onSelect:()=>{closeHistory();prompt.focus();}});
+const sideChatPanel=createSideChatPanel({tauri});
 const workspacePanels=createWorkspacePanels({prepare:()=>tauri.core.invoke('workspace_geometry'),onExpanded:()=>tauri.core.invoke('set_canvas_window',{expanded:true,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:320}),onInterrupt:()=>{void tauri.core.invoke('cancel_canvas_transition').catch(errorRow);},onEmpty:()=>tauri.core.invoke('set_canvas_window',{expanded:false,chatWidth:document.querySelector('.chat-shell').getBoundingClientRect().width,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:213})});
 const canvasPanel = createConversationCanvas({command,tauri,prompt,panels:workspacePanels,isRunning:()=>running,reportError:errorRow,onUnavailable:()=>{
   const role=roles.find(item=>item.id===activeRoleId);
@@ -122,7 +122,7 @@ const canvasPanel = createConversationCanvas({command,tauri,prompt,panels:worksp
   followLatest=false;row.scrollIntoView({block:"center",behavior:"smooth"});
   row.animate([{backgroundColor:"var(--goal-accent-soft)"},{backgroundColor:"transparent"}],{duration:1600});
 }});
-createMessageNavigation({messages,transcript,onNavigate:()=>{followLatest=false;}});
+createMessageNavigation({messages,transcript,onNavigate:row=>{followLatest=false;outlinePanel.selectTurn(row);}});
 const browserPanel=createBrowserWorkspace({tauri,command,prompt,panels:workspacePanels,onError:error=>errorRow(String(error.message||error)),
   onQuote:({text,context,source,url,action})=>{
     const quote=`引用「${source}」\n来源：${url}\n\n${text.split('\n').map(line=>'> '+line).join('\n')}${context&&context!==text?'\n\n所在段落：'+context:''}${action?'\n\n'+action:''}`;
@@ -213,6 +213,7 @@ function messageRow(role, text = "") {
     updateLearningAvailability();}
   const row = document.createElement("div");
   row.className = `message-row ${role}`;
+  row.dataset.turnId = role==='user' ? crypto.randomUUID() : [...messages.querySelectorAll('.message-row.user')].at(-1)?.dataset.turnId || activeTurnId || '';
   row.setAttribute("role", "article");
   row.setAttribute("aria-label", role === "user" ? "用户消息" : "助手消息");
   const col = document.createElement("div"); col.className = "message-col";
@@ -222,6 +223,7 @@ function messageRow(role, text = "") {
   if (role === "assistant") renderAssistant(content, text);
   else content.textContent = text;
   bubble.append(content); col.append(bubble); row.append(col); messages.append(row);
+  if(role==='user'&&followLatest)outlinePanel.selectTurn(row);
   refreshEmpty(); scrollToLatest();
   return content;
 }
@@ -327,8 +329,7 @@ function pretty(value) {
 }
 function toolStart(event) {
   if(event.name==='show_learning'){
-    const content=messageRow('assistant');content.append(Object.assign(document.createElement('p'),{className:'learning-pending',textContent:'正在整理学习图解…'}));
-    learningRows.set(event.id,{content,sessionId:activeSessionId,fallback:typeof event.args?.fallbackText==='string'?event.args.fallbackText.slice(0,6000):''});return;
+    learningRows.set(event.id,{sessionId:activeSessionId});return;
   }
   const detail = pretty(event.args);
   const row = disclosure({ kind: "tool", title: event.name==="browser"?`浏览器 · ${event.args?.target==="agent"?"后台验收":"当前网页"}`:event.name||"工具", summary: detail.replace(/\s+/g, " ").slice(0, 120), detail, state: "running", id: event.id });
@@ -339,6 +340,7 @@ function toolEnd(event) {
   if(learning){
     const spec=!event.isError&&event.result?.details?.learning;
     if(spec){
+      learning.content=messageRow('assistant');
       const question=spec.blocks?.find(b=>['choices','fill'].includes(b.type));
       if(question){learningCandidate={toolCallId:event.id,blockId:question.id,sessionId:learning.sessionId};status('等待你的回答','waiting');}
       const view=renderLearning(spec,{
@@ -347,10 +349,7 @@ function toolEnd(event) {
         isAvailable:b=>!running&&learningCandidate?.toolCallId===event.id&&learningCandidate.blockId===b.id&&learning.sessionId===activeSessionId,
         onReply:(block,option)=>void sendUserMessage(replyText(block,option),{learningReply:{sessionId:learning.sessionId,toolCallId:event.id,blockId:block.id,...(block.type==='fill'?{answer:option}:{optionId:option.id})}})});
       learning.content.replaceChildren(view.root);learning.view=view;updateLearningAvailability();
-    }else{
-      const blocks=Array.isArray(event.result)?event.result:event.result?.content||[];
-      renderLearningFailure(learning.content,{fallback:learning.fallback,content:blocks});
-    }
+    }else{learningRows.delete(event.id);}
     scrollToLatest();return;
   }
   const row = toolRows.get(event.id);
@@ -582,6 +581,7 @@ async function newSession() {
 function onEvent(event) {
   const response = event.payload;
   if (!response || typeof response !== "object") return;
+  if(response.type==='side_chat_event'){sideChatPanel.event(response);return;}
   const handledReply = Boolean(response.id && pending.has(response.id) && ["ack", "error", "done", "conversation", "file_staged", "goals", "sessions", "browser_result"].includes(response.type));
   if (handledReply) {
     const { resolve, reject, timer } = pending.get(response.id); clearTimeout(timer); pending.delete(response.id);

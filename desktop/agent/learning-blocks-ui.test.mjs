@@ -39,20 +39,11 @@ const samples={
 };
 const find=(node,predicate)=>{if(!node||typeof node!=='object')return null;if(predicate(node))return node;for(const child of node.children||[]){const hit=find(child,predicate);if(hit)return hit;}return null;};
 
-test('图解失败显示降级文字，SDK原始错误仅进入折叠诊断，重放保持一致',()=>{
-  const root=new El('div'),diagnostic='Validation failed for tool "show_learning": Received arguments: {"options":[]}';
-  root.append(new El('button'));
-  const render=()=>renderLearningFailure(root,{fallback:'请通过输入框选择先总结或先阅读。',content:[{type:'text',text:diagnostic}]});
-  render();
-  assert.equal(root.children[0].textContent,'请通过输入框选择先总结或先阅读。');
-  assert.equal(root.children.length,2);
-  const details=find(root,n=>n.tagName==='DETAILS');assert.ok(details);assert.ok(!details.open);
-  assert.equal(find(details,n=>n.tagName==='PRE').textContent,diagnostic);
-  render();assert.equal(root.children.length,2,'历史重放不叠加错误节点');
-  renderLearningFailure(root,{content:[{type:'text',text:'<script>bad()</script>'}]});
-  assert.equal(root.children[0].textContent,'图解暂时无法显示，请继续阅读正文。');
-  assert.equal(find(root,n=>n.tagName==='SCRIPT'),null);
-  renderLearningFailure(root);assert.equal(root.children.length,1);
+test('图解失败与历史重放不显示占位或原始诊断',()=>{
+  const root=new El('div');root.append(new El('button'));
+  renderLearningFailure(root,{fallback:'不应出现的占位',content:[{type:'text',text:'root: 缺少 fallbackText'}]});
+  assert.equal(root.children.length,0);
+  renderLearningFailure(root);assert.equal(root.children.length,0);
 });
 
 test('九种学习块都能渲染出结构，不整条降级',()=>{

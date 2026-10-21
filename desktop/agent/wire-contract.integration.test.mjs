@@ -73,3 +73,19 @@ for(const kind of ['length','missing_DONE','error_DONE','placeholder','raw_cance
   assert.equal(wire.status,kind==='length'?'limited':kind==='raw_cancelled'?'cancelled':'incomplete');
   if(kind==='length')assert.equal(wire.finishReason,'length');
 });
+
+for(const repeated of [false,true])test(`bridge preserves partial text and bounds invalid read recovery (${repeated?'repeated':'recovered'})`,{timeout:30000},async t=>{
+  const f=await fixture(t,async({res,index,root,payload})=>{
+    if(index===1||repeated){res.writeHead(200,{'content-type':'text/event-stream'});res.end(frame(chunk({content:'合成的已有正文。\n'}))+frame(chunk({tool_calls:[{index:0,id:'invalid-read',type:'function',function:{name:'read',arguments:'{"path":'}}]},'tool_calls'))+done);return;}
+    if(index===2){
+      assert.ok(payload.messages.some(m=>JSON.stringify(m.content).includes('合成的已有正文')),'续接保留已显示正文');
+      const note=join(root,'test-reference.md');await writeFile(note,'合成资料只读');
+      res.writeHead(200,{'content-type':'text/event-stream'});res.end(frame(chunk({tool_calls:[{index:0,id:'valid-read',type:'function',function:{name:'read',arguments:JSON.stringify({path:note})}}]},'tool_calls'))+done);return;
+    }
+    assert.ok(payload.messages.some(m=>m.role==='tool'&&m.tool_call_id==='valid-read'));finish(res);
+  });
+  const result=await f.command('prompt',{text:'test-读取合成参考资料，不要写入或保存记忆'});
+  assert.equal(f.requests.length,repeated?2:3);assert.equal(result.outcome.status,repeated?'error':'complete');
+  assert.equal(f.events.filter(e=>e.type==='tool_start'&&e.name==='read').length,repeated?0:1);
+  assert.equal(f.events.filter(e=>e.type==='recovery').length,1);
+});

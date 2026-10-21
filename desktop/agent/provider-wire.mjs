@@ -40,12 +40,13 @@ export function createWireAttempt({taskId, index, model, signal, diagnostic=()=>
   const guard = createThinkingGuard();
   const state={enforced:model?.api==='openai-completions',agent_task_id:taskId,agent_model_request_index:index,attempt_id:randomUUID(),sdkVersion,model:model?.id,requestGroup,
     phase:'sending',status:'incomplete',responseMode:null,httpStatus:null,requestId:null,finishReason:null,finishReasons:[],rawFinishReason:null,rawFinishReasons:[],responseStatus:null,errorCode:null,serverErrorCode:null,done:false,
-    contentBytes:0,reasoningBytes:0,toolCallCount:0,toolCallIds:[],validToolCallCount:0,malformedTools:0,transportComplete:false,cancelled:false,canPreserveThinking:false,thinkingStop:null,
+    contentBytes:0,reasoningBytes:0,toolCallCount:0,toolCallIds:[],validToolCallCount:0,malformedTools:0,toolValidationErrors:[],transportComplete:false,cancelled:false,canPreserveThinking:false,thinkingStop:null,
     times:{sent:{utc:new Date().toISOString(),monotonicMs:started}},usage:{}};
   const snapshot=()=>structuredClone(state);
   const stamp=name=>{state.times[name]??={utc:new Date().toISOString(),monotonicMs:performance.now()};};
   const report=()=>{try{Promise.resolve(diagnostic({type:'model_wire',...snapshot(),elapsedMs:performance.now()-started})).catch(()=>{});}catch{}};
   function failure(value) {state.errorCode??=value;}
+  function invalidTool(reason){if(!state.toolValidationErrors.includes(reason))state.toolValidationErrors.push(reason);failure('invalid_tool_call');}
   function metadata(obj) {
     const n=obj.ninfer;
     if(n&&typeof n==='object'){
@@ -67,10 +68,19 @@ export function createWireAttempt({taskId, index, model, signal, diagnostic=()=>
   }
   function observeTools(parts) {
     for(const part of parts||[]){
-      const key=part.index??0, item=tools.get(key)||{id:'',name:'',arguments:''};
-      if(part.id){if(item.id&&item.id!==part.id)failure('invalid_tool_call');item.id=part.id;}
-      if(part.function?.name)item.name+=part.function.name;
-      if(part.function?.arguments)item.arguments+=part.function.arguments;
+      const key=part.index??0;
+      if(!Number.isInteger(key)||key<0){invalidTool('invalid_index');continue;}
+      const item=tools.get(key)||{id:'',name:'',arguments:''};
+      if(part.id){if(item.id&&item.id!==part.id)invalidTool('conflicting_id');item.id=part.id;}
+      const name=part.function?.name;
+      // Some compatible endpoints repeat the complete name on every delta.
+      // The SDK keeps the first name; concatenation here falsely rejected readread.
+      if(typeof name==='string'&&name&&name!==item.name){
+        if(!item.name||name.startsWith(item.name))item.name=name;
+        else if([...allowed].some(value=>value.startsWith(item.name+name)))item.name+=name;
+        else invalidTool('conflicting_name');
+      }
+      if(part.function?.arguments!=null){if(typeof part.function.arguments!=='string')invalidTool('non_string_arguments');else item.arguments+=part.function.arguments;}
       tools.set(key,item);
     }
   }
@@ -111,9 +121,9 @@ export function createWireAttempt({taskId, index, model, signal, diagnostic=()=>
     const ids=new Set();
     for(const item of tools.values()){
       if(item.name==='malformed_tool_call'){state.malformedTools++;continue;}
-      if(!item.id||ids.has(item.id)||!allowed.has(item.name)){failure('invalid_tool_call');continue;}
+      if(typeof item.id!=='string'||!item.id||ids.has(item.id)||!allowed.has(item.name)){invalidTool(!item.id?'missing_id':ids.has(item.id)?'duplicate_id':'unknown_name');continue;}
       ids.add(item.id);
-      try{const args=JSON.parse(item.arguments);if(!args||typeof args!=='object'||Array.isArray(args))throw Error();state.validToolCallCount++;}catch{failure('invalid_tool_call');}
+      try{const args=JSON.parse(item.arguments);if(!args||typeof args!=='object'||Array.isArray(args))throw Error();state.validToolCallCount++;}catch{invalidTool('invalid_arguments');}
     }
     state.malformedTools=Math.max(state.malformedTools,state.malformedFlag?1:0);
     if(state.cancelled){state.status='cancelled';return;}
@@ -197,7 +207,10 @@ export function createWireAttempt({taskId, index, model, signal, diagnostic=()=>
                   if(parser.chunks.length||parser.event.data!==undefined||parser.event.event!==undefined)failure('transport_incomplete');
                   state.transportComplete=state.done&&!parserError&&state.errorCode!=='transport_incomplete';finalize();cleanup();parser.destroy();
                   if(state.status==='completed'||state.status==='limited'){
-                    for(const frame of buffered){const normalized=structuredClone(frame);for(const c of normalized.choices||[]){if(c.delta)for(const key of ['content','reasoning','reasoning_content','reasoning_text','role'])delete c.delta[key];if(state.status==='limited'){if(c.delta)delete c.delta.tool_calls;if(c.message)delete c.message.tool_calls;c.finish_reason='length';}}out.enqueue(encode(normalized));}
+                    let toolsEmitted=false;
+                    for(const frame of buffered){const normalized=structuredClone(frame);for(const c of normalized.choices||[]){if(c.delta)for(const key of ['content','reasoning','reasoning_content','reasoning_text','role'])delete c.delta[key];
+                      if(c.delta?.tool_calls){delete c.delta.tool_calls;if(!toolsEmitted&&state.status==='completed'){c.delta.tool_calls=[...tools].map(([index,item])=>({index,id:item.id,type:'function',function:{name:item.name,arguments:item.arguments}}));toolsEmitted=true;}}
+                      if(state.status==='limited'){if(c.message)delete c.message.tool_calls;c.finish_reason='length';}}out.enqueue(encode(normalized));}
                     out.enqueue(encoder.encode('data: [DONE]\n\n'));out.close();
                   }else out.error(error());
                   return;

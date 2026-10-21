@@ -8,6 +8,7 @@ import { join } from "node:path";
 const MAX_PROFILE = 6000;
 const MAX_NOTES = 100;
 const MAX_NOTE_BODY = 20000;
+export const isLearningGoal = key => /学习目标|长期目标|learning[_ -]?goals?/i.test(String(key||''));
 const defaultState = () => ({ enabled: { l1: true, l2: true, l3: true, work:true }, profile: "", facts: [], notes: [], working: [] });
 const historyCache = new Map();
 function workEnvironment(item){
@@ -162,6 +163,7 @@ export class MemoryStore {
     if(this.agentAllowed&&!this.agentAllowed(source))return;
     if (this.state.enabled.l1 && Array.isArray(update.facts)) {
       for (const fact of update.facts.slice(0, 8)) {
+        if(isLearningGoal(fact?.key))continue;
         if (typeof fact?.key !== "string" || typeof fact?.content !== "string" || !fact.content.trim()) continue;
         const value = { key: fact.key.trim().slice(0, 80), content: fact.content.trim().slice(0, 600), source, updated: new Date().toISOString() };
         const candidate=this.state.facts.find(item=>similarTopic(item.key,value.key))||await this.matchTopic?.(value.key,this.state.facts,"key",value.content);
@@ -265,7 +267,7 @@ export class MemoryStore {
   recallNotes(query,{review=false}={}){if(!this.state.enabled.l2)return [];return this.state.notes.filter(n=>(review||!(n.reviewOnly||reviewOnly(n.title+" "+n.body)))&&score(query,n.title+" "+n.body)>0).sort((a,b)=>score(query,b.title+" "+b.body)-score(query,a.title+" "+a.body)).slice(0,3);}
   async context(query, currentSessionId, {review=false}={}) {
     const parts=[];
-    if(this.state.enabled.l1){const facts=this.state.facts.filter(f=>review||!reviewOnly(f.key+" "+f.content)).map((f,index)=>({f,index,rank:score(query,f.key+' '+f.content)})).sort((a,b)=>b.rank-a.rank||b.index-a.index).slice(0,4).map(({f})=>f);if(facts.length)parts.push("背景与偏好：\n"+facts.map(f=>`${f.key}：${f.content.slice(0,120)}`).join("\n"));}
+    if(this.state.enabled.l1){const facts=this.state.facts.filter(f=>!isLearningGoal(f.key)&&(review||!reviewOnly(f.key+" "+f.content))).map((f,index)=>({f,index,rank:score(query,f.key+' '+f.content)})).sort((a,b)=>b.rank-a.rank||b.index-a.index).slice(0,4).map(({f})=>f);if(facts.length)parts.push("背景与偏好：\n"+facts.map(f=>`${f.key}：${f.content.slice(0,120)}`).join("\n"));}
     const notes=this.recallNotes(query,{review});if(notes.length)parts.push("相关资料索引（用 recall_memory 读取）："+notes.map(n=>n.title).join("、"));
     // Raw cross-session messages can reintroduce reviews and superseded facts.
     // They remain on disk, but are never automatically injected.

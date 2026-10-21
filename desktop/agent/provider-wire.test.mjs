@@ -41,6 +41,16 @@ test('placeholder, invalid JSON, duplicate call ID and unknown tool cannot be ex
   const duplicate=await fixture([frame(choice({tool_calls:[tool,{...tool,index:1}]},'tool_calls')),done]);assert.equal(duplicate.wire.errorCode,'invalid_tool_call');
 });
 
+test('重复完整工具名称与分段名称统一为一个有效调用，保留参数字节',async()=>{
+  for(const names of [['write','write'],['wr','ite']]){
+    const f=await fixture([frame(choice({tool_calls:[{...tool,function:{name:names[0],arguments:'{"path":'}}]})),frame(choice({tool_calls:[{index:0,function:{name:names[1],arguments:'"test.txt","content":"合成"}'}}]},'tool_calls')),done]);
+    assert.equal(f.wire.status,'completed');assert.equal(f.wire.validToolCallCount,1);
+    const frames=f.text.split('\n').filter(line=>line.startsWith('data: {')).map(line=>JSON.parse(line.slice(6)));
+    const calls=frames.flatMap(frame=>(frame.choices||[]).flatMap(choice=>choice.delta?.tool_calls||[]));
+    assert.equal(calls.length,1);assert.equal(calls[0].function.name,'write');assert.equal(JSON.parse(calls[0].function.arguments).path,'test.txt');
+  }
+});
+
 test('SSE error followed by DONE is still incomplete; HTTP 502 retains error code',async()=>{
   const data={error:{code:'incomplete_response',message:'PRIVATE_ERROR'},ninfer:{raw_finish_reason:'stop_token',response_status:'incomplete'}};
   const f=await fixture([frame(choice({reasoning_content:'PRIVATE_THINKING'})),frame(data),done]);

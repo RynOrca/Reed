@@ -1,6 +1,5 @@
-// 阅读目录：只跟随最后一条助手回答，不改变消息本身。
+// 阅读目录按用户轮次聚合：工具/思考之间的多段回答属于同一轮。
 // 目录在宽窗出现；窄窗由 CSS 收起，避免和正文抢空间。
-const MAX_ITEMS = 7;
 
 export function createOutline({ transcript, messages, onOpenGoals }) {
   const shell = document.querySelector(".chat-shell");
@@ -34,11 +33,27 @@ export function createOutline({ transcript, messages, onOpenGoals }) {
   let active = -1;
   let scheduled = false;
   let scrollScheduled = false;
+  let selectedTurn = null;
+  let groups = [];
 
-  const currentProse = () => {
-    const rows = [...messages.querySelectorAll(".message-row.assistant .prose-chat")];
-    return rows.at(-1) || null;
-  };
+  function collectTurns() {
+    const result = []; let group;
+    for (const row of messages.querySelectorAll('.message-row.user,.message-row.assistant')) {
+      if (row.classList.contains('user')) {
+        group = { row, id: row.dataset.messageId || row.dataset.turnId, prose: [] };
+        result.push(group);
+      } else if (group) {
+        const prose = row.querySelector('.prose-chat'); if (prose) group.prose.push(prose);
+      }
+    }
+    return result;
+  }
+  function visibleTurn() {
+    const line = transcript.getBoundingClientRect().top + 78;
+    let current = groups[0];
+    for (const group of groups) if (group.row.getBoundingClientRect().top <= line) current = group;
+    return current || null;
+  }
 
   function scrollTo(index) {
     const heading = headings[index];
@@ -63,7 +78,7 @@ export function createOutline({ transcript, messages, onOpenGoals }) {
   }
 
   function renderMeta(prose) {
-    const text = prose?.textContent?.replace(/\s+/g, " ").trim() || "";
+    const text = prose.map(node=>node.textContent).join(' ').replace(/\s+/g, " ").trim();
     if (!text) { meta.hidden = true; return; }
     const minutes = Math.max(1, Math.round(text.length / 360));
     meta.hidden = false;
@@ -93,11 +108,12 @@ export function createOutline({ transcript, messages, onOpenGoals }) {
 
   function scan() {
     scheduled = false;
-    const prose = currentProse();
-    headings = prose ? [...prose.querySelectorAll("h1,h2,h3")]
-      .filter(heading => heading.textContent.trim())
-      .slice(0, MAX_ITEMS) : [];
-    headings.forEach((heading, index) => { if (!heading.id) heading.id = `reed-outline-${index + 1}`; });
+    groups = collectTurns();
+    const group = groups.find(item=>item.row===selectedTurn) || visibleTurn();
+    selectedTurn = group?.row || null;
+    rail.dataset.turnId = group?.id || '';
+    const prose = group?.prose || [];
+    headings = prose.flatMap(node=>[...node.querySelectorAll('h1,h2,h3')]).filter(heading=>heading.textContent.trim());
 
     list.replaceChildren();
     headings.forEach((heading, index) => {
@@ -124,7 +140,12 @@ export function createOutline({ transcript, messages, onOpenGoals }) {
   function scheduleActive() {
     if (scrollScheduled) return;
     scrollScheduled = true;
-    requestAnimationFrame(updateActive);
+    requestAnimationFrame(()=>{
+      const group=visibleTurn();
+      if(group?.row!==selectedTurn){selectedTurn=group?.row||null;scan();}
+      else updateActive();
+      scrollScheduled=false;
+    });
   }
 
   goalButton.addEventListener("click", () => onOpenGoals?.());
@@ -134,6 +155,7 @@ export function createOutline({ transcript, messages, onOpenGoals }) {
   schedule();
 
   return {
+    selectTurn(row) { selectedTurn=row; scan(); },
     setGoal(summary) {
       goal = summary || null;
       renderGoal();

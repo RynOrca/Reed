@@ -36,6 +36,7 @@ export function createConversationCanvas({command,tauri,prompt,panels,isRunning,
     if(!total)return;
     const next=clampSplit(width);
     workspace.style.setProperty('--canvas-chat-width',`${next}px`);
+    workspace.style.setProperty('--workspace-chat-width',`${next}px`);
     const percent=Math.round(next/total*100);
     splitter.setAttribute('aria-valuenow',String(percent));
     splitter.setAttribute('aria-valuetext',`对话占 ${percent}%`);
@@ -65,6 +66,7 @@ export function createConversationCanvas({command,tauri,prompt,panels,isRunning,
   });
   splitter.addEventListener('pointerup',endSplit);
   splitter.addEventListener('pointercancel',endSplit);
+  splitter.addEventListener('lostpointercapture',()=>endSplit());
   splitter.addEventListener('keydown',event=>{
     if(!opened)return;
     const total=workspace.clientWidth;

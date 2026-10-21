@@ -3,8 +3,13 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { protectKey, unprotectKey, EndpointStore } from "./endpoint.mjs";
+import { providerHeaders } from './provider-headers.mjs';
 
 const presets = [
+  { id: "opencode-go", name: "OpenCode Go / Go Plus（OpenAI 兼容）", sdk: "opencode-go", protocol: "openai-completions", baseUrl: "https://opencode.ai/inference/go/openai/v1" },
+  { id: "opencode-go-anthropic", name: "OpenCode Go / Go Plus（Anthropic）", sdk: "opencode-go", protocol: "anthropic-messages", baseUrl: "https://opencode.ai/inference/go/anthropic/v1" },
+  { id: "opencode-go-responses", name: "OpenCode Go / Go Plus（Responses）", sdk: "opencode-go", protocol: "openai-responses", baseUrl: "https://opencode.ai/inference/go/openai/v1" },
+  { id: "sensenova", name: "商汤日日新 Token Plan", sdk: null, protocol: "openai-completions", baseUrl: "https://token.sensenova.cn/v1" },
   { id: "deepseek", name: "DeepSeek", sdk: "deepseek", protocol: "openai-completions", baseUrl: "https://api.deepseek.com" },
   { id: "kimi", name: "Kimi", sdk: "moonshotai-cn", protocol: "openai-completions", baseUrl: "https://api.moonshot.cn/v1" },
   { id: "minimax", name: "MiniMax", sdk: "minimax", protocol: "anthropic-messages", baseUrl: "https://api.minimax.io/anthropic" },
@@ -27,7 +32,10 @@ async function fetchProviderModels(provider, request) {
   const headers = provider.protocol === "anthropic-messages" ? { "anthropic-version": "2023-06-01", "x-api-key": request.key || "" } : { Authorization: `Bearer ${request.key || "no-key"}` };
   let response;
   try {
-    response = await request.fetch(`${provider.baseUrl}/models`, { headers, signal: AbortSignal.timeout(12000) });
+    const url=new URL(provider.baseUrl);
+    const isGo=url.hostname==='opencode.ai'&&/^\/(inference\/go|zen\/go)(\/|$)/.test(url.pathname);
+    const modelsUrl=isGo?'https://opencode.ai/inference/go/v1/models':`${provider.baseUrl}/models`;
+    response = await request.fetch(modelsUrl, { headers:providerHeaders({baseUrl:provider.baseUrl},`reed-catalog-${provider.id}`,headers), signal: AbortSignal.timeout(12000) });
   } catch (error) {
     if (error.name === "AbortError" || error.name === "TimeoutError") throw new Error("连接模型服务超时，请检查网络或服务状态");
     throw new Error("连接模型服务失败，请检查网络、Base URL 和服务状态");
@@ -125,7 +133,7 @@ export class ProviderStore {
     let url;
     try { url = new URL(input.baseUrl.trim()); } catch { throw new Error("请填写有效的 Base URL"); }
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("Base URL 格式无效");
-    if (!["openai-completions", "anthropic-messages"].includes(input.protocol)) throw new Error("不支持该接口协议");
+    if (!["openai-completions", "anthropic-messages", "openai-responses"].includes(input.protocol)) throw new Error("不支持该接口协议");
     const normalizedBaseUrl = url.href.replace(/\/$/, "");
     let provider = input.providerId ? this.providers.find((item) => item.id === input.providerId) : null;
     if (input.clientRequestId) {

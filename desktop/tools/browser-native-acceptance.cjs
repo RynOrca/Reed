@@ -31,7 +31,7 @@ ${alignRight?`Add-Type -AssemblyName System.Windows.Forms
 $taskArea=[Windows.Forms.Screen]::FromHandle($taskWindow).WorkingArea
 $taskRect=New-Object ReedTestResize+Rect
 [ReedTestResize]::GetWindowRect($taskWindow,[ref]$taskRect)|Out-Null
-if(-not [ReedTestResize]::SetWindowPos($taskWindow,[IntPtr]::Zero,[int]($taskArea.Right-($taskRect.Right-$taskRect.Left)-32*$taskScale),$taskRect.Top,0,0,0x15)){throw 'Owned window placement failed'}`:''}
+if(-not [ReedTestResize]::SetWindowPos($taskWindow,[IntPtr]::Zero,[int](${process.env.SUMMON_TEST_DRAWER_SIDE==='right'?'$taskArea.Left+32*$taskScale':'$taskArea.Right-($taskRect.Right-$taskRect.Left)-32*$taskScale'}),$taskRect.Top,0,0,0x15)){throw 'Owned window placement failed'}`:''}
 ${capture?`Add-Type -AssemblyName System.Drawing
 [ReedTestResize]::SetForegroundWindow($taskWindow)|Out-Null
 Start-Sleep -Milliseconds 200
@@ -99,6 +99,7 @@ try{
         const invoke=window.__TAURI__.core.invoke,width=chat.getBoundingClientRect().width,results=[];
         root.style.setProperty('--workspace-chat-width',width+'px');root.dataset.drawerSide=(await invoke('workspace_geometry')).side;
         root.classList.add('workspace-drawer','workspace-transitioning');pane.hidden=false;root.classList.add('browser-expanded');
+        for(const side of ['left','right']){const n=document.createElement('div');Object.assign(n.style,{position:'absolute',top:0,bottom:0,[side]:0,width:'200px',background:'rgb(0,180,255)',zIndex:1000,pointerEvents:'none'});chat.append(n);}
         for(let i=0;i<5;i++)for(const expanded of [true,false]){const result=await invoke('set_canvas_window',{expanded,durationMs:expanded?320:213,chatWidth:width});results.push({expanded,...result});await new Promise(resolve=>setTimeout(resolve,100));}
         return results;
       });
@@ -120,7 +121,7 @@ try{
     await command('prompt',{text:'NATIVE_OPEN_TEST'});
     const link=page.locator('a[data-local-file]').filter({hasText:'在内置浏览器打开 HTML'});await link.waitFor();
     const opening=Date.now();await link.click();
-    await page.waitForFunction(()=>document.querySelector('.browser-pane:not(.workspace-outgoing)')?.dataset.state==='ready'&&!document.querySelector('[data-browser=read]').disabled,{timeout:30000});timings.openPreviewMs=Date.now()-opening;assert.equal(await page.locator('.reed-workspace').getAttribute('data-drawer-side'),'left');checks.push('左侧有空间时默认向左展开，用户聊天屏幕位置保持不变');
+    await page.waitForFunction(()=>document.querySelector('.browser-pane:not(.workspace-outgoing)')?.dataset.state==='ready'&&!document.querySelector('[data-browser=read]').disabled,{timeout:30000});timings.openPreviewMs=Date.now()-opening;assert.equal(await page.locator('.reed-workspace').getAttribute('data-drawer-side'),process.env.SUMMON_TEST_DRAWER_SIDE==='right'?'right':'left');checks.push('按屏幕余量选择展开方向，用户聊天屏幕位置保持不变');
     assert.equal(await evaluate('document.title'),'Reed 原生浏览器合成验收');
     assert.equal(await evaluate("getComputedStyle(document.body).backgroundColor"),'rgb(246, 242, 229)');checks.push('聊天HTML链接在独立原生预览打开，CSS/JS资源加载');
     await evaluate("document.getElementById('counter').click();true");assert.equal(await evaluate("document.getElementById('value').textContent"),'1');checks.push('HTML交互真实执行');
@@ -234,6 +235,10 @@ checks.push('动画中五次反向/跨面板点击仅落实最后关闭目标，
       });
       await page.evaluate(()=>window.__TAURI__.core.invoke('set_canvas_window',{expanded:true}));
       assert.ok(await page.evaluate(()=>window.__windowTransitions.length>0),'Geometry IPC observer is inactive');
+      if(process.env.SUMMON_TEST_CHAT_ANCHOR==='1')await page.evaluate(()=>{
+        const chat=document.querySelector('.chat-shell');
+        for(const side of ['left','right']){const marker=document.createElement('div');marker.dataset.chatAnchor=side;Object.assign(marker.style,{position:'absolute',top:'0',bottom:'0',[side]:'0',width:'200px',background:'rgb(0, 180, 255)',zIndex:'1000',pointerEvents:'none'});chat.append(marker);}
+      });
       const summaries=[];
       async function recordTransition(name,selector,handoff=false){
         const directory=path.join(out,name);await fs.mkdir(directory,{recursive:true});
@@ -253,6 +258,7 @@ checks.push('动画中五次反向/跨面板点击仅落实最后关闭目标，
         assert.ok(frames.filter(frame=>frame[owned]).length>=20,'Insufficient owned chat-area samples');
         assert.ok(frames.filter(frame=>frame[owned]&&frame.mode==='screen').length>=20,'Insufficient actual screen-composite chat samples');
         assert.equal(frames.filter(frame=>frame[owned]&&frame[white]>.85).length,0,'White flash in owned native chat patch');
+        if(process.env.SUMMON_TEST_CHAT_ANCHOR==='1'){const anchor=opensRight?'leftAnchor':'rightAnchor';assert.ok(frames.filter(frame=>frame[owned]&&frame.mode==='screen').every(frame=>frame[anchor]>.92),'Chat texture moved or stretched before its anchored frame was painted');}
         const canary=opensRight?'leftCanary':'rightCanary';
         assert.equal(frames.filter(frame=>frame[owned]&&frame.mode==='screen'&&frame[canary]>.05).length,0,'Browser surface leaked into chat during native collapse');
         const layout=await page.evaluate(()=>{window.__samplingLayout=false;return window.__layoutFrames;});
@@ -289,6 +295,7 @@ checks.push('动画中五次反向/跨面板点击仅落实最后关闭目标，
         await recordTransition(theme+'-canvas-chat','[data-cv=close]');
         await recordTransition(theme+'-chat-browser','#browser-button');
       }
+      if(process.env.SUMMON_TEST_CHAT_ANCHOR==='1')await page.evaluate(()=>document.querySelectorAll('[data-chat-anchor]').forEach(n=>n.remove()));
       await fs.writeFile(path.join(out,'transitions.json'),JSON.stringify(summaries,null,2));
       assert.ok(summaries.some(group=>group.sourceCanarySamples>0),'Native browser canary positive control was not observed');
       checks.push('网页高饱和标记在真实浏览器区域可见，收回全过程聊天采样无网页颜色串入');

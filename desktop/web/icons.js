@@ -1,4 +1,5 @@
 const paths={
+  chat:["M4 4h16v12H9l-5 4V4Z","M8 8h8M8 12h5"],
   browser:["M3 4h18v16H3Z","M3 9h18M7 6.5h.01M10 6.5h.01"],
   graph:["M4 10h5v5H4Z","M16 3h5v5h-5ZM16 17h5v5h-5Z","M9 12h3V5h4M12 12v7h4"],
   fit:["M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5"],
@@ -14,6 +15,6 @@ const paths={
 };
 export function icon(name){const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");svg.classList.add("ui-icon");for(const [key,value] of Object.entries({viewBox:"0 0 24 24",fill:"none",stroke:"currentColor","stroke-width":"1.8","stroke-linecap":"round","stroke-linejoin":"round","aria-hidden":"true"}))svg.setAttribute(key,value);for(const d of paths[name]||paths.info){const path=document.createElementNS(svg.namespaceURI,"path");path.setAttribute("d",d);svg.append(path);}return svg;}
 export function windowHandles(tauri){
-  for(const edge of ["North","South","East","West","NorthEast","NorthWest","SouthEast","SouthWest"]){const handle=document.createElement("div");handle.className="resize-handle edge-"+edge;handle.setAttribute("aria-hidden","true");handle.onpointerdown=e=>{if(e.button!==0)return;e.preventDefault();void tauri?.core.invoke("resize_window",{edge});};document.body.append(handle);}
-  document.addEventListener("pointerdown",e=>{if(e.button===0 && e.target.closest?.("[data-drag-region]") && !e.target.closest("button,input,select,textarea,a,summary"))void tauri?.core.invoke("drag_window");});
+  for(const edge of ["North","South","East","West","NorthEast","NorthWest","SouthEast","SouthWest"]){const handle=document.createElement("div");handle.className="resize-handle edge-"+edge;handle.setAttribute("aria-hidden","true");handle.onpointerdown=e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();void tauri?.core.invoke("resize_window",{edge}).catch(console.error);};document.body.append(handle);}
+  document.addEventListener("pointerdown",e=>{if(!e.defaultPrevented && e.button===0 && e.target.closest?.("[data-drag-region]") && !e.target.closest("button,input,select,textarea,a,summary,[role=separator],.resize-handle"))void tauri?.core.invoke("drag_window").catch(console.error);});
 }
