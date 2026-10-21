@@ -23,7 +23,7 @@
 <h3 class="section-title">已配置的提供商</h3><div id="providers" class="provider-list"></div>
 <h3 class="section-title">新增提供商</h3><div id="templates" class="template-grid"></div>
 <form id="provider-form" class="card" hidden><div class="form-head"><h3 id="provider-heading">自定义</h3><button type="button" id="cancel-provider" class="icon" aria-label="取消编辑">×</button></div>
-<div class="form-grid"><label>名称<input id="provider-name" required maxlength="60"></label><label>接口协议<select id="protocol"><option value="openai-completions">OpenAI 兼容</option><option value="anthropic-messages">Anthropic 兼容</option></select></label></div>
+<div class="form-grid"><label>名称<input id="provider-name" required maxlength="60"></label><label>接口协议<select id="protocol"><option value="openai-completions">OpenAI 兼容</option><option value="anthropic-messages">Anthropic 兼容</option><option value="openai-responses">OpenAI Responses</option></select></label></div>
 <label>Base URL<input id="base-url" type="url" required placeholder="https://api.example.com/v1"></label><label>API Key<input id="api-key" type="password" autocomplete="off" placeholder="无鉴权服务可留空"></label>
 <p class="hint">本地、另一台电脑和云端接口使用同一配置流程。Key 由当前 Windows 用户的凭据保护加密保存。对话不设内置等待上限，可随时停止。</p>
 <label class="capability-label"><input id="parallel-requests" class="capability-checkbox" type="checkbox">允许并行请求（实验性）</label>
