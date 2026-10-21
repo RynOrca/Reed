@@ -78,11 +78,16 @@ impl CollapseCover{
         // physical inner size. At 150% scaling the preview can be one pixel
         // wider; anchor the crop to the preview without shifting its screen
         // origin by that rounding difference.
-        if image.height()!=size.height||image.width().abs_diff(size.width)>2||chat_width>size.width{return Err(format!("聊天截图尺寸与原生窗口不一致：预览{}×{}，窗口{}×{}，聊天宽度{}",image.width(),image.height(),size.width,size.height,chat_width));}
+        if image.height().abs_diff(size.height)>2||image.width().abs_diff(size.width)>2||chat_width>size.width||image.width()<chat_width||image.height()==0{return Err(format!("聊天截图尺寸与原生窗口不一致：预览{}×{}，窗口{}×{}，聊天宽度{}",image.width(),image.height(),size.width,size.height,chat_width));}
         let crop_x=if rightward{0}else{image.width().saturating_sub(chat_width)};
         let screen_x=if rightward{0}else{size.width.saturating_sub(chat_width)};
         let mut rgba=Vec::with_capacity(chat_width as usize*size.height as usize*4);
-        for row in image.rgba().chunks_exact(image.width() as usize*4){rgba.extend_from_slice(&row[crop_x as usize*4..(crop_x+chat_width) as usize*4]);}
+        // Always allocate exactly the native bitmap height. Crop an extra bottom
+        // pixel or repeat the last row when WebView2 rounded down instead.
+        for y in 0..size.height {
+            let offset=(y.min(image.height()-1) as usize*image.width() as usize+crop_x as usize)*4;
+            rgba.extend_from_slice(&image.rgba()[offset..offset+chat_width as usize*4]);
+        }
         let info=BitmapInfo{size:40,width:chat_width as i32,height:-(size.height as i32),planes:1,bits:32,compression:0,image_size:0,xppm:0,yppm:0,used:0,important:0,color:0};
         let mut bits=std::ptr::null_mut();let bitmap=unsafe{CreateDIBSection(0,&info,0,&mut bits,0,0)};
         if bitmap==0||bits.is_null(){return Err(std::io::Error::last_os_error().to_string());}

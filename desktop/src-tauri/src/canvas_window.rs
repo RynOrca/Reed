@@ -135,6 +135,25 @@ pub async fn set_canvas_window(window:tauri::WebviewWindow,expanded:bool,duratio
     tauri::async_runtime::spawn_blocking(move || change_window(window,expanded,duration_ms.unwrap_or(if expanded{320}else{213}).min(500),chat_width)).await.map_err(|e|e.to_string())?
 }
 fn change_window(window:tauri::WebviewWindow,expanded:bool,duration:u64,chat_width:Option<f64>)->Result<Value,String>{
+    let before=current(&window)?;
+    let previous=*window.state::<CanvasWindow>().active.lock().map_err(|e|e.to_string())?;
+    let result=change_window_inner(window.clone(),expanded,duration,chat_width);
+    let state=window.state::<CanvasWindow>();
+    if result.is_err(){
+        // A failed preview/resize must not leave a clipped window or a stale
+        // expanded state that makes subsequent clicks and edge resize fail.
+        let _=place_clipped(&window,before,before.width,true);
+        if let Ok(mut active)=state.active.lock(){*active=previous.map(|mut saved|{saved.target=before;saved.visible_width=before.width;saved.settled=true;saved});}
+        state.clipping.store(false,Ordering::SeqCst);
+        let _=persist(previous.is_some(),previous.map(|s|s.original_width).unwrap_or(before.width as f64/window.scale_factor().unwrap_or(1.0)),previous.is_some_and(|s|s.was_maximized),previous.is_some_and(|s|s.rightward));
+    }
+    if !state.is_clipping(){
+        if let Ok(mut sizes)=window.state::<crate::RoundedBounds>().0.lock(){sizes.remove(window.label());}
+        crate::round_window(&window);
+    }
+    result
+}
+fn change_window_inner(window:tauri::WebviewWindow,expanded:bool,duration:u64,chat_width:Option<f64>)->Result<Value,String>{
     if window.label()!="main"{return Err("画布只属于主窗口".into());}
     let state=window.state::<CanvasWindow>();let revision=state.revision.load(Ordering::SeqCst);let mut active=state.active.lock().map_err(|e|e.to_string())?;
     if expanded {
