@@ -3,6 +3,7 @@ import {createNativeBrowserTransport} from './native-browser.mjs';
 import { learningBlockExtension, LEARNING_BLOCK_TOOL, validateLearningReply, learningReceipt } from './learning-blocks.mjs';
 import { semanticMatcher } from "./memory-match.mjs";
 import { providerHeaders } from './provider-headers.mjs';
+import { createSideChat } from './side-chat.mjs';
 import { createMemoryValueGate } from './memory-value.mjs';
 import { ModelRequests } from './model-requests.mjs';
 import { createAuxiliaryCompleter } from './auxiliary-runtime.mjs';
@@ -143,6 +144,23 @@ const scope = new FileScope({ workspace: () => cwd, readOnly: () => [capabilitie
   ...["memory.json","learner.json","local-search.sqlite","local-search.sqlite-wal","local-search.sqlite-shm"].map(name=>({path:join(dataDir,name),denyRead:true})),
 ] });
 capabilities.canRead = async path => {try {await scope.check(path);return true;}catch{return false;}};
+const sideChat=createSideChat({
+  emit:event=>process.stdout.write(JSON.stringify(event)+'\n'),selectModel:()=>session?.model,workspace:()=>cwd,
+  readTool:()=>{
+    const root=cwd,protectedPaths=structuredClone(scope.protectedPaths()),readOnly=[...scope.readOnly()];
+    return sandboxTools(new FileScope({workspace:()=>root,readOnly:()=>readOnly,protectedPaths:()=>protectedPaths})).find(tool=>tool.name==='read');
+  },
+  stream:async(model,context,options)=>{
+    const current=await getRuntime();options.signal.throwIfAborted();
+    const attempt=createWireAttempt({model,taskId:`side:${options.sessionId}`,index:1,signal:options.signal,requestGroup:'side'});
+    const response=current.streamSimple(model,context,{...options,headers:providerHeaders(model,options.sessionId),fetch:attempt.fetch(createRequestFetch(foregroundFetch,{signal:options.signal,totalMs:300000,idleMs:90000,dispatcher:foregroundHttp}))});
+    return {async *[Symbol.asyncIterator](){yield* response;},result:async()=>{
+      const message=await response.result(),wire=attempt.snapshot();
+      if(wire.enforced&&wire.status!=='completed')throw Error(`侧边模型响应未完成（${wire.errorCode||wire.status}）`);
+      return message;
+    }};
+  },
+});
 const vaultOverview = new VaultOverview({capabilities,runtime:getRuntime,model:()=>overviewSelection?runtime?.getModel(overviewSelection.providerId,overviewSelection.modelId):session?.model,send,canRead:capabilities.canRead,parallelLimit:model=>modelRequests.limit(model)});
 // Restore persisted navigation on startup; generation requires the user's model
 // and reasoning choice, so no invisible inference job is started here.
@@ -1206,6 +1224,11 @@ for await (const line of createInterface({ input: process.stdin })) {
     continue;
   }
   if(nativeBrowser?.receive(command))continue;
+  if(command.type==='side_chat_prompt'){
+    void sideChat.prompt(command).catch(error=>process.stdout.write(JSON.stringify({type:'side_chat_event',id:command.id,state:'error',message:error.message})+'\n'));continue;
+  }
+  if(command.type==='side_chat_reset'){sideChat.reset();continue;}
+  if(command.type==='side_chat_abort'){sideChat.abort();continue;}
   if(command.type?.startsWith('browser_')){void dispatch(command);continue;}
   if ((command.type === "init" && session) || ["get_goals", "save_goals", "cancel_vault_overview", "abort", "tool_decision", "queue_message", "promote_queue", "clear_queue", "set_approval"].includes(command.type)) {
     void dispatch(command);
@@ -1228,7 +1251,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     queue = queue.then(() => dispatch(command));
   }
 }
-canvasWorkflow.close();await queue;turnController?.abort();if(session)void session.abort();await activePrompt;vaultOverview.cancel();await mcp.closeAll();
+sideChat.reset();canvasWorkflow.close();await queue;turnController?.abort();if(session)void session.abort();await activePrompt;vaultOverview.cancel();await mcp.closeAll();
 memoryAgent.cancel();
 workingTools.cancel();
 capabilities.close();

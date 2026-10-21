@@ -7,6 +7,7 @@ import {createGoals} from "./goals.js";
 import {createOutline} from "./reading-outline.js";
 import {createConversationCanvas} from "./conversation-canvas.js";
 import {createBrowserWorkspace} from './browser-workspace.js';
+import {createSideChatPanel} from './side-chat.js';
 import {createWorkspacePanels} from './workspace-panels.mjs';
 import {createProjectPicker} from "./project-picker.js";
 import {createMessageNavigation} from "./message-navigation.js";
@@ -105,6 +106,7 @@ $("goals-button").append(icon("book"));
 $("goals-button").onclick = () => goalsPanel.open();
 
 const projectPicker=createProjectPicker({button:$('workspace-button'),command,tauri,isRunning:()=>running,onError:errorRow,onSelect:()=>{closeHistory();prompt.focus();}});
+const sideChatPanel=createSideChatPanel({tauri});
 const workspacePanels=createWorkspacePanels({prepare:()=>tauri.core.invoke('workspace_geometry'),onExpanded:()=>tauri.core.invoke('set_canvas_window',{expanded:true,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:320}),onInterrupt:()=>{void tauri.core.invoke('cancel_canvas_transition').catch(errorRow);},onEmpty:()=>tauri.core.invoke('set_canvas_window',{expanded:false,chatWidth:document.querySelector('.chat-shell').getBoundingClientRect().width,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:213})});
 const canvasPanel = createConversationCanvas({command,tauri,prompt,panels:workspacePanels,isRunning:()=>running,reportError:errorRow,onUnavailable:()=>{
   const role=roles.find(item=>item.id===activeRoleId);
@@ -120,7 +122,7 @@ const canvasPanel = createConversationCanvas({command,tauri,prompt,panels:worksp
   followLatest=false;row.scrollIntoView({block:"center",behavior:"smooth"});
   row.animate([{backgroundColor:"var(--goal-accent-soft)"},{backgroundColor:"transparent"}],{duration:1600});
 }});
-createMessageNavigation({messages,transcript,onNavigate:()=>{followLatest=false;}});
+createMessageNavigation({messages,transcript,onNavigate:row=>{followLatest=false;outlinePanel.selectTurn(row);}});
 const browserPanel=createBrowserWorkspace({tauri,command,prompt,panels:workspacePanels,onError:error=>errorRow(String(error.message||error)),
   onQuote:({text,context,source,url,action})=>{
     const quote=`引用「${source}」\n来源：${url}\n\n${text.split('\n').map(line=>'> '+line).join('\n')}${context&&context!==text?'\n\n所在段落：'+context:''}${action?'\n\n'+action:''}`;
@@ -211,6 +213,7 @@ function messageRow(role, text = "") {
     updateLearningAvailability();}
   const row = document.createElement("div");
   row.className = `message-row ${role}`;
+  row.dataset.turnId = role==='user' ? crypto.randomUUID() : [...messages.querySelectorAll('.message-row.user')].at(-1)?.dataset.turnId || activeTurnId || '';
   row.setAttribute("role", "article");
   row.setAttribute("aria-label", role === "user" ? "用户消息" : "助手消息");
   const col = document.createElement("div"); col.className = "message-col";
@@ -220,6 +223,7 @@ function messageRow(role, text = "") {
   if (role === "assistant") renderAssistant(content, text);
   else content.textContent = text;
   bubble.append(content); col.append(bubble); row.append(col); messages.append(row);
+  if(role==='user'&&followLatest)outlinePanel.selectTurn(row);
   refreshEmpty(); scrollToLatest();
   return content;
 }
@@ -577,6 +581,7 @@ async function newSession() {
 function onEvent(event) {
   const response = event.payload;
   if (!response || typeof response !== "object") return;
+  if(response.type==='side_chat_event'){sideChatPanel.event(response);return;}
   const handledReply = Boolean(response.id && pending.has(response.id) && ["ack", "error", "done", "conversation", "file_staged", "goals", "sessions", "browser_result"].includes(response.type));
   if (handledReply) {
     const { resolve, reject, timer } = pending.get(response.id); clearTimeout(timer); pending.delete(response.id);
