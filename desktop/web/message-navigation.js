@@ -4,7 +4,7 @@ export function createMessageNavigation({messages,transcript,onNavigate}) {
   function refresh(){
     scheduled=false;const next=[...messages.querySelectorAll(".message-row.user")];
     if(next.length!==rows.length||next.some((row,i)=>row!==rows[i])) {
-      rows=next;buttons=rows.map((row,index)=>{const b=document.createElement("button");b.type="button";b.className="message-jump";b.append(document.createElement("span"));b.onclick=()=>{onNavigate();const top=row.getBoundingClientRect().top-transcript.getBoundingClientRect().top+transcript.scrollTop-18;transcript.scrollTo({top,behavior:matchMedia("(prefers-reduced-motion: reduce)").matches?"instant":"smooth"});};return b;});rail.replaceChildren(...buttons);
+      rows=next;buttons=rows.map((row,index)=>{const b=document.createElement("button");b.type="button";b.className="message-jump";b.append(document.createElement("span"));b.onclick=()=>{onNavigate(row);const top=row.getBoundingClientRect().top-transcript.getBoundingClientRect().top+transcript.scrollTop-18;transcript.scrollTo({top,behavior:matchMedia("(prefers-reduced-motion: reduce)").matches?"instant":"smooth"});};return b;});rail.replaceChildren(...buttons);
     }
     rail.hidden=!rows.length;
     const top=transcript.getBoundingClientRect().top+36;let active=0;
