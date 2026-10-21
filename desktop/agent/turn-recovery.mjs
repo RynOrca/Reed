@@ -99,8 +99,11 @@ export function createTurnRecovery({ send, diagnostic = async () => {},currentAt
               : isMalformedStreamError(lastMessage) ? '流式响应损坏，保持原思考设置重试一次' : '模型已结束但未产生回复或工具调用，保持原思考设置续接一次';
           send({ type: "recovery", message: reason });
           const partial=outcome.hasText?lastMessage.content.filter(block=>block.type==='text'):null;
-          const entries = preserveThinking ? [] : [{ type: 'context_edit', targetId: event.messageEntryId, replacement: partial?{content:partial}:null }];
-          entries.push({ type: 'custom_message', customType: 'reed_model_continuation', content: partial?'The preceding partial answer is already visible to the user. Its tool call was invalid and was NOT executed. Do not repeat that text. Continue the user task by calling an available tool with complete valid JSON arguments. Use only exact tool names declared in the tool schema.':needsAction ? actionHint : recoveryHint, display: false, details: { reason: outcome.status, preserveThinking, ...(needsAction ? { code: outcome.code } : {}) } });
+          // The SDK omits errored assistant messages even after a content edit.
+          // Carry only their already-visible text in this hidden continuation;
+          // never replay the malformed tool or label the failed response success.
+          const entries = preserveThinking ? [] : [{ type: 'context_edit', targetId: event.messageEntryId, replacement: null }];
+          entries.push({ type: 'custom_message', customType: 'reed_model_continuation', content: partial?'The following partial answer is already visible to the user (reference only):\n'+JSON.stringify(partial.map(block=>block.text).join('\n'))+'\nIts tool call was invalid and was NOT executed. Do not repeat that text. Continue the user task by calling an available tool with complete valid JSON arguments. Use only exact tool names declared in the tool schema.':needsAction ? actionHint : recoveryHint, display: false, details: { reason: outcome.status, preserveThinking, ...(needsAction ? { code: outcome.code } : {}) } });
           return { entries, continue: true };
         }
         // Avoid a second SDK compact-and-retry after our bounded recovery fails.

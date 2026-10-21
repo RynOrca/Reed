@@ -15,7 +15,7 @@ test('完整传输但工具无效时，即使已有部分正文也只续接一�
   const handlers=new Map(),recovery=createTurnRecovery({send(){}});recovery.extension({on:(name,fn)=>handlers.set(name,fn)});recovery.begin();
   const partial={role:'assistant',stopReason:'error',content:[{type:'text',text:'合成部分正文'}],reedWire:{enforced:true,transportComplete:true,errorCode:'invalid_tool_call',status:'incomplete'}};
   assert.equal(recovery.willRecover(partial),true);const result=await handlers.get('turn_end')({message:partial,messageEntryId:'test'});
-  assert.equal(result.continue,true);assert.deepEqual(result.entries[0].replacement.content,partial.content);assert.equal(recovery.willRecover(partial),false);
+  assert.equal(result.continue,true);assert.equal(result.entries[0].replacement,null);assert.ok(result.entries[1].content.includes('合成部分正文'));assert.equal(result.entries[1].display,false);assert.equal(recovery.willRecover(partial),false);
   assert.equal(recovery.willRecover({...partial,content:[{type:'toolCall',name:'read'}]}),false);
 });
 
