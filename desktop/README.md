@@ -9,3 +9,11 @@
 更新前通过托盘退出旧版。配置与会话保存在 `%APPDATA%\Reed`，升级和卸载默认保留。启动日志为包内 `startup.log`，Agent日志为应用数据目录中的 `agent.log`；反馈前请删除私人内容与凭据。
 
 完整说明见源码仓库README，第三方许可见随包NOTICE及LICENSE文件。
+# 学习资料与可选解析（开发中，待运行验收）
+
+学习资料按科目保存到用户数据目录的 `materials/`，PDF 原文件仅复制，不修改导入来源。阅读与文字层提取使用随包 PDF.js，无需额外常驻服务。PDF 页码指物理页序，区别于书上印刷页码。
+
+扫描 PDF 可导入对应的 MinerU `content_list.json` 或 `middle.json`；保留 `page_idx`，不要只导入合并 Markdown。首次关联需要确认与当前 PDF 对应，页索引越界会拒绝。缓存存于本地，提问只选择相关页面，不整本发送。
+
+“识别本页”为可选服务适配器，不附带 OCR 模型或 Python。用户提供服务地址并确认发送范围；HTTP 只允许本机，远程服务须 HTTPS 并单次明确允许。接口为 POST JSON `{ "image": "PNG base64", "mimeType": "image/png" }`，返回 `{ "text": "识别文字" }`。可用本机代理对接已有识别引擎；内置适配器不隐式调用商业 OCR 或发送整本教材。不设置识别服务仍可阅读 PDF、使用文字层或导入 MinerU 结果。
+

@@ -8,6 +8,7 @@ import {createContextAssembler,assembleContext,resolveTask} from './context-asse
 import {searchTokens} from './local-search.mjs';
 import {DocumentStore} from './document-store.mjs';
 import {materialTools,MATERIAL_TOOLS} from './material-tools.mjs';
+import {mineruPages,recognizePage} from './document-extract.mjs';
 import { createMemoryValueGate } from './memory-value.mjs';
 import { ModelRequests } from './model-requests.mjs';
 import { createAuxiliaryCompleter } from './auxiliary-runtime.mjs';
@@ -677,6 +678,19 @@ async function dispatch(command){
         case 'materials_import':value=await documents.importPdf(record.id,workspace,await scope.check(command.path),{name:command.title,kind:command.kind});break;
         case 'materials_bytes':value=await documents.bytes(record.id,workspace,command.documentId,command.offset);break;
         case 'materials_page':value=await documents.cachePage(record.id,workspace,command.page);break;
+        case 'materials_parse':{
+          const doc=await documents.document(record.id,workspace,command.documentId);if(!doc.page_count)throw Error('请先打开 PDF，再导入解析结果');
+          const path=await scope.check(command.path),info=await stat(path);if(!info.isFile()||info.size>20*1024*1024)throw Error('解析结果须为不超过 20 MB 的 JSON 文件');
+          const pages=mineruPages(JSON.parse(await readFile(path,'utf8')),doc.page_count);
+          for(const [pageIndex,text]of pages)await documents.cachePage(record.id,workspace,{documentId:doc.id,revision:doc.hash,pageIndex,pageCount:doc.page_count,text,method:'mineru'});
+          value={pageCount:pages.size};break;
+        }
+        case 'materials_ocr':{
+          const doc=await documents.document(record.id,workspace,command.documentId);if(command.revision!==doc.hash)throw Error('资料版本已变化');
+          await documents.page(record.id,workspace,doc.id,command.pageIndex);
+          const text=await recognizePage({endpoint:command.endpoint,image:command.image,allowRemote:command.allowRemote===true});
+          value=await documents.cachePage(record.id,workspace,{documentId:doc.id,revision:doc.hash,pageIndex:command.pageIndex,pageCount:doc.page_count,text,method:'ocr'});break;
+        }
         default:throw Error('未知资料操作');
       }
       send({type:'ack',id:command.id,sessionId:record.id,material:value});return;
