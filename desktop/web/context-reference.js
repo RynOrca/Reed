@@ -9,7 +9,8 @@ export function referenceIdentity(item){
   const raw=String(item.location||item.label||item.kind||'参考来源');
   if(item.kind==='note'){
     const location=String(item.location||item.label||'').replaceAll('\\','/'),parts=location.split('/').filter(Boolean),leaf=parts.pop()||'笔记';
-    return {title:leaf.replace(/\.md$/i,''),parent:parts.slice(-2).join(' / ')||'笔记',location};
+    const label=String(item.label||'');
+    return {title:(label&&!/[\\/]/.test(label)?label:leaf).replace(/\.md$/i,''),parent:parts.slice(-2).join(' / ')||'笔记',location};
   }
   return {title:String(item.label||kindName[item.kind]||'参考来源'),parent:item.pinned?'当前项目 · 每轮读取':kindName[item.kind]||'参考资料',location:item.location||item.url||raw};
 }
