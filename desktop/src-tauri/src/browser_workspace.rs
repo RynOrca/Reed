@@ -57,7 +57,7 @@ fn ensure(app: &tauri::AppHandle, surface: &str) -> Result<Value, String> {
                 let host=app.clone();
                 view.on_window_event(move |event|{
                     if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop{paths,..})=event{
-                        if let Some(path)=paths.iter().find(|path|path.extension().and_then(|s|s.to_str()).map(|ext|["html","htm"].contains(&ext.to_lowercase().as_str())).unwrap_or(false)){
+                        if let Some(path)=paths.iter().find(|path|path.extension().and_then(|s|s.to_str()).map(|ext|["html","htm","pdf"].contains(&ext.to_lowercase().as_str())).unwrap_or(false)){
                             let _=host.emit_to("main","browser-drop",json!({"path":path}));
                         }
                     }

@@ -1,7 +1,7 @@
 import {icon} from './icons.js';
 import {renderMarkdown} from './markdown.js';
 
-export function createSideChatPanel({tauri}){
+export function createSideChatPanel({tauri,readingContext}){
   const shell=document.querySelector('.chat-shell');
   const entry=document.createElement('button');entry.id='side-chat-button';entry.type='button';entry.className='icon-button';entry.setAttribute('aria-label','侧边聊天');entry.setAttribute('aria-expanded','false');entry.append(icon('chat'));
   document.getElementById('activity-button').before(entry);
@@ -22,7 +22,7 @@ export function createSideChatPanel({tauri}){
     event.preventDefault();if(busy||!input.value.trim())return;
     const text=input.value.trim(),row=document.createElement('div');row.className='side-chat-user';row.textContent=text;list.append(row);
     answer=document.createElement('div');answer.className='side-chat-answer prose-chat';list.append(answer);source='';requestId='side-'+crypto.randomUUID();input.value='';setBusy(true);q('status').textContent='正在回复…';list.scrollTop=list.scrollHeight;
-    const id=requestId;void send('side_chat_prompt',{id,text}).catch(error=>{if(requestId!==id)return;setBusy(false);q('status').textContent=String(error.message||error);});
+    const id=requestId;void send('side_chat_prompt',{id,text,readingContext:readingContext?.snapshot()}).catch(error=>{if(requestId!==id)return;setBusy(false);q('status').textContent=String(error.message||error);});
   };
   new ResizeObserver(availability).observe(shell);availability();setBusy(false);
   return {event(event){

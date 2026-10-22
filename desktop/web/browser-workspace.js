@@ -2,7 +2,7 @@ import {icon} from './icons.js';
 import {resolveBrowserAddress,browserFailure} from './browser-address.mjs';
 import {paintWorkspace} from './workspace-panels.mjs';
 
-export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,panels,onError}){
+export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,panels,onError,onPdf}){
   const workspace=document.querySelector('.reed-workspace'),shell=document.querySelector('.chat-shell');
   const pane=document.createElement('section');pane.className='browser-pane';pane.hidden=true;pane.setAttribute('aria-label','网页预览');
   pane.innerHTML='<header class="browser-toolbar"><button data-browser="back" class="icon-button" title="后退" aria-label="后退"></button><button data-browser="forward" class="icon-button" title="前进" aria-label="前进"></button><button data-browser="reload" class="icon-button" title="刷新" aria-label="刷新"></button><input data-browser="address" aria-label="网址、搜索或 HTML 路径" placeholder="搜索或输入网址" spellcheck="false" autocomplete="off" autocapitalize="off" inputmode="url"><button data-browser="open" class="icon-button" title="打开 HTML 文件" aria-label="打开 HTML 文件"></button><button data-browser="close" class="icon-button" title="关闭网页预览" aria-label="关闭网页预览"></button></header><div class="browser-actions"><span data-browser="status" role="status">输入网址或打开 HTML，边看边聊</span><button data-browser="quote" disabled>引用选中内容</button><button data-browser="read" disabled>读取整页</button></div><div class="browser-viewport" data-browser="viewport"><div class="browser-empty" data-browser="empty"><span data-browser="mark"></span><h2>把网页放在对话旁</h2><p>输入网址、搜索，或打开本地 HTML。<br>选中文字，就能带着原文继续提问。</p><button data-browser="pick">打开 HTML 文件</button></div></div><footer class="browser-footer"><span data-browser="source">页面内容由文件自身提供</span><button data-browser="chat">切换到对话</button></footer>';
@@ -85,7 +85,7 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
     return ()=>{proxy?.remove();scheduleBounds();};
   }
   panels.register('browser',{isOpen:()=>opened,open:show,close,beforeTransition});
-  async function pick(){const path=await tauri.core.invoke('choose_html_file');if(path)await openPage(path);}
+  async function pick(){const path=await tauri.core.invoke('choose_html_file');if(path)await (/\.pdf$/i.test(path)&&onPdf?onPdf(path):openPage(path));}
   q('open').onclick=()=>void pick().catch(onError);q('pick').onclick=()=>void (attempt?openPage(attempt):pick()).catch(onError);
   q('close').onclick=()=>void panels.close('browser').catch(onError);
   entry.onclick=()=>{if(opened&&innerWidth<=500&&!workspace.classList.contains('browser-mobile-page')){workspace.classList.add('browser-mobile-page');scheduleBounds();return;}void panels.toggle('browser').catch(onError);};
@@ -120,7 +120,7 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
   tauri?.event.listen('browser-title',event=>{if(opened&&ready)status(event.payload.title||'页面已就绪');});
   tauri?.event.listen('browser-location',event=>{if(opened&&ready&&event.payload.url!=='about:blank'){source=event.payload.url;attempt=source;if(document.activeElement!==q('address'))q('address').value=source;q('source').textContent=source;q('back').disabled=false;}});
   tauri?.event.listen('tauri://drag-drop',event=>{const path=event.payload?.paths?.find(path=>/\.html?$/i.test(path));if(path)void openPage(path).catch(onError);});
-  tauri?.event.listen('browser-drop',event=>{if(event.payload?.path)void openPage(event.payload.path).catch(onError);});
+  tauri?.event.listen('browser-drop',event=>{if(event.payload?.path&&!/\.pdf$/i.test(event.payload.path))void openPage(event.payload.path).catch(onError);});
   return {open:openPage,close:()=>panels.close('browser'),event(event){
     if(event.initiator!=='agent')return;
     if(event.state==='loading'){

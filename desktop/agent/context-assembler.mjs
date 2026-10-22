@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
 import {estimateContextTokens} from './context-policy.mjs';
+import {searchTokens} from './local-search.mjs';
 
 export const dynamicSections=['summon_work','summon_goals','summon_memory','summon_learner','summon_notes','summon_vault_overview','reed_context'];
 export const textOf=m=>typeof m?.content==='string'?m.content:(m?.content||[]).filter(b=>b.type==='text').map(b=>b.text||'').join('\n');
@@ -9,7 +10,10 @@ export function resolveTask(prompt,messages=[],scene=null){
   const short=/^(?:这|那|它|为什么|怎么|继续|再|上面|刚才|第\s*\d+|不懂|没懂|解释|推导|出题|练习)/.test(prompt.trim())&&prompt.length<100;
   const work=/报错|堆栈|代码|构建|安装|修复|命令|powershell|exception|stack trace|npm |cargo /i.test(prompt);
   const greeting=/^(?:hi|hello|你好|谢谢|好的|嗯)[!！,.，。\s]*$/i.test(prompt.trim());
-  const anchor=!work&&!greeting&&scene?.readingVisible&&Date.now()-scene.capturedAt<30*60*1000&&short;
+  const pointers=/这一步|这里|这个|这一页|当前页|上面|上述|刚才|这章|本章|继续|再解释|没懂|不懂/.test(prompt);
+  const terms=searchTokens(prompt).filter(w=>w.length>1),body=String(scene?.topicText||'').toLowerCase();
+  const matches=terms.filter(w=>body.includes(w)).length;
+  const anchor=!work&&!greeting&&scene?.readingVisible&&Date.now()-scene.capturedAt<30*60*1000&&(pointers||(short&&scene.selectionText)||matches>=2);
   const prior=messages.filter(m=>m.role==='user').slice(-3,-1).map(textOf).filter(Boolean).at(-1)||'';
   return {work,greeting,anchor:Boolean(anchor),query:short&&!work?[prompt,anchor?scene.selectionText:'',prior.slice(-500)].filter(Boolean).join('\n'):prompt};
 }

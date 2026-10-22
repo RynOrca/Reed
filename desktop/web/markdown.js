@@ -50,6 +50,8 @@ function inline(tokens = [], options = {}) {
         const url = String(token.href || "");
         if (/^(https?:|mailto:)/i.test(url)) {
           node = document.createElement("a"); node.href = url; node.target = "_blank"; node.rel = "noopener noreferrer"; node.append(inline(token.tokens,options));
+        } else if (/^reed-material:[a-f0-9-]{36}#page=[1-9][0-9]*$/i.test(url)) {
+          node=document.createElement('a');node.href='#';node.dataset.material=url;node.append(inline(token.tokens,options));
         } else if (/^summon-file:[^\r\n]+#L[1-9][0-9]*(?:-L?[1-9][0-9]*)?$/.test(url)) {
           node=document.createElement('button');node.type='button';node.className='learning-source';node.dataset.learningSource=url;node.title='查看引用的笔记原文';node.append(inline(token.tokens,options));
         } else if (/^(summon-file:|file:|[a-z]:[\\/]|[./\\])|\.(html?|md|txt|pdf)(#.*)?$/i.test(url) && !/^(javascript|data|vbscript):/i.test(url)) {

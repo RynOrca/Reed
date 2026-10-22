@@ -74,3 +74,6 @@ __pycache__/
 
 # Learning workspace portable verification packages
 desktop/dist-learning-workspace*/
+
+# Local dependency extraction and validation scratch
+tmp/
