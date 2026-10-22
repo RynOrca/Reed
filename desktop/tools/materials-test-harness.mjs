@@ -4,16 +4,24 @@ import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {createInterface} from 'node:readline';
-export function syntheticPdf(){
-  const bodies=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>','<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 500] /Resources << /Font << /F1 7 0 R >> >> /Contents 4 0 R >>',null,'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 500] /Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R >>',null,'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
-  for(const [i,text]of [[3,'PAGE_ONE_MARKER Alpha formula'],[5,'PAGE_TWO_FUTURE Hidden later page']]){const stream=`BT /F1 16 Tf 40 420 Td (${text}) Tj ET`;bodies[i]=`<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`;}
+export function syntheticPdf({pages=2,scanPage=0}={}){
+  const font=3+pages*2,bodies=['<< /Type /Catalog /Pages 2 0 R >>',`<< /Type /Pages /Kids [${Array.from({length:pages},(_,i)=>`${3+i*2} 0 R`).join(' ')}] /Count ${pages} >>`];
+  for(let i=0;i<pages;i++){
+    bodies.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 500] /Resources << /Font << /F1 ${font} 0 R >> >> /Contents ${4+i*2} 0 R >>`);
+    const marker=i===0?'PAGE_ONE_MARKER Alpha formula':i===1?'PAGE_TWO_FUTURE Hidden later page':`PAGE_${i+1}_MARKER`;
+    // An actual image-only page: no text operators or hidden text layer.
+    const pixels=Array.from({length:64},(_,pixel)=>pixel%2?'183c28':'d7b568').join('');
+    const stream=i+1===scanPage?`q 300 0 0 380 50 60 cm BI /W 8 /H 8 /CS /RGB /BPC 8 /F /AHx ID\n${pixels}>\nEI Q`:`BT /F1 16 Tf 40 420 Td (${marker}) Tj ET\n`+Array.from({length:30},(_,row)=>`BT /F1 9 Tf 40 ${400-row*11} Td (Synthetic textbook line ${row+1}, page ${i+1}) Tj ET`).join('\n');
+    bodies.push(`<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`);
+  }
+  bodies.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
   let result='%PDF-1.4\n',offsets=[0];for(let i=0;i<bodies.length;i++){offsets.push(Buffer.byteLength(result));result+=`${i+1} 0 obj\n${bodies[i]}\nendobj\n`;}
-  const start=Buffer.byteLength(result);result+=`xref\n0 8\n0000000000 65535 f \n`+offsets.slice(1).map(n=>String(n).padStart(10,'0')+' 00000 n \n').join('')+`trailer\n<< /Size 8 /Root 1 0 R >>\nstartxref\n${start}\n%%EOF\n`;return Buffer.from(result);
+  const start=Buffer.byteLength(result),size=bodies.length+1;result+=`xref\n0 ${size}\n0000000000 65535 f \n`+offsets.slice(1).map(n=>String(n).padStart(10,'0')+' 00000 n \n').join('')+`trailer\n<< /Size ${size} /Root 1 0 R >>\nstartxref\n${start}\n%%EOF\n`;return Buffer.from(result);
 }
 const text=message=>typeof message?.content==='string'?message.content:(message?.content||[]).map(b=>b.text||'').join('\n');
-export async function materialsHarness(){
+export async function materialsHarness({pdfOptions}={}){
   const root=await mkdtemp(join(tmpdir(),'reed-test-materials-flow-')),data=join(root,'data'),events=[],requests=[],waiters=new Set();let seq=0,stderr='',held=null;
-  await mkdir(data);const pdf=join(root,'test-book.pdf');await writeFile(pdf,syntheticPdf());
+  await mkdir(data);const pdf=join(root,'test-book.pdf');await writeFile(pdf,syntheticPdf(pdfOptions));
   const api=createServer(async(req,res)=>{
     try{if(req.method==='GET'){res.setHeader('content-type','application/json');res.end(JSON.stringify({data:[{id:'mock',context_length:65536}]}));return;}
       let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);requests.push(body);const last=text(body.messages.findLast(m=>m.role==='user')),system=body.messages.filter(m=>['system','developer'].includes(m.role)).map(text).join('\n');let answer='SYNTHETIC_REPLY';

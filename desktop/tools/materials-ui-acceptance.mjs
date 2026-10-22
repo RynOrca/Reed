@@ -5,7 +5,7 @@ import {resolve,extname,sep} from 'node:path';
 import {createRequire} from 'node:module';
 import {materialsHarness} from './materials-test-harness.mjs';
 const require=createRequire(import.meta.url),{chromium}=require(process.env.SUMMON_PLAYWRIGHT_PATH||'C:/Users/Orca/AppData/Local/Programs/Python/Python314/Lib/site-packages/playwright/driver/package');
-const h=await materialsHarness(),web=resolve('desktop/web'),output=resolve('dist/acceptance-materials-source');await mkdir(output,{recursive:true});const errors=[];let browser;
+const h=await materialsHarness({pdfOptions:{pages:24,scanPage:12}}),web=resolve('desktop/web'),output=resolve('dist/acceptance-materials-source');await mkdir(output,{recursive:true});const errors=[];let browser;
 const bootstrap=`import {createMaterials} from '/materials.js';import {createReadingContext} from '/reading-context.js';import {installAssessments} from '/assessment.js';import {installMaterialParsers} from '/material-parsers.js';
 const state=await (await fetch('/state')).json();const reading=createReadingContext();reading.session(state.sessionId);const events={};
 const tauri={core:{invoke:async name=>{if(name==='choose_html_file')return state.pdf;throw Error(name);}},event:{listen:async(name,fn)=>{(events[name]??=[]).push(fn);return()=>{};}}};
@@ -31,7 +31,27 @@ try{
   await page.screenshot({path:resolve(output,'pdf-dark.png')});await page.evaluate(()=>document.documentElement.dataset.theme='light');await page.screenshot({path:resolve(output,'pdf-light.png')});
   await page.getByRole('button',{name:'下一页',exact:true}).click();await page.waitForFunction(()=>window.reading.snapshot()?.pageIndex===1);assert.match(await page.locator('.textLayer').innerText(),/PAGE_TWO_FUTURE/);assert.equal((await page.evaluate(()=>window.reading.snapshot())).selectionText,'');
   await page.getByRole('button',{name:'上一页',exact:true}).click();await page.waitForFunction(()=>window.reading.snapshot()?.pageIndex===0);
+  const jump=async value=>{await page.getByRole('spinbutton',{name:'PDF 页码',exact:true}).fill(String(value));await page.getByRole('spinbutton',{name:'PDF 页码',exact:true}).press('Enter');};
+  // Exercise real worker cancellation, not only a mocked rendering task.
+  for(const value of [8,17,4,24,12])await jump(value);
+  await page.waitForFunction(()=>window.reading.snapshot()?.pageIndex===11);
+  assert.equal((await page.locator('.textLayer').innerText()).trim(),'');
+  const hasInk=()=>page.locator('[data-m=canvas]').evaluate(canvas=>{const {data}=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height);for(let i=0;i<data.length;i+=4)if(data[i+3]&&Math.min(data[i],data[i+1],data[i+2])<150)return true;return false;});
+  assert.ok(await hasInk(),'image-only PDF page must contain a rendered bitmap');
+  const zoom=page.getByRole('textbox',{name:'缩放比例',exact:true});await zoom.fill('150%');await zoom.press('Enter');
+  await page.waitForFunction(()=>window.reading.snapshot()?.pageIndex===11&&document.querySelector('[data-m=zoom]').value==='150%');
+  assert.equal(await page.locator('[data-m=canvas]').evaluate(canvas=>canvas.style.width),'600px');assert.ok(await hasInk());
+  await page.getByRole('button',{name:'放大',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[data-m=zoom]').value==='165%'&&window.materials.current());
+  await page.getByRole('button',{name:'缩小',exact:true}).click();await page.waitForFunction(()=>window.materials.current());
+  await page.getByRole('combobox',{name:'页面适配',exact:true}).selectOption('width');await page.waitForFunction(()=>window.materials.current());
+  for(const width of [800,409,280,1280]){
+    await page.setViewportSize({width,height:900});await page.waitForTimeout(350);await page.waitForFunction(()=>window.materials.current());assert.ok(await hasInk());
+    assert.ok(await page.locator('.materials-toolbar').evaluate(node=>node.scrollWidth<=node.clientWidth+1),'toolbar overflow at '+width);
+    if(width===409)await page.screenshot({path:resolve(output,'pdf-scan-narrow.png')});
+  }
+  await page.getByRole('button',{name:'关闭学习资料',exact:true}).click();await page.evaluate(()=>window.materials.show());await page.waitForFunction(()=>window.materials.current());assert.ok(await hasInk());
+  await jump(1);await page.waitForFunction(()=>window.reading.snapshot()?.pageIndex===0);
   await page.getByRole('button',{name:'练习',exact:true}).click();await page.getByRole('button',{name:'生成新模拟题',exact:true}).click();await page.locator('dialog[open] input[name=count]').fill('2');await page.locator('dialog[open]').getByRole('button',{name:'确定',exact:true}).click();await page.locator('.practice-question').nth(1).waitFor();assert.doesNotMatch(await page.locator('body').innerText(),/PRIVATE_TEACHER_EXPLANATION/);
   const radios=page.locator('.practice-question input[value=A]');for(let i=0;i<2;i++)await radios.nth(i).check();await page.screenshot({path:resolve(output,'paper-before-submit.png')});await page.getByRole('button',{name:'提交并查看解析',exact:true}).click();await page.locator('.practice-result').nth(1).waitFor();assert.match(await page.locator('body').innerText(),/PRIVATE_TEACHER_EXPLANATION/);await page.screenshot({path:resolve(output,'paper-after-submit.png')});
-  const fixtureErrors=await page.evaluate(()=>window.fixtureErrors);assert.deepEqual([...errors,...fixtureErrors],[]);await writeFile(resolve(output,'report.json'),JSON.stringify({passed:true,coverage:['real PDF canvas and text layer','selection snapshot','physical page navigation','light/dark','generation via isolated bridge','answers hidden until submission','local objective grading'],modelRequests:h.requests.length,pageErrors:errors},null,2));console.log('MATERIALS SOURCE UI PASSED '+output);
+  const fixtureErrors=await page.evaluate(()=>window.fixtureErrors);assert.deepEqual([...errors,...fixtureErrors],[]);await writeFile(resolve(output,'report.json'),JSON.stringify({passed:true,coverage:['24-page PDF with an actual image-only page','real PDF canvas and text layer','rapid page navigation and worker cancellation','bitmap pixels remain visible','zoom input/buttons and fit width','resize 280/409/800/1280px','close and reopen','selection snapshot','physical page navigation','light/dark','generation via isolated bridge','answers hidden until submission','local objective grading'],modelRequests:h.requests.length,pageErrors:errors},null,2));console.log('MATERIALS SOURCE UI PASSED '+output);
 }finally{await browser?.close();server.closeAllConnections();await new Promise(r=>server.close(r));await h.close();}
