@@ -249,7 +249,11 @@ const contextAssembler=createContextAssembler({currentSession:()=>session,scene:
       if(Object.values(relevant).some(v=>v.length))items.push({id:'learner:brief',kind:'preference',label:'教学偏好与相关学习状态',text:JSON.stringify(relevant),priority:30});
     }
   }
-  if(!task.work&&role.learningGoalsEnabled&&projectPath)try{const goal=await goals.section(projectPath,true);const lines=goal?.split('\n').filter(line=>related(line)).slice(0,12);if(lines?.length)items.push({id:'goal:current',kind:'goal',label:'相关项目学习目标',text:lines.join('\n'),priority:45});}catch{send({type:'knowledge_status',message:'学习目标暂时无法读取，本轮仍可使用其他资料。'});}
+  if(!task.work&&role.learningGoalsEnabled&&projectPath)try{
+    const goal=await goals.section(projectPath,true),explicit=/目标|计划|进度|goal/i.test(prompt);
+    const text=explicit?goal.slice(0,4000)+(goal.length>4000?'\n[目标较长，此处为节选，可按上述目标文件路径继续读取]':''):goal?.split('\n').filter(line=>related(line)).slice(0,12).join('\n');
+    if(text)items.push({id:'goal:current',kind:'goal',label:'相关项目学习目标',text,priority:explicit?100:45});
+  }catch{send({type:'knowledge_status',message:'学习目标暂时无法读取，本轮仍可使用其他资料。'});}
   if(!task.work&&capabilities.state.vaultPath){
     try{
     const notes=await learningTools.retrieve(task.query,{expand:false,signal:turnController?.signal});

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self'; font-src 'self' data: blob:; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost;">
   <title>Reed 苇</title>
   <!-- 前端不做打包，裸模块说明符靠 import map 解析到本地 vendor（见 update.js）。 -->
   <script type="importmap">
