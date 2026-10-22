@@ -21,10 +21,10 @@ const {chromium}=require(process.env.SUMMON_PLAYWRIGHT_PATH);
     }
     await launch();await page.locator('#canvas-button').waitFor({state:'visible'});
     assert.equal(await page.locator('.canvas-candidates').count(),1);
-    const left=await page.locator('#canvas-button').boundingBox(),right=await page.locator('.goals-handle').boundingBox();assert.ok(Math.abs(left.y-right.y)<2&&Math.abs(left.width-right.width)<2);
+    const left=await page.locator('#canvas-button').boundingBox(),right=await page.locator('#goals-button').boundingBox();assert.ok(left&&right&&Math.abs(left.y+left.height/2-right.y-right.height/2)<2&&left.width>=28&&right.width>=28,JSON.stringify({left,right}));
     const saved=()=>fs.readFile(path.join(data,'user-config.json'),'utf8').then(JSON.parse);
     assert.equal((await saved()).roles.roles.some(r=>r.id==='planner'),false);assert.equal((await saved()).roles.roles.find(r=>r.id===roleId).canvasEnabled,false);
-    checks.push('旧版学习角色缺少新字段，左画布与右目标入口仍对称显示');
+    checks.push('旧版学习角色缺少新字段，画布与目标入口在页头对齐显示');
     await page.locator('#canvas-button').click();await page.locator('#roles-dialog').waitFor({state:'visible'});assert.equal(await page.locator('#role-canvas-enabled').isChecked(),false);assert.match(await page.locator('#role-error').innerText(),/请启用/);assert.equal(await page.locator('.canvas-pane').isVisible(),false);
     checks.push('未启用时直达当前角色设置，不打开画布或调用模型');
     await page.locator('#role-canvas-enabled').check();await page.locator('.learning-mode-save').filter({hasText:'已保存'}).waitFor();await page.keyboard.press('Escape');assert.equal((await saved()).roles.roles.find(r=>r.id===roleId).canvasEnabled,true);
@@ -33,7 +33,7 @@ const {chromium}=require(process.env.SUMMON_PLAYWRIGHT_PATH);
     await stop();await launch();await page.locator('#canvas-button').click();await page.locator('.canvas-pane').waitFor({state:'visible'});assert.equal(await page.locator('#roles-dialog').isVisible(),false);await page.locator('[data-cv=close]').click();await page.locator('.canvas-pane').waitFor({state:'hidden'});
     checks.push('重启后画布权限和入口保留');
     await page.locator('#role-button').click();await page.locator('.role-item').filter({hasText:'学习助手'}).getByRole('button',{name:'编辑',exact:true}).click();await page.locator('#role-canvas-enabled').uncheck();await page.locator('.learning-mode-save').filter({hasText:'已保存'}).waitFor();await page.keyboard.press('Escape');assert.equal(await page.locator('#canvas-button').isVisible(),true);
-    await page.locator('#canvas-button').click();await page.locator('#roles-dialog').waitFor({state:'visible'});await page.locator('#role-learning-enabled').uncheck();await page.locator('.learning-mode-save').filter({hasText:'已保存'}).waitFor();await page.keyboard.press('Escape');assert.equal(await page.locator('#canvas-button').isVisible(),false);assert.equal(await page.locator('.goals-handle').isVisible(),false);
+    await page.locator('#canvas-button').click();await page.locator('#roles-dialog').waitFor({state:'visible'});await page.locator('#role-learning-enabled').uncheck();await page.locator('.learning-mode-save').filter({hasText:'已保存'}).waitFor();await page.keyboard.press('Escape');assert.equal(await page.locator('#canvas-button').isVisible(),false);assert.equal(await page.locator('#goals-button').isVisible(),false);
     checks.push('画布子开关关闭仍可找到入口，学习模式关闭后两个入口一起隐藏');
     assert.deepEqual(errors,[]);const report={checks,errors,data,modelCalls:0};await fs.writeFile(path.join(artifacts,'report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
   }catch(e){if(page)await page.screenshot({path:path.join(artifacts,'failure.png')}).catch(()=>{});throw e;}finally{await stop();}
