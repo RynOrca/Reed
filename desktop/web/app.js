@@ -624,6 +624,7 @@ function onEvent(event) {
       $("model-label").textContent = response.modelName || response.model || "选择模型";
       $("model-button").title = response.model || "选择模型";
       if(activeSessionId!==(response.sessionId||"")){
+        sideChatPanel.close();
         sessionDrafts.set(activeSessionId,{text:prompt.value,attachments:[...attachments]});
         const draft=sessionDrafts.get(response.sessionId);prompt.value=draft?.text||'';attachments=draft?.attachments||[];renderAttachments();
         submitted=null;recoveredPending=null;queuedTexts.clear();activePromptId=null;cancelledTurnId=null;setRunning(false);learningCandidate=null;updateLearningAvailability();

@@ -145,9 +145,21 @@ const scope = new FileScope({ workspace: () => cwd, readOnly: () => [capabilitie
 ] });
 capabilities.canRead = async path => {try {await scope.check(path);return true;}catch{return false;}};
 const sideChat=createSideChat({
-  emit:event=>process.stdout.write(JSON.stringify(event)+'\n'),selectModel:()=>session?.model,workspace:()=>cwd,
-  readTool:()=>{
-    const root=cwd,protectedPaths=structuredClone(scope.protectedPaths()),readOnly=[...scope.readOnly()];
+  emit:event=>process.stdout.write(JSON.stringify(event)+'\n'),selectModel:main=>main.model,workspace:main=>main.workspace,
+  mainContext:()=>{
+    // A background turn may own `session`; the side panel belongs to the visible
+    // conversation, including while the user browses another conversation.
+    const current=!visibleSessionId||visibleSessionId===session?.sessionId;
+    const record=current?null:viewRecords.get(visibleSessionId);
+    if(!current&&!record)throw Error('当前主会话尚未就绪，请重新打开侧边聊天');
+    const manager=current?session?.sessionManager:record.manager;
+    return {sessionId:current?session?.sessionId:record.id,messages:manager?.buildSessionContext().messages||[],
+      model:current?session?.model:runtime?.getModel(record.provider,record.modelId),
+      workspace:current?cwd:record.projectPath||neutralWorkspace,roleId:current?roles.activeId:record.roleId};
+  },
+  readTool:main=>{
+    const root=main.workspace,protectedPaths=structuredClone(scope.protectedPaths()),readOnly=[...scope.readOnly()];
+    if(!roles.roles.find(role=>role.id===main.roleId)?.learningGoalsEnabled)protectedPaths.push({path:goals.dir,denyRead:true});
     return sandboxTools(new FileScope({workspace:()=>root,readOnly:()=>readOnly,protectedPaths:()=>protectedPaths})).find(tool=>tool.name==='read');
   },
   stream:async(model,context,options)=>{
@@ -567,6 +579,7 @@ async function viewRecord(id=visibleSessionId){
   viewRecords.set(id,record);return record;
 }
 async function showView(record){
+  if(visibleSessionId!==record.id)sideChat.reset();
   visibleSessionId=record.id;
   Object.assign(appState,{activeSessionId:record.id,projectPath:record.projectPath,roleId:record.roleId,provider:record.provider,modelId:record.modelId});
   await saveJson(appStatePath,appState);

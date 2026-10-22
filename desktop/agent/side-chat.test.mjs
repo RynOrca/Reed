@@ -1,11 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Type} from '@earendil-works/pi-ai';
-import {createSideChat} from './side-chat.mjs';
+import {createSideChat,mainChatReference} from './side-chat.mjs';
 const message=(content,stopReason='stop')=>({role:'assistant',content,stopReason,timestamp:1});
 const text=value=>({type:'text',text:value});
 const reply=value=>({async *[Symbol.asyncIterator](){for(const block of value.content)if(block.type==='text')yield {type:'text_delta',delta:block.text};},result:async()=>value});
 const read=execute=>({name:'read',description:'只读合成文件',parameters:Type.Object({path:Type.String()}),execute});
+
+test('主会话参考含摘要、正文和学习图解，排除思考、图片及其他工具结果',()=>{
+  const reference=mainChatReference([
+    {role:'compactionSummary',summary:'早先讨论贝叶斯公式'},
+    {role:'user',content:'解释先验'},
+    {role:'assistant',stopReason:'toolUse',content:[text('先验是先前的判断'),{type:'thinking',thinking:'隐藏思考'},{type:'toolCall',name:'write',arguments:{path:'禁止执行'}}]},
+    {role:'toolResult',toolName:'read',content:[text('无关工具原文')]},
+    {role:'toolResult',toolName:'show_learning',content:[text('图解')],details:{learning:{fallbackText:'先验到后验',blocks:[{type:'callout',text:'贝叶斯公式'}]}}},
+  ]);
+  assert.match(reference,/早先讨论贝叶斯公式/);assert.match(reference,/先验是先前的判断/);assert.match(reference,/贝叶斯公式/);
+  assert.doesNotMatch(reference,/隐藏思考|禁止执行|无关工具原文/);
+  const bounded=mainChatReference([{role:'user',content:'引号"与换行\n'.repeat(10000)}],2000);
+  assert.ok(bounded.length<=2000);assert.match(bounded,/截短/);assert.doesNotThrow(()=>JSON.parse(bounded));
+});
+
+test('每轮刷新主会话参考，不累积旧快照，切换会话隔离侧边追问',async()=>{
+  let main={sessionId:'main-a',messages:[{role:'user',content:'主对话第一题'}]};const seen=[];
+  const chat=createSideChat({mainContext:()=>main,selectModel:()=>({id:'test',contextWindow:32000}),workspace:()=>'/test',emit:()=>{},readTool:()=>read(()=>{}),stream:async(_m,c)=>{seen.push(structuredClone(c));return reply(message([text('侧边答案')]));}});
+  await chat.prompt({id:'one',text:'第一题追问'});
+  main.messages.push({role:'assistant',content:[text('主对话新增答案')],stopReason:'stop'});
+  await chat.prompt({id:'two',text:'继续追问'});
+  assert.match(seen[1].messages[0].content,/主对话新增答案/);
+  assert.equal(seen[1].messages.filter(m=>typeof m.content==='string'&&m.content.includes('以下是当前主对话')).length,1);
+  assert.ok(seen[1].messages.some(m=>m.content==='第一题追问'));
+  main={sessionId:'main-b',messages:[{role:'user',content:'另一个主会话'}]};
+  await chat.prompt({id:'three',text:'新追问'});
+  assert.equal(seen[2].messages.length,2);assert.doesNotMatch(JSON.stringify(seen[2]),/第一题追问|主对话第一题/);
+});
 
 test('侧边聊天仅开放 read，连续对话保存在内存，reset 后不带旧记录',async()=>{
   const seen=[],events=[],calls=[];
