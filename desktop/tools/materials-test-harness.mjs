@@ -22,7 +22,10 @@ export async function materialsHarness(){
         const refs=JSON.parse(last.split('参考页ID：').at(-1)),count=Number(/生成 (\d+) 题/.exec(last)[1]);
         answer=JSON.stringify({questions:Array.from({length:count},(_,i)=>({type:'choice',prompt:`测试题 ${i+1}：1+1 等于多少？`,options:[{id:'A',text:'2'},{id:'B',text:'3'}],answer:'A',explanation:'PRIVATE_TEACHER_EXPLANATION',topic:'加法',difficulty:'easy',references:[refs[0]]}))});
       }else if(system.includes('你是阅卷教师'))answer=JSON.stringify({grades:JSON.parse(last).map(q=>({id:q.id,score:7,feedback:'SYNTHETIC_GRADE'}))});
-      res.writeHead(200,{'content-type':'text/event-stream'});for(const [delta,finish_reason]of [[{role:'assistant',content:answer},null],[{},'stop']])res.write(`data: ${JSON.stringify({id:'mock',model:'mock',choices:[{index:0,delta,finish_reason}]})}\n\n`);res.end('data: [DONE]\n\n');
+      else if(last==='MATH_RENDER_TEST')answer='字段 $raw_content$ 和 $followup_questions$ 应保持代码格式。\n\n真正的公式：$x_i + y^2 = \\lambda$。';
+      const paperTool=!system.includes('你是出卷教师')&&last.startsWith('PAPER_TOOL_TEST')&&body.messages.at(-1).role!=='tool';
+      const delta=paperTool?{role:'assistant',tool_calls:[{index:0,id:'test-paper-tool',type:'function',function:{name:'create_practice_paper',arguments:JSON.stringify({count:1,topic:'',type:'choice'})}}]}:{role:'assistant',content:answer};
+      res.writeHead(200,{'content-type':'text/event-stream'});for(const [part,finish_reason]of [[delta,null],[{},paperTool?'tool_calls':'stop']])res.write(`data: ${JSON.stringify({id:'mock',model:'mock',choices:[{index:0,delta:part,finish_reason}]})}\n\n`);res.end('data: [DONE]\n\n');
     }catch(error){res.writeHead(500);res.end(JSON.stringify({error:{message:String(error.message)}}));}
   });await new Promise(r=>api.listen(0,'127.0.0.1',r));
   await writeFile(join(data,'user-config.json'),JSON.stringify({version:1,providers:{providers:[{id:'synthetic',template:'custom',name:'mock',baseUrl:`http://127.0.0.1:${api.address().port}/v1`,protocol:'openai-completions',models:[{id:'mock',contextWindow:65536,maxTokens:8192,reasoning:false}]}]},memoryEnabled:{l1:false,l2:false,l3:false,work:false},capabilities:{vaultPath:null,skills:[],webEnabled:false,browserEnabled:false}}));
