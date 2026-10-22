@@ -9,6 +9,7 @@ import {createConversationCanvas} from "./conversation-canvas.js";
 import {createBrowserWorkspace} from './browser-workspace.js';
 import {createSideChatPanel} from './side-chat.js';
 import {createReadingContext} from './reading-context.js';
+import {renderContextReference} from './context-reference.js';
 import {createMaterials} from './materials.js';
 import {installMaterialParsers} from './material-parsers.js';
 import {installAssessments} from './assessment.js';
@@ -702,9 +703,7 @@ function onEvent(event) {
     case "request_phase": if(running&&!stopping)status(requestStatus(response,recoveryStatus));break;
     case 'context_sources': {
       if(!contextReportRow){contextReportRow=document.createElement('details');contextReportRow.className='context-reference-report';processBody().append(contextReportRow);}
-      const summary=document.createElement('summary');summary.textContent=`本轮参考 · ${response.items?.length||0} 项 · 约 ${response.referenceTokens||0} tokens`;
-      const list=document.createElement('ul');for(const item of response.items||[]){const row=document.createElement('li');row.textContent=item.label||item.kind;list.append(row);}
-      contextReportRow.replaceChildren(summary,list);break;
+      renderContextReference(contextReportRow,response);break;
     }
     case "model_queue": if (running&&!stopping) status((recoveryStatus?recoveryStatus+'；':'')+(response.state==='waiting'?'正在等待模型服务空闲…':'正在准备模型请求…')); break;
     case "delta": {

@@ -165,7 +165,8 @@ const sideChat=createSideChat({
     const manager=current?session?.sessionManager:record.manager;
     return {sessionId:current?session?.sessionId:record.id,messages:manager?.buildSessionContext().messages||[],
       model:current?session?.model:runtime?.getModel(record.provider,record.modelId),
-      workspace:current?cwd:record.projectPath||neutralWorkspace,roleId:current?roles.activeId:record.roleId};
+      workspace:current?cwd:record.projectPath||neutralWorkspace,projectPath:current?projectPath:record.projectPath,roleId:current?roles.activeId:record.roleId,
+      goalsEnabled:roles.roles.find(role=>role.id===(current?roles.activeId:record.roleId))?.learningGoalsEnabled===true};
   },
   readTool:main=>{
     const root=main.workspace,protectedPaths=structuredClone(scope.protectedPaths()),readOnly=[...scope.readOnly()];
@@ -179,6 +180,8 @@ const sideChat=createSideChat({
     }};
   },
   contextSources:async({main,readingContext,text,model,context})=>{
+    const projectGoals=await goals.section(main.projectPath,main.goalsEnabled);
+    if(projectGoals)context.systemPrompt+='\n\n'+projectGoals;
     main.readingScene=await documents.snapshot(main.sessionId,main.workspace,readingContext);
     const task=resolveTask(text,[...main.messages,{role:'user',content:text}],main.readingScene);
     if(!task.anchor)return null;
@@ -254,7 +257,7 @@ const contextAssembler=createContextAssembler({currentSession:()=>session,scene:
   if(!task.work&&capabilities.state.vaultPath){
     try{
     const notes=await learningTools.retrieve(task.query,{expand:false,signal:turnController?.signal});
-    for(const note of notes)items.push({id:`note:${note.path}:${note.startLine}`,kind:'note',label:note.title,url:note.url,text:note.content.slice(0,1800),priority:70});
+    for(const note of notes)items.push({id:`note:${note.path}:${note.startLine}`,kind:'note',label:note.title,location:note.path,url:note.url,text:note.content.slice(0,1800),priority:70});
     }catch(error){turnController?.signal.throwIfAborted();send({type:'knowledge_status',message:'笔记检索暂时不可用，本轮仍可使用当前教材。'});}
   }
   return items;
