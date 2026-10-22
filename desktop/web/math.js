@@ -1,4 +1,5 @@
 import katex from './vendor/katex.mjs';
+import {isCodeIdentifier} from './math-auto.js';
 
 // 实测会出现“反斜杠整段消失”的公式：模型把 \\lambda 写成 lambda、\\pmod 写成 pmod，
 // 于是 KaTeX 把命令名拆成一个个字母（界面上就是 l a m b d a）。只在这类明确的
@@ -26,8 +27,13 @@ export function normalizeLatexEscapes(expression){
 }
 
 export function renderMath(expression,{display=false}={}){
+  // 模型偶尔把字段名显式包进 $...$；它并不是字母相乘或下标。
+  if(isCodeIdentifier(expression)){const code=document.createElement('code');code.textContent=String(expression).trim();return code;}
   const node=document.createElement(display?'div':'span');node.className=display?'reed-math reed-math-display':'reed-math';
-  const source=normalizeLatexEscapes(expression);
+  const raw=String(expression??'').trim();
+  const wrapped=/^\$\$([\s\S]+)\$\$$/.exec(raw)||/^\$([^$]+)\$$/.exec(raw)||/^\\\[([\s\S]+)\\\]$/.exec(raw)||/^\\\(([\s\S]+)\\\)$/.exec(raw);
+  if(wrapped&&isCodeIdentifier(wrapped[1])){const code=document.createElement('code');code.textContent=wrapped[1].trim();return code;}
+  const source=normalizeLatexEscapes(wrapped?wrapped[1]:raw);
   try{
     if(!source.trim()||source.length>4000)throw Error('公式长度无效');
     // Only KaTeX's untrusted-input MathML output enters the DOM, never model HTML.
@@ -57,8 +63,8 @@ export function mathExtension(){return {extensions:[
     const m=/^[ \t]*\$\$[ \t]*\n?([\s\S]+?)\n?[ \t]*\$\$(?:[ \t]*(?:\n|$))/.exec(src)||/^[ \t]*\\\[[ \t]*\n?([\s\S]+?)\n?[ \t]*\\\](?:[ \t]*(?:\n|$))/.exec(src);
     if(m)return {type:'reedBlockMath',raw:m[0],text:m[1]};
   }},
-  {name:'reedInlineMath',level:'inline',start:src=>src.search(/\$(?!\$)|\\\(/),tokenizer(src){
-    const m=/^\\\(([^\n]+?)\\\)/.exec(src)||/^\$(?!\$)([^\s$](?:[^\n$]*?[^\s$])?)\$(?!\$|\d)/.exec(src);
+  {name:'reedInlineMath',level:'inline',start:src=>src.search(/\$|\\(?:\(|\[)/),tokenizer(src){
+    const m=/^\$\$([^\n]+?)\$\$/.exec(src)||/^\\\[([^\n]+?)\\\]/.exec(src)||/^\\\(([^\n]+?)\\\)/.exec(src)||/^\$(?!\$)([^\s$](?:[^\n$]*?[^\s$])?)\$(?!\$|\d)/.exec(src);
     if(m)return {type:'reedInlineMath',raw:m[0],text:m[1]};
   }},
 ]};}

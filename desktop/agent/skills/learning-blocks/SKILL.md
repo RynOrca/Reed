@@ -43,9 +43,9 @@ description: 正文学习块与快捷回复的完整生成规范。在讲解、�
 | 让用户选择回答 | `choices` | `title`、`options[{id,label,replyText}]` |
 | 让用户填一个空 | `fill` | `title`、`label`（要填的字段或等号左侧）、可选 `placeholder`/`multiline` |
 
-### 数学一律用 LaTeX 写
+### 数学用 LaTeX，技术字段用代码格式
 
-所有字段（不只是 `derivation.expression`）里的数学都写成 LaTeX：标题、`nodes[].label/value/note`、`items[].value`、`columns[].body`、`reason`、`definition`、选项文字、`fill.label` 都一样。行内公式用 `$...$`（例如 `label: "$c_1 c_2 \\bmod n^2$"`、`value: "$m_1 + m_2$"`），独立公式用 `$$...$$`；**不要写 `c1*c2 mod n^2`、`n^2` 这样的纯文本公式，也不要用全角 `＝`**。`fill.label` 写成 `"$c_{\\mathrm{sum}} =$"` 这种等号在公式里的形式。单位与普通文字留在公式外面，例如 `"$n = 15$，模数"`。
+仅真正的数学表达式使用 LaTeX。字段名、API 参数、函数名、路径和代码用 Markdown 反引号，例如 `raw_content`、`followup_questions`；不要把含下划线的技术名称写成公式。所有字段（不只是 `derivation.expression`）里的数学都写成 LaTeX：标题、`nodes[].label/value/note`、`items[].value`、`columns[].body`、`reason`、`definition`、选项文字、`fill.label` 都一样。行内公式用 `$...$`（例如 `label: "$c_1 c_2 \\bmod n^2$"`、`value: "$m_1 + m_2$"`），独立公式用 `$$...$$`；**不要写 `c1*c2 mod n^2`、`n^2` 这样的纯文本公式，也不要用全角 `＝`**。`fill.label` 写成 `"$c_{\\mathrm{sum}} =$"` 这种等号在公式里的形式。单位与普通文字留在公式外面，例如 `"$n = 15$，模数"`。
 
 单独成行的 `$$...$$` 会居中排布，适合放「一个恒等式撑起整个算法」这种关键式子；正文里的行内公式跟随文字。
 
