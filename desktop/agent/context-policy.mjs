@@ -17,6 +17,7 @@ export function estimateContextTokens(messages) {
     else for (const block of message.content || []) tokens += block.type === "image" ? 4096 : estimateText(JSON.stringify(block));
     // Normalized PI system messages carry tools separately from their content.
     if (message.tools) tokens += estimateText(JSON.stringify(message.tools));
+    if (message.sections) tokens += estimateText(JSON.stringify(message.sections));
   }
   return tokens;
 }

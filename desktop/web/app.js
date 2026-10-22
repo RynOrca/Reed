@@ -11,6 +11,7 @@ import {createSideChatPanel} from './side-chat.js';
 import {createReadingContext} from './reading-context.js';
 import {createMaterials} from './materials.js';
 import {installMaterialParsers} from './material-parsers.js';
+import {installAssessments} from './assessment.js';
 import {createWorkspacePanels} from './workspace-panels.mjs';
 import {createProjectPicker} from "./project-picker.js";
 import {createMessageNavigation} from "./message-navigation.js";
@@ -146,6 +147,7 @@ const browserPanel=createBrowserWorkspace({tauri,command,prompt,onPdf:path=>mate
 });
 const materialsPanel=createMaterials({command,tauri,panels:workspacePanels,reading:readingContext,sessionId:()=>activeSessionId,onError:error=>errorRow(String(error.message||error))});
 installMaterialParsers(materialsPanel,{tauri,onError:error=>errorRow(String(error.message||error))});
+installAssessments(materialsPanel,{tauri,sessionId:()=>activeSessionId,onError:error=>errorRow(String(error.message||error))});
 transcript.addEventListener("scroll",()=>{followLatest=transcript.scrollHeight-transcript.clientHeight-transcript.scrollTop<65;},{passive:true});
 
 function status(text,explicit) {
@@ -599,6 +601,7 @@ function onEvent(event) {
   if(response.type==="ack"&&response.stale){stopping=false;$("stop-button").disabled=false;status(running?"这一轮已结束，正在等待 Agent 同步…":"已停止");}
   switch (response.type) {
     case 'browser_state':browserPanel.event(response);break;
+    case 'practice_paper':if(response.sessionId===activeSessionId)void materialsPanel.showPaper(response.paper).catch(errorRow);break;
     case 'restore_user':{
       const message=response.message||{};const content=messageRow('user',(message.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n'));
       attachmentPreview(content,(message.content||[]).filter(b=>b.type==='image').map(b=>({...b,kind:'image'})));break;
@@ -847,7 +850,7 @@ async function command(type, args = {}, awaitReply = false) {
   if (!tauri) return Promise.reject(new Error("需要在 Tauri 桌面窗口中运行"));
   const id = `${commandPrefix}${++sequence}`;
   if(type==='prompt')activePromptId=id;
-  const response = awaitReply ? new Promise((resolve, reject) => { const timer = setTimeout(() => { pending.delete(id); reject(new Error("操作超时，请检查 Agent 连接")); }, type==="compact"?180000:type==="materials_ocr"||type==="materials_parse"?120000:type==="browser_read"?120000:type?.startsWith("browser_")?60000:type==="abort"?15000:30000); pending.set(id, { resolve, reject, timer }); }) : Promise.resolve();
+  const response = awaitReply ? new Promise((resolve, reject) => { const timer = setTimeout(() => { pending.delete(id); reject(new Error("操作超时，请检查 Agent 连接")); }, type?.startsWith("materials_paper_")?240000:type==="compact"?180000:type==="materials_ocr"||type==="materials_parse"?120000:type==="browser_read"?120000:type?.startsWith("browser_")?60000:type==="abort"?15000:30000); pending.set(id, { resolve, reject, timer }); }) : Promise.resolve();
   tauri.core.invoke("agent_command", { command: { id, type, sessionId:activeSessionId,...(['prompt','queue_message'].includes(type)?{readingContext:readingContext.snapshot()}:{}),...args } }).catch((error) => {
     if (pending.has(id)) { clearTimeout(pending.get(id).timer); pending.get(id).reject(error); pending.delete(id); }
     else onEvent({payload:{type:'error',id,commandType:type,message:String(error)}});

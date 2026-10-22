@@ -6,7 +6,7 @@ export function createMaterials({command:rawCommand,tauri,panels,reading,onError
   workspace.prepend(pane);const q=n=>pane.querySelector(`[data-m="${n}"]`);
   const entry=document.createElement('button');entry.type='button';entry.className='icon-button';entry.title='学习资料';entry.setAttribute('aria-label','学习资料');entry.append(icon('book'));document.getElementById('browser-button').after(entry);
   const dialog=document.createElement('dialog');dialog.className='materials-dialog';pane.append(dialog);
-  let opened=false,pdf=null,pdfTask=null,doc=null,pageIndex=0,revision=0,pageTask=null,textLayer=null,lib=null,selectedSubject=null,ownerSession='';
+  let opened=false,pdf=null,pdfTask=null,doc=null,pageIndex=0,revision=0,pageTask=null,textLayer=null,lib=null,selectedSubject=null,ownerSession='',importingPath=null;
   const status=text=>q('status').textContent=text;
   async function ask(title,fields){
     if(dialog.open)throw Error('请先完成当前资料操作');
@@ -15,15 +15,15 @@ export function createMaterials({command:rawCommand,tauri,panels,reading,onError
     const cancel=document.createElement('button');cancel.type='button';cancel.textContent='取消';cancel.onclick=()=>dialog.close('cancel');const confirm=document.createElement('button');confirm.type='submit';confirm.textContent='确定';form.append(cancel,confirm);dialog.append(form);
     return new Promise(resolve=>{form.onsubmit=e=>{e.preventDefault();if(form.reportValidity())dialog.close('ok');};dialog.addEventListener('close',()=>resolve(dialog.returnValue==='ok'?Object.fromEntries(new FormData(form)):null),{once:true});dialog.showModal();});
   }
-  function clearDocument(){revision++;pageTask?.cancel();textLayer?.cancel();void pdfTask?.destroy();pdfTask=null;pdf=null;doc=null;reading.clear();q('text').replaceChildren();q('canvas').width=0;q('count').textContent='';}
+  function clearDocument(){revision++;pageTask?.cancel();textLayer?.cancel();void pdfTask?.destroy();pdfTask=null;pdf=null;doc=null;reading.clear();pane.dispatchEvent(new Event('material-session'));q('text').replaceChildren();q('canvas').width=0;q('count').textContent='';}
   function options(select,items,value){select.replaceChildren(...items.map(item=>new Option(item.title,item.id)));if(value)select.value=value;}
   async function refresh(){const owner=sessionId(),result=await command('materials_list',{},true);if(owner!==sessionId())return;selectedSubject=result.subject?.id;options(q('subjects'),result.subjects||[],selectedSubject);if(!selectedSubject)q('subjects').prepend(new Option('选择科目',''));options(q('documents'),result.documents||[],doc?.id);}
   async function library(){await refresh();}
   async function loadLibrary(){lib??=await import('./vendor/pdfjs/pdf.mjs');lib.GlobalWorkerOptions.workerSrc=new URL('./vendor/pdfjs/pdf.worker.mjs',import.meta.url).href;return lib;}
   async function render(index){
     if(!pdf||!doc||index<0||index>=pdf.numPages)return;
-    pageTask?.cancel();textLayer?.cancel();const ticket=++revision,current=doc,currentPdf=pdf;reading.clear();status('正在读取本页…');
-    try{const page=await currentPdf.getPage(index+1);if(ticket!==revision)return;
+    const previous=pageTask;previous?.cancel();textLayer?.cancel();const ticket=++revision,current=doc,currentPdf=pdf;reading.clear();status('正在读取本页…');
+    try{if(previous)await previous.promise.catch(()=>{});if(ticket!==revision)return;const page=await currentPdf.getPage(index+1);if(ticket!==revision)return;
       const width=Math.max(240,q('reader').clientWidth-32),viewport=page.getViewport({scale:Math.min(2,width/page.getViewport({scale:1}).width)}),ratio=Math.min(devicePixelRatio||1,2),canvas=q('canvas');
       canvas.width=Math.ceil(viewport.width*ratio);canvas.height=Math.ceil(viewport.height*ratio);canvas.style.width=viewport.width+'px';canvas.style.height=viewport.height+'px';q('sheet').style.width=viewport.width+'px';q('sheet').style.height=viewport.height+'px';
       pageTask=page.render({canvas,canvasContext:canvas.getContext('2d'),viewport,transform:ratio===1?null:[ratio,0,0,ratio,0,0]});await pageTask.promise;if(ticket!==revision)return;
@@ -42,13 +42,16 @@ export function createMaterials({command:rawCommand,tauri,panels,reading,onError
       buffer??=new Uint8Array(chunk.size);hash=chunk.hash;const binary=atob(chunk.data);for(let i=0;i<binary.length;i++)buffer[offset+i]=binary.charCodeAt(i);offset=chunk.nextOffset;
     }while(offset<buffer.length);
     const name=q('documents').selectedOptions[0]?.textContent||'PDF';
-    pdfTask=lib.getDocument({data:buffer,isEvalSupported:false,enableXfa:false,cMapUrl:new URL('./vendor/pdfjs/cmaps/',import.meta.url).href,cMapPacked:true,standardFontDataUrl:new URL('./vendor/pdfjs/standard_fonts/',import.meta.url).href,wasmUrl:new URL('./vendor/pdfjs/wasm/',import.meta.url).href});
+    pdfTask=lib.getDocument({data:buffer,isEvalSupported:false,enableXfa:false,cMapUrl:new URL('./vendor/pdfjs/cmaps/',import.meta.url).href,cMapPacked:true,standardFontDataUrl:new URL('./vendor/pdfjs/standard_fonts/',import.meta.url).href,wasmUrl:new URL('./vendor/pdfjs/wasm/',import.meta.url).href,iccUrl:new URL('./vendor/pdfjs/iccs/',import.meta.url).href});
     const loaded=await pdfTask.promise;if(ticket!==revision){await loaded.destroy();return;}pdf=loaded;doc={id,hash,title:name};await render(index);
   }
   async function importPdf(path){
+    if(importingPath===path)return;importingPath=path;
+    try{
     await refresh();if(!selectedSubject){status('请先新建或选择科目，再导入 PDF。');return;}
     const owner=sessionId(),data=await ask('导入学习资料',[{name:'title',label:'资料名称',value:path.split(/[\\/]/).pop().replace(/\.pdf$/i,'')},{name:'kind',label:'资料类型',options:[['textbook','教材'],['past-paper','历年真题'],['answer','答案与解析'],['notes','补充资料']]}]);if(!data||owner!==sessionId())return;
     status('正在复制 PDF 到专用资料目录…');const result=await command('materials_import',{path,...data},true);if(owner!==sessionId())return;await refresh();q('documents').value=result.id;await openDocument(result.id);
+    }finally{if(importingPath===path)importingPath=null;}
   }
   const show=async()=>{opened=true;pane.hidden=false;workspace.classList.add('browser-expanded');await library();if(pdf&&doc)await render(pageIndex);};
   const close=async()=>{opened=false;pane.hidden=true;reading.clear();workspace.classList.remove('browser-expanded');};
@@ -57,8 +60,8 @@ export function createMaterials({command:rawCommand,tauri,panels,reading,onError
   q('subjects').onchange=()=>void(async()=>{clearDocument();if(q('subjects').value)await command('materials_select',{subjectId:q('subjects').value},true);await refresh();})().catch(onError);
   q('import').onclick=()=>void(async()=>{const path=await tauri.core.invoke('choose_html_file');if(path)await importPdf(path);})().catch(onError);
   q('open').onclick=()=>void openDocument().catch(onError);q('prev').onclick=()=>void render(pageIndex-1);q('next').onclick=()=>void render(pageIndex+1);q('page').onchange=()=>void render(Number(q('page').value)-1);
-  q('reader').addEventListener('mouseup',()=>{if(!doc||!pdf)return;const selection=getSelection();if(!selection||!q('text').contains(selection.anchorNode))return;reading.set({documentId:doc.id,revision:doc.hash,pageIndex,selectionText:selection.toString().slice(0,4000),readingVisible:opened});});
+  q('reader').addEventListener('mouseup',()=>{if(!doc||!pdf)return;const selection=getSelection();if(!selection||!q('text').contains(selection.anchorNode))return;const text=selection.toString();if(text.length>4000)status('选区超过 4000 字符，请缩小选区后提问。');reading.set({documentId:doc.id,revision:doc.hash,pageIndex,selectionText:text,readingVisible:opened});});
   tauri.event.listen('browser-drop',event=>{if(/\.pdf$/i.test(event.payload.path))void panels.show('materials',async()=>{await show();await importPdf(event.payload.path);}).catch(onError);});
-  tauri.event.listen('tauri://drag-drop',event=>{const path=event.payload.paths?.find(path=>/\.pdf$/i.test(path));if(path&&opened)void importPdf(path).catch(onError);});
-  return {session(){if(ownerSession===sessionId())return;ownerSession=sessionId();if(dialog.open)dialog.close('cancel');clearDocument();if(opened)void refresh().catch(onError);},open:async(id,index=0)=>panels.show('materials',async()=>{await show();await openDocument(id,index);}),import:async path=>panels.show('materials',async()=>{await show();await importPdf(path);}),pane,ask,status,current:()=>doc&&pdf?{document:doc,pageIndex,pageCount:pdf.numPages,canvas:q('canvas')}:null,command,refresh,q};
+  tauri.event.listen('tauri://drag-drop',event=>{const path=event.payload.paths?.find(path=>/\.pdf$/i.test(path));if(path&&(opened||document.querySelector('.browser-pane:not(.materials-pane):not([hidden])')))void panels.show('materials',async()=>{await show();await importPdf(path);}).catch(onError);});
+  return {session(){if(ownerSession===sessionId())return;ownerSession=sessionId();if(dialog.open)dialog.close('cancel');clearDocument();if(opened)void refresh().catch(onError);},open:async(id,index=0)=>panels.show('materials',async()=>{await show();await openDocument(id,index);}),import:async path=>panels.show('materials',async()=>{await show();await importPdf(path);}),show:()=>panels.show('materials',show),suspendReading:()=>reading.clear(),resumeReading:()=>pdf&&doc?render(pageIndex):Promise.resolve(),pane,ask,status,current:()=>doc&&pdf?{document:doc,pageIndex,pageCount:pdf.numPages,canvas:q('canvas')}:null,command,refresh,q};
 }

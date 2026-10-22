@@ -9,6 +9,7 @@ import {searchTokens} from './local-search.mjs';
 import {DocumentStore} from './document-store.mjs';
 import {materialTools,MATERIAL_TOOLS} from './material-tools.mjs';
 import {mineruPages,recognizePage} from './document-extract.mjs';
+import {AssessmentStore} from './assessment-store.mjs';
 import { createMemoryValueGate } from './memory-value.mjs';
 import { ModelRequests } from './model-requests.mjs';
 import { createAuxiliaryCompleter } from './auxiliary-runtime.mjs';
@@ -31,7 +32,7 @@ import { Agent as HttpAgent, fetch as foregroundFetch } from 'undici';
 // Reed owns the request timers; disable the HTTP client's independent stream limits.
 const foregroundHttp = new HttpAgent({headersTimeout:0,bodyTimeout:0,connect:{timeout:90000}});
 import { createVisualReview, VISUAL_TOOLS } from "./visual-review.mjs";
-import { createContextPolicy } from "./context-policy.mjs";
+import { createContextPolicy,estimateContextTokens,contextBudget } from "./context-policy.mjs";
 import { GoalStore } from "./goals.mjs";
 import { roleFeatureExtension } from "./role-features.mjs";
 import { VaultOverview } from "./vault-overview.mjs";
@@ -98,6 +99,7 @@ await learner.load();
 const goals = new GoalStore(dataDir); await goals.initialize();
 const canvasStore = new ConversationCanvasStore(dataDir);
 const documents=new DocumentStore(dataDir);
+const assessments=new AssessmentStore(documents),assessmentJobs=new Map();
 
 let visibleSessionId=null,liveReplay=null,suppressRuntimePresentation=false;
 const viewRecords=new Map(),pendingSessionPrompts=new Map();
@@ -237,24 +239,33 @@ const learnerTools = learnerExtension({ learner, memory, judgeValue, currentSess
 const roleFeatures = roleFeatureExtension({roles,goals,project:()=>projectPath,workspace:()=>cwd,learner,memory,currentSession:()=>session,reviewEnabled,managedContext:true});
 const contextAssembler=createContextAssembler({currentSession:()=>session,scene:()=>turnController?.readingScene,send,diagnostic,sources:async({task,prompt,scene})=>{
   const items=[],role=roles.current(),words=searchTokens(task.query).filter(w=>w.length>1),related=text=>words.some(w=>String(text).toLowerCase().includes(w));
+  if(task.anchor&&scene)items.push(...await documents.evidence(session.sessionId,cwd,scene,task.query));
   if(task.work)for(const item of memory.workMatches(task.query,cwd))items.push({id:'work:'+item.id,kind:'work',label:item.title,text:item.body,priority:60});
   if(!task.work&&role.learnerProfileEnabled){
-    const brief=await memory.context(task.query,session?.sessionId,{review:reviewEnabled(prompt)});
+    const brief=await memory.context(task.query,session?.sessionId,{review:reviewEnabled(prompt),relevantOnly:true});
     if(brief&&related(brief))items.push({id:'memory:brief',kind:'memory',label:'相关背景与记忆索引',text:brief,priority:40});
     if(memory.state.enabled.l1){const profile=JSON.parse(learner.context({query:task.query,review:reviewEnabled(prompt)}));
       const relevant={preferences:profile.preferences,knowledge:profile.knowledge.filter(i=>related(i.subject+' '+i.detail)),misconceptions:profile.misconceptions.filter(i=>related(i.subject+' '+i.detail))};
       if(Object.values(relevant).some(v=>v.length))items.push({id:'learner:brief',kind:'preference',label:'教学偏好与相关学习状态',text:JSON.stringify(relevant),priority:30});
     }
-    if(role.learningGoalsEnabled&&projectPath){const goal=await goals.section(projectPath,true);const lines=goal?.split('\n').filter(line=>related(line)).slice(0,12);if(lines?.length)items.push({id:'goal:current',kind:'goal',label:'相关项目学习目标',text:lines.join('\n'),priority:45});}
   }
+  if(!task.work&&role.learningGoalsEnabled&&projectPath)try{const goal=await goals.section(projectPath,true);const lines=goal?.split('\n').filter(line=>related(line)).slice(0,12);if(lines?.length)items.push({id:'goal:current',kind:'goal',label:'相关项目学习目标',text:lines.join('\n'),priority:45});}catch{send({type:'knowledge_status',message:'学习目标暂时无法读取，本轮仍可使用其他资料。'});}
   if(!task.work&&capabilities.state.vaultPath){
+    try{
     const notes=await learningTools.retrieve(task.query,{expand:false,signal:turnController?.signal});
     for(const note of notes)items.push({id:`note:${note.path}:${note.startLine}`,kind:'note',label:note.title,url:note.url,text:note.content.slice(0,1800),priority:70});
+    }catch(error){turnController?.signal.throwIfAborted();send({type:'knowledge_status',message:'笔记检索暂时不可用，本轮仍可使用当前教材。'});}
   }
-  if(task.anchor&&scene)items.unshift(...await documents.evidence(session.sessionId,cwd,scene,task.query));
   return items;
 }});
-const materialsExtension=materialTools({documents,currentSession:()=>session,workspace:()=>cwd,scene:()=>turnController?.readingScene});
+const materialsExtension=materialTools({documents,currentSession:()=>session,workspace:()=>cwd,scene:()=>turnController?.readingScene,createPaper:async options=>{
+  if(!/出.{0,12}题|出.{0,12}卷|组卷|模拟.{0,8}[题卷]|练习/.test(lastUserPrompt()))throw Error('用户尚未要求生成试卷，继续普通讲解');
+  if(assessmentJobs.has(session.sessionId))throw Error('当前已有出卷或评分任务');
+  const owner=session.sessionId,workspace=cwd,model=session.model,anchor=turnController?.readingScene,controller=new AbortController();
+  const signal=AbortSignal.any([controller.signal,turnController.signal]);assessmentJobs.set(owner,controller);
+  try{const api=await getRuntime(),paper=await assessments.generate(owner,workspace,{...options,...(anchor?{documentId:anchor.documentId,maxPage:anchor.pageIndex}:{})},model,api.completeSimple.bind(api),signal);send({type:'practice_paper',sessionId:owner,paper});return paper;}
+  finally{if(assessmentJobs.get(owner)===controller)assessmentJobs.delete(owner);}
+}});
 let generationStart = null, firstDelta = null, outputTokens = 0, generationMs = 0, missingUsage = false;
 function emitTelemetry() {
   const model = session?.model;
@@ -307,7 +318,7 @@ async function getRuntime() {
 // foreground turn. The next turn gets the new configuration after settlement.
 async function providerRuntime() {
   const current = await getRuntime();
-  if (!busy&&!vaultOverview.running) return current;
+  if (!busy&&!vaultOverview.running&&!assessmentJobs.size) return current;
   return { getModels:()=>current.getModels(),getModel:(...args)=>current.getModel(...args),
     refresh:async()=>{providersPending=true;providerRevision++;},setRuntimeApiKey:async()=>{providersPending=true;providerRevision++;} };
 }
@@ -317,7 +328,7 @@ async function applyProviders() {
   await providers.install(await getRuntime());providersPending=revision!==providerRevision;modelRequests.refresh();
   if(session?.model){const updated=runtime.getModel(session.model.provider,session.model.id);if(updated)await session.setModel(updated);else if(session.model.provider!=='unknown')await openSession();}
 }
-async function flushProviders(){if(!busy&&providersPending&&!applyingProviders){applyingProviders=true;try{await applyProviders();await emitState();}catch(error){send({type:'credential_error',message:`配置已保存但暂未应用：${error.message}`});}finally{applyingProviders=false;}}}
+async function flushProviders(){if(!busy&&!assessmentJobs.size&&providersPending&&!applyingProviders){applyingProviders=true;try{await applyProviders();await emitState();}catch(error){send({type:'credential_error',message:`配置已保存但暂未应用：${error.message}`});}finally{applyingProviders=false;}}}
 
 function abortWatchdogMs(name,fallback){const value=Number(process.env[name]);return Number.isFinite(value)&&value>0?value:fallback;}
 // The SDK retries a transient failure on its own with exponential backoff. Until
@@ -441,6 +452,10 @@ async function openSession(provider, modelId, sessionManager) {
   session = created.session;
   const streamFunction = session.agent.streamFunction;
   session.agent.streamFunction = (model, context, options) => {
+    contextAssembler.assertReady();
+    const fullMessages=[...(context.systemPrompt?[{role:'system',content:context.systemPrompt}]:[]),...(context.messages||[])];
+    const estimated=estimateContextTokens(fullMessages)+(context.tools?estimateContextTokens([{role:'system',content:'',tools:context.tools}]):0);
+    if(estimated>contextBudget(model).inputTokens)throw Error('本次完整请求超过模型输入预算，请压缩上下文或缩小资料范围；当前消息未被截断');
     // ResourceLoader reloads settings before a prompt. Reapply the ownership rule
     // at the actual request boundary so a saved SDK retry policy cannot reappear.
     settingsManager.applyOverrides({retry:{enabled:false}});
@@ -690,6 +705,24 @@ async function dispatch(command){
           await documents.page(record.id,workspace,doc.id,command.pageIndex);
           const text=await recognizePage({endpoint:command.endpoint,image:command.image,allowRemote:command.allowRemote===true});
           value=await documents.cachePage(record.id,workspace,{documentId:doc.id,revision:doc.hash,pageIndex:command.pageIndex,pageCount:doc.page_count,text,method:'ocr'});break;
+        }
+        case 'materials_bank_import':{
+          const path=await scope.check(command.path),info=await stat(path);if(!info.isFile()||info.size>2*1024*1024)throw Error('题库文件须为不超过 2 MB 的 JSON');
+          value=await assessments.importBank(record.id,workspace,JSON.parse(await readFile(path,'utf8')));break;
+        }
+        case 'materials_paper_list':value={papers:await assessments.list(record.id,workspace)};break;
+        case 'materials_paper_open':value=await assessments.open(record.id,workspace,command.paperId);break;
+        case 'materials_paper_bank':value=await assessments.fromBank(record.id,workspace,command.options);break;
+        case 'materials_paper_cancel':assessmentJobs.get(record.id)?.abort();value={cancelled:true};break;
+        case 'materials_paper_generate':case 'materials_paper_submit':{
+          if(assessmentJobs.has(record.id))throw Error('当前科目已有出卷或评分任务，请等待或停止');
+          const api=await getRuntime(),model=record.provider&&record.modelId?api.getModel(record.provider,record.modelId):null;if(command.type==='materials_paper_generate'&&(!model||model.provider==='unknown'))throw Error('请先选择用于出卷的模型');
+          if(model&&providers.providers.find(p=>p.id===model.provider)?.models.find(m=>m.id===model.id)?.enabled===false)throw Error('当前模型已停用，请重新选择');
+          const controller=new AbortController();assessmentJobs.set(record.id,controller);
+          try{value=command.type==='materials_paper_generate'?await assessments.generate(record.id,workspace,command.options,model,api.completeSimple.bind(api),controller.signal):await assessments.submit(record.id,workspace,command.paperId,command.answers,model,api.completeSimple.bind(api),controller.signal);}
+          catch(error){if(error instanceof SyntaxError)throw Error('模型返回格式不完整，本次未发布试卷或评分，请减少题目数量后重试');throw error;}
+          finally{if(assessmentJobs.get(record.id)===controller)assessmentJobs.delete(record.id);}
+          break;
         }
         default:throw Error('未知资料操作');
       }
@@ -1223,6 +1256,7 @@ async function handle(command) {
           }
           await applyProviders();
           await prepareSkills(command.text);controller.signal.throwIfAborted();
+          contextAssembler.clear();
           await contextPolicy.preparePrompt(command.text, images);
           controller.signal.throwIfAborted();
           await session.prompt(command.text, { images });
@@ -1313,7 +1347,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   }
   if(command.type==='side_chat_reset'){sideChat.reset();continue;}
   if(command.type==='side_chat_abort'){sideChat.abort();continue;}
-  if(command.type?.startsWith('browser_')){void dispatch(command);continue;}
+  if(command.type?.startsWith('browser_')||['materials_paper_generate','materials_paper_submit','materials_paper_cancel','materials_ocr'].includes(command.type)){void dispatch(command);continue;}
   if ((command.type === "init" && session) || ["get_goals", "save_goals", "cancel_vault_overview", "abort", "tool_decision", "queue_message", "promote_queue", "clear_queue", "set_approval"].includes(command.type)) {
     void dispatch(command);
   } else if(command.type==='prompt') {
@@ -1335,7 +1369,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     queue = queue.then(() => dispatch(command));
   }
 }
-sideChat.reset();canvasWorkflow.close();await queue;turnController?.abort();if(session)void session.abort();await activePrompt;vaultOverview.cancel();await mcp.closeAll();
+sideChat.reset();for(const controller of assessmentJobs.values())controller.abort();canvasWorkflow.close();await queue;turnController?.abort();if(session)void session.abort();await activePrompt;vaultOverview.cancel();await mcp.closeAll();
 memoryAgent.cancel();
 workingTools.cancel();
 capabilities.close();

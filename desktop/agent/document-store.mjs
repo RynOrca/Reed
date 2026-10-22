@@ -1,8 +1,7 @@
 import {DatabaseSync} from 'node:sqlite';
 import {randomUUID,createHash} from 'node:crypto';
-import {mkdir,readFile,writeFile,copyFile,lstat,realpath,open} from 'node:fs/promises';
+import {mkdir,readFile,writeFile,lstat,realpath,open} from 'node:fs/promises';
 import {join,extname,basename} from 'node:path';
-import {constants} from 'node:fs';
 const title=value=>{if(typeof value!=='string'||!value.trim()||value.length>100)throw Error('名称须为 1 到 100 字符');return value.trim();};
 const kinds=new Set(['textbook','past-paper','answer','notes']);
 export class DocumentStore{
@@ -59,7 +58,8 @@ export class DocumentStore{
     if(input.sessionId!==sessionId)throw Error('阅读位置来自其他会话，请重新打开资料');
     const doc=await this.document(sessionId,workspace,input.documentId);if(doc.kind==='answer')return null;
     const page=await this.page(sessionId,workspace,doc.id,input.pageIndex);if(input.revision!==doc.hash)throw Error('阅读位置已过期，请重新打开资料');
-    const selectionText=typeof input.selectionText==='string'?input.selectionText.slice(0,4000):'';
+    if(typeof input.selectionText==='string'&&input.selectionText.length>4000)throw Error('选区超过 4000 字符，请缩小选区后提问');
+    const selectionText=typeof input.selectionText==='string'?input.selectionText:'';
     if(selectionText&&!(page.text||'').replace(/\s+/g,'').includes(selectionText.replace(/\s+/g,'')))throw Error('选区与页面不一致，请重新选择');
     return {sessionId,subjectId:doc.subject_id,documentId:doc.id,revision:doc.hash,pageIndex:page.pageIndex,title:doc.title,topicText:(page.text||'').slice(0,12000),selectionText,readingVisible:true,capturedAt:Number.isFinite(input.capturedAt)?Math.min(input.capturedAt,Date.now()):Date.now()};
   }
@@ -68,17 +68,21 @@ export class DocumentStore{
     const current=await this.page(sessionId,workspace,scene.documentId,scene.pageIndex);
     const items=[];
     if(scene.selectionText)items.push({id:`pdf:${scene.documentId}:${scene.pageIndex}:selection`,kind:'selection',label:`${scene.title} · PDF 第 ${scene.pageIndex+1} 页选区`,text:scene.selectionText,priority:110,required:true,url:`reed-material:${scene.documentId}#page=${scene.pageIndex+1}`});
-    if(current.text?.trim())items.push({id:`pdf:${scene.documentId}:${scene.pageIndex}`,kind:'pdf',label:`${scene.title} · PDF 第 ${scene.pageIndex+1} 页`,text:current.text.slice(0,12000),priority:100,url:`reed-material:${scene.documentId}#page=${scene.pageIndex+1}`});
+    if(current.text?.trim()){
+      const selected=scene.selectionText?current.text.indexOf(scene.selectionText):-1,start=Math.max(0,selected-800),end=Math.min(current.text.length,start+3000);
+      const excerpt=current.text.slice(start,end)+(start>0||end<current.text.length?`\n[本页节选，字符 ${start}–${end}/${current.text.length}；完整页可用 read_evidence 分段读取]`:'');
+      items.push({id:`pdf:${scene.documentId}:${scene.pageIndex}`,kind:'pdf',label:`${scene.title} · PDF 第 ${scene.pageIndex+1} 页`,text:excerpt,priority:100,url:`reed-material:${scene.documentId}#page=${scene.pageIndex+1}`});
+    }
     else items.push({id:'pdf:unreadable',kind:'status',label:'扫描页',text:`当前阅读 ${scene.title} 的 PDF 第 ${scene.pageIndex+1} 页，尚无可读文字；不要猜测内容。可提示导入 MinerU 结果或识别这一页。`,priority:100});
     const prior=await this.search(sessionId,workspace,query,{documentId:scene.documentId,maxPage:scene.pageIndex});return [...items,...prior.filter(i=>i.id!==`pdf:${scene.documentId}:${scene.pageIndex}`)];
   }
-  async search(sessionId,workspace,query,{documentId,maxPage=29999}={}){
+  async search(sessionId,workspace,query,{documentId,maxPage=29999,kind=null,readingDocumentId=null,readingMaxPage=29999}={}){
     const subject=await this.binding(sessionId,workspace);if(!subject)return [];
     if(documentId)await this.document(sessionId,workspace,documentId);
     const words=tokenize(query).slice(0,30);if(!words.length)return [];
     const db=await this.database(),match=words.map(w=>'"'+w.replaceAll('"','""')+'"').join(' OR ');
     const rows=db.prepare(`SELECT m.id,m.title,p.page_index,p.text FROM material_fts f JOIN materials m ON m.id=f.document_id JOIN material_pages p ON p.document_id=m.id AND p.page_index=f.page_index
-      WHERE material_fts MATCH ? AND m.subject_id=? AND m.kind!='answer' AND (? IS NULL OR m.id=?) AND p.page_index<=? ORDER BY bm25(material_fts) LIMIT 6`).all(match,subject.id,documentId||null,documentId||null,maxPage);
+      WHERE material_fts MATCH ? AND m.subject_id=? AND m.kind!='answer' AND (? IS NULL OR m.id=?) AND p.page_index<=? AND (? IS NULL OR m.kind=?) AND (? IS NULL OR m.id!=? OR p.page_index<=?) ORDER BY bm25(material_fts) LIMIT 6`).all(match,subject.id,documentId||null,documentId||null,maxPage,kind,kind,readingDocumentId,readingDocumentId,readingMaxPage);
     return rows.map(r=>({id:`pdf:${r.id}:${r.page_index}`,kind:'pdf',label:`${r.title} · PDF 第 ${r.page_index+1} 页`,text:r.text.slice(0,1800),priority:75,url:`reed-material:${r.id}#page=${r.page_index+1}`}));
   }
   close(){this.db?.close();this.db=null;}

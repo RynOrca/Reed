@@ -38,21 +38,30 @@ export function assembleContext(candidates,{model,messages=[]}={}){
 }
 
 export function createContextAssembler({sources,currentSession,scene=()=>null,send=()=>{},diagnostic=async()=>{}}){
-  return pi=>pi.on('context_with_system',async(event,ctx)=>{
+  let failure=null;
+  const install=pi=>pi.on('context_with_system',async(event,ctx)=>{
     if(event.messages[0]?.role!=='system')return;
     // Strip superseded material sections from the provider projection only.
-    const messages=event.messages.map(m=>{if(m.role!=='system'||!m.sections)return m;const sections={...m.sections};for(const key of dynamicSections)delete sections[key];return {...m,sections};});
+    let users=0,recentStart=0;for(let i=event.messages.length-1;i>=0;i--)if(event.messages[i].role==='user'&&++users===2){recentStart=i;break;}
+    const messages=event.messages.map((m,index)=>{
+      if(m.role==='toolResult'&&index<recentStart&&['search_context','read_evidence'].includes(m.toolName)){
+        const urls=[...new Set(textOf(m).match(/reed-material:[a-f0-9-]{36}#page=\d+/gi)||[])];
+        return {...m,content:[{type:'text',text:'较早教材检索原文已从本次上下文退场，完整记录仍保留；需要时重新读取：'+urls.join('、')}]};
+      }
+      if(m.role!=='system'||!m.sections)return m;const sections={...m.sections};for(const key of dynamicSections)delete sections[key];return {...m,sections};
+    });
     const prompt=textOf(messages.findLast(m=>m.role==='user'));
     const task=resolveTask(prompt,messages,scene());
     let candidates=[];
     try{candidates=task.greeting?[]:await sources({task,prompt,messages,scene:scene(),model:ctx.model});}
-    catch(error){send({type:'knowledge_status',message:'参考资料暂时不可用：'+String(error.message).slice(0,180)});}
+    catch(error){send({type:'knowledge_status',message:'参考资料暂时不可用：'+String(error.message).slice(0,180)});candidates=[{id:'context:unavailable',kind:'status',priority:100,text:'本轮自动参考资料读取失败，尚未取得所指原文。不要根据资料名称猜测内容；若问题依赖原文，说明缺失并请用户重选页面或片段。'}];}
     // Section patches are part of the actual input, even when content is empty.
-    const estimate=messages.map(m=>m.role==='system'?{...m,content:JSON.stringify(m.sections||{})+'\n'+textOf(m)}:m);
-    const packet=assembleContext(candidates,{model:ctx.model,messages:estimate});
+    let packet;failure=null;
+    try{packet=assembleContext(candidates,{model:ctx.model,messages});}catch(error){failure=error;packet={text:null,report:{estimated:true,items:[],referenceTokens:0,referenceBudget:0}};}
     const sections=Object.fromEntries(dynamicSections.map(key=>[key,null]));sections.reed_context=packet.text;
     send({type:'context_sources',...packet.report});
     await diagnostic({type:'context_materials',...packet.report,items:packet.report.items.map(({id,kind})=>({id,kind}))});
     return {messages:[...messages,{role:'system',content:'',sections}]};
   });
+  install.clear=()=>{failure=null;};install.assertReady=()=>{if(failure)throw failure;};return install;
 }
