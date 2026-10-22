@@ -165,8 +165,9 @@ test("real PI bridge: discover, stream, remember, background memory, projects an
     for(const text of ['这一步为什么？','你好','帮我检查代码报错']){
       await command('prompt',{text});assert.match(JSON.stringify(requests.at(-1).messages[0]),/GOAL_SYSTEM_SENTINEL/,'开启学习模式时每轮都带项目目标，不依赖目标关键词或检索相关性');
     }
-    goal=(await command("save_goals",{projectPath:project,revision:goal.revision,body:"# GOAL_UPDATED_SENTINEL\n- [x] 第一阶段"})).goal;
+    goal=(await command("save_goals",{projectPath:project,revision:goal.revision,body:"# GOAL_UPDATED_SENTINEL\n- [x] 第一阶段\n"+'阶段说明'.repeat(1200)+'\nEND_OF_CURRENT_GOAL'})).goal;
     await command("prompt",{text:"检查更新目标"});assert.match(JSON.stringify(requests.at(-1).messages[0]),/GOAL_UPDATED_SENTINEL/);
+    assert.match(JSON.stringify(requests.at(-1).messages[0]),/END_OF_CURRENT_GOAL/,'项目目标不再被 4000 字符截断');
     await command("save_role", {roleId,name:"测试导师",system:"TEST_ROLE_SYSTEM_PRIORITY：用中文教学",learningGoalsEnabled:false,learnerProfileEnabled:false});
     const disabledGoals=await command("get_goals");assert.equal(disabledGoals.enabled,false);assert.equal(disabledGoals.goal,null);
     await assert.rejects(command("save_goals",{projectPath:project,revision:goal.revision,body:"不应写入"}),/未启用学习目标/);

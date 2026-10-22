@@ -16,3 +16,11 @@ test('学习目标每轮刷新并独立于自动参考额度，关闭角色后�
   body='UPDATED_GOAL_SENTINEL';assert.match(JSON.stringify(await run('继续')),/UPDATED_GOAL_SENTINEL/);
   enabled=false;const off=await run('继续');assert.doesNotMatch(JSON.stringify(off),/UPDATED_GOAL_SENTINEL/);assert.equal(reports.at(-1).items.length,0);assert.equal(reads,5);
 });
+
+test('目标读取失败时请求边界拒绝继续，不能吞掉扩展异常后假装没有目标',async()=>{
+  const hooks={};let enabled=true;
+  const feature=roleFeatureExtension({roles:{current:()=>({learningGoalsEnabled:enabled})},goals:{section:async(_project,on)=>{if(on)throw Error('test-read-failure');return null;}},project:()=> 'test-project',memory:{},currentSession:()=>({state:{messages:[]}}),managedContext:true});
+  feature({on:(name,handler)=>hooks[name]=handler});
+  await hooks.context_with_system({messages:[{role:'system',content:'规则'},{role:'user',content:'继续'}]});assert.throws(()=>feature.assertReady(),/学习目标读取失败/);
+  enabled=false;await hooks.context_with_system({messages:[{role:'system',content:'规则'}]});assert.doesNotThrow(()=>feature.assertReady());
+});

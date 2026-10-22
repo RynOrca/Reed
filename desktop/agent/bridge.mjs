@@ -456,6 +456,7 @@ async function openSession(provider, modelId, sessionManager) {
   session = created.session;
   const streamFunction = session.agent.streamFunction;
   session.agent.streamFunction = (model, context, options) => {
+    roleFeatures.assertReady();
     contextAssembler.assertReady();
     const fullMessages=[...(context.systemPrompt?[{role:'system',content:context.systemPrompt}]:[]),...(context.messages||[])];
     const estimated=estimateContextTokens(fullMessages)+(context.tools?estimateContextTokens([{role:'system',content:'',tools:context.tools}]):0);
