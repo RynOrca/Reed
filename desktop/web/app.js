@@ -50,6 +50,7 @@ let turnErrorShown = false;
 let assistantRow = null;
 let thinkingRow = null;let thinkingContentSeen=false;
 let processTimeline=null,processStartedAt=null;
+let contextReportRow=null;
 const sessionDrafts=new Map();
 function processBody(){
   if(!processTimeline){
@@ -69,6 +70,7 @@ function finishProcess(outcome,timing={}){
   processTimeline.summary.textContent=duration+suffix;
   processTimeline.summary.hidden=false;processTimeline.root.open=false;
   processTimeline=null;processStartedAt=null;
+  contextReportRow=null;
 }
 let submitted = null;
 const toolRows = new Map();
@@ -687,6 +689,12 @@ function onEvent(event) {
       errorRow(response.message||"模型服务未结束上一条请求，已恢复本地输入。");
       break;
     case "request_phase": if(running&&!stopping)status(requestStatus(response,recoveryStatus));break;
+    case 'context_sources': {
+      if(!contextReportRow){contextReportRow=document.createElement('details');contextReportRow.className='context-reference-report';processBody().append(contextReportRow);}
+      const summary=document.createElement('summary');summary.textContent=`本轮参考 · ${response.items?.length||0} 项 · 约 ${response.referenceTokens||0} tokens`;
+      const list=document.createElement('ul');for(const item of response.items||[]){const row=document.createElement('li');row.textContent=item.label||item.kind;list.append(row);}
+      contextReportRow.replaceChildren(summary,list);break;
+    }
     case "model_queue": if (running&&!stopping) status((recoveryStatus?recoveryStatus+'；':'')+(response.state==='waiting'?'正在等待模型服务空闲…':'正在准备模型请求…')); break;
     case "delta": {
       recoveryStatus = "";
