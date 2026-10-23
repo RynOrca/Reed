@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {roleSystemPrompt,teachingPolicy} from './role-prompt.mjs';
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -27,7 +28,7 @@ test("角色说明、会话命名与思考深度调用真实 PI Agent SDK", asyn
     const settingsManager = SettingsManager.create(cwd, agentDir);
     const resourceLoader = new DefaultResourceLoader({
       cwd, agentDir, settingsManager, noExtensions: true,
-      appendSystemPromptOverride: (base) => [...base, "ROLE_TEST_INSTRUCTION"],
+      systemPromptOverride: () => roleSystemPrompt({system:'ROLE_TEST_INSTRUCTION'}),
     });
     await resourceLoader.reload();
     ({ session } = await createAgentSession({
@@ -35,6 +36,9 @@ test("角色说明、会话命名与思考深度调用真实 PI Agent SDK", asyn
       sessionManager: SessionManager.create(cwd, sessionsDir), tools: [],
     }));
     assert.match(session.systemPrompt, /ROLE_TEST_INSTRUCTION/);
+    assert.doesNotMatch(session.systemPrompt,/expert coding assistant|Be concise in your responses/);
+    assert.equal(teachingPolicy({learningModeEnabled:false}),null);
+    assert.match(teachingPolicy({learningModeEnabled:true}),/练习不能替代概念教学/);
     session.setSessionName("会话测试");
     assert.equal(session.sessionName, "会话测试");
     const levels = session.getAvailableThinkingLevels();
