@@ -19,7 +19,7 @@ test("Local preview authorizes each resource and blocks directory escape",async(
   const browser=new AgentBrowser(root,{scope});
   try {
     const url=await browser.preview(join(root,"index.html"));
-    assert.equal(await (await fetch(url)).text(),"<h1>preview</h1>");
+    assert.equal(await (await fetch(url)).text(),"<h1>preview</h1>");assert.equal(browser.localPath(url),join(root,'index.html'));assert.equal(browser.localPath('https://example.org/page'),null);
     assert.equal((await fetch(new URL("style.css",url))).status,200);
     const u=new URL(url);u.pathname=u.pathname.replace("index.html","%2e%2e%2fsecret.txt");
     assert.equal((await fetch(u)).status,404);

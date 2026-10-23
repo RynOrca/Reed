@@ -19,6 +19,9 @@ export function captureOptions(input) {
 // Own, isolated Edge profile; starts only when the agent uses the browser.
 export class AgentBrowser {
   constructor(dir,{scope,native,surface='agent'}={}) { this.dir=dir; this.scope=scope; this.previewServers=new Map();this.native=native;this.surface=surface;this.nativeReady=false;this.starting=null;this.startFailure=null; this.sequence=0; this.pending=new Map(); this.viewport={width:1280,height:800}; this.operations=Promise.resolve(); this.generation=0; this.queued=0; }
+  localPath(url){
+    try{const u=new URL(url);for(const [root,entry] of this.previewServers){const base=new URL(entry.base);if(u.origin!==base.origin||!u.pathname.startsWith(base.pathname))continue;const path=resolve(root,decodeURIComponent(u.pathname.slice(base.pathname.length))),rel=relative(root,path);if(rel!=='..'&&!rel.startsWith('..\\')&&!rel.startsWith('../'))return path;}}catch{}return null;
+  }
   async preview(path) {
     if(!this.scope) throw new Error("本地预览需要文件访问授权");
     const file=await realpath(await this.scope.check(path,false));
@@ -193,7 +196,8 @@ export class AgentBrowser {
     }
     const snapshot=await this.evaluate(`(()=>{const elements=[...document.querySelectorAll('a,button,input,textarea,select,[role="button"]')].filter(e=>e.getBoundingClientRect().width&&e.getBoundingClientRect().height).slice(0,150); document.querySelectorAll('[data-summon-element]').forEach(e=>e.removeAttribute('data-summon-element')); const controls=elements.map((e,i)=>{e.setAttribute('data-summon-element',String(i+1));return {index:i+1,tag:e.tagName,label:(e.innerText||e.getAttribute('aria-label')||e.placeholder||e.type||'').slice(0,150),href:e.href};}); return {url:location.href,title:document.title,text:document.body.innerText.slice(0,14000),controls};})()`);
     if(this.native){const history=await this.call('Page.getNavigationHistory');snapshot.navigation={canBack:history.currentIndex>0,canForward:history.currentIndex<history.entries.length-1};}
-    return {content:[{type:"text",text:JSON.stringify(snapshot)}],details:{url:snapshot.url}};
+    snapshot.localPath=this.localPath(snapshot.url);
+    return {content:[{type:"text",text:JSON.stringify(snapshot)}],details:{url:snapshot.url,localPath:snapshot.localPath}};
   }
   async readPage(input,signal){
     const limit=input.maxSegments??8;

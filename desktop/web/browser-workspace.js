@@ -72,7 +72,7 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
       source=attempt;if(document.activeElement!==q('address'))q('address').value=source;q('source').textContent=source;
       const page=JSON.parse(response.result.content.find(b=>b.type==='text').text);
       q('back').disabled=!page.navigation?.canBack;q('forward').disabled=!page.navigation?.canForward;
-      ready=true;q('empty').hidden=true;q('read').disabled=false;q('quote').disabled=false;status(page.title||'页面已就绪');scheduleBounds();await memory.loaded(page,destination.path);
+      ready=true;q('empty').hidden=true;q('read').disabled=false;q('quote').disabled=false;status(page.title||'页面已就绪');scheduleBounds();await memory.loaded(page,destination.path||page.localPath);
     }catch(error){if(revision!==ticket)return;status(browserFailure(error),'error');q('empty').hidden=false;q('empty').querySelector('h2').textContent='页面未能打开';q('empty').querySelector('p').textContent=browserFailure(error);q('pick').textContent='重试';}
   }
   // Navigation may be slow; never hold the panel queue while waiting on a page.
@@ -131,8 +131,8 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
       if(['navigate','preview'].includes(event.action)){ticket++;ready=false;q('empty').hidden=false;}
       status('模型正在操作当前网页…','loading');void panels.show('browser').catch(onError);
     }else if(event.state==='ready'){
-      source=event.url||source;attempt=source;memory.navigated(source);if(document.activeElement!==q('address'))q('address').value=source;q('source').textContent=source;
-      ready=true;q('empty').hidden=true;q('read').disabled=false;q('quote').disabled=false;status(event.title||'模型操作已完成');scheduleBounds();
+      source=event.url||source;attempt=source;if(document.activeElement!==q('address'))q('address').value=source;q('source').textContent=source;
+      ready=true;q('empty').hidden=true;q('read').disabled=false;q('quote').disabled=false;status(event.title||'模型操作已完成');scheduleBounds();void memory.loaded({url:source,title:event.title,localPath:event.localPath});
     }else if(event.state==='error'){status(browserFailure(event.message),'error');scheduleBounds();}
   }};
 }
