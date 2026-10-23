@@ -13,7 +13,7 @@ export function materialMarkup(){return `
  <label>科目与资料</label><div class="materials-subject-row"><select data-m="subjects" aria-label="当前科目"></select><button type="button" data-m="new" aria-label="新建科目" title="新建科目"><span data-icon="new"></span></button></div>
  <div class="materials-list-heading"><span>教材与资料</span><button type="button" data-m="import" aria-label="导入 PDF" title="导入 PDF"><span data-icon="new"></span></button></div><div data-m="document-list" class="materials-document-list"></div>
  <select data-m="documents" aria-label="当前资料" hidden></select><button type="button" data-m="bank-import" class="materials-library-link"><span data-icon="folder"></span>导入题库</button><button type="button" data-m="library-practice" class="materials-library-link"><span data-icon="activity"></span>练习与试卷</button>
- <button type="button" data-m="library-import" class="materials-outline"><span data-icon="new"></span>导入学习资料</button><small>资料保存在本机</small>
+ <button type="button" data-m="library-import" class="materials-outline"><span data-icon="new"></span>导入学习资料</button><small data-m="storage">保存在项目的 Materials 文件夹</small>
 </aside>
 <div class="materials-more-menu" data-m="more" hidden><button type="button" data-m="parsed">导入 MinerU 解析结果</button><button type="button" data-m="ocr">识别当前页文字</button><hr><button type="button" data-m="fit-width">适应宽度</button><button type="button" data-m="fit-page">整页显示</button><button type="button" data-m="retry">重新读取本页</button></div>
 <div class="materials-reader" data-m="reader" tabindex="0" aria-label="PDF 阅读区"></div>

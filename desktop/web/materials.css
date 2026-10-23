@@ -19,3 +19,7 @@
 @media(prefers-reduced-motion:reduce){.materials-pane *{scroll-behavior:auto!important}}
 @container materials (max-width:360px){.materials-document-trigger>[data-m=title]{display:none}.materials-toolbar .materials-document-trigger{min-width:22px;max-width:22px}.materials-toolbar{gap:5px}}
 @container materials (max-width:290px){.materials-reading-tools [data-m=zoom-in],.materials-reading-tools [data-m=zoom-out]{display:none}.materials-toolbar{overflow-x:auto;scrollbar-width:none}}
+
+/* Share the reader/chat canvas, while retaining elevated tool surfaces. */
+.materials-pane{--mt-canvas:#18211a;--mt-bg:#18211a;--mt-surface:#222e24;--mt-ink:#efe9da;--mt-secondary:#c4ccbd}
+:root[data-theme=light] .materials-pane{--mt-canvas:#f7f4ec;--mt-bg:#f7f4ec;--mt-surface:#fffdf8;--mt-ink:#202c24;--mt-secondary:#4c594f}

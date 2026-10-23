@@ -148,6 +148,7 @@ const securityPath = join(dataDir, "security.json");
 const security = await userConfig.get("security",securityPath,{approval:"manual"});
 const scope = new FileScope({ workspace: () => cwd, readOnly: () => [capabilities.state.vaultPath, join(dataDir,"skills"), join(dataDir, "attachments"), join(dataDir,"artifacts","screenshots"), contextPolicy.artifactsDir, ...(security.readOnly || [])].filter(Boolean), fullAccess: () => security.access === "full", protectedPaths: () => [
   {path:documents.root,denyRead:true},
+  ...[join(cwd,'Materials'),...documents.protectedRoots()].map(path=>({path,denyRead:true})),
   ...['materials.sqlite','materials.sqlite-wal','materials.sqlite-shm'].map(name=>({path:join(dataDir,name),denyRead:true})),
   {path:canvasStore.dir,denyRead:true},
   {path:goals.dir,denyRead:!roles.current().learningGoalsEnabled},

@@ -53,7 +53,7 @@ export function createMaterials({command:rawCommand,tauri,panels,reading,onError
   function options(select,items,value){select.replaceChildren(...items.map(item=>new Option(item.title,item.id)));if(value)select.value=value;}
   const showError=error=>{status(String(error.message||error));onError(error);};
   async function refresh(){
-    const owner=sessionId(),result=await command('materials_list');if(owner!==sessionId())return null;catalog=result;selectedSubject=result.subject?.id;
+    const owner=sessionId(),result=await command('materials_list');if(owner!==sessionId())return null;catalog=result;selectedSubject=result.subject?.id;q('storage').title=result.storagePath||'';
     options(q('subjects'),result.subjects||[],selectedSubject);if(!selectedSubject)q('subjects').prepend(new Option('选择科目',''));options(q('documents'),result.documents||[],doc?.id);
     const list=q('document-list');list.replaceChildren();
     for(const item of result.documents||[]){const button=document.createElement('button'),copy=document.createElement('span'),title=document.createElement('strong'),meta=document.createElement('small');button.type='button';button.className='materials-document';button.classList.toggle('selected',item.id===doc?.id);title.textContent=item.title;meta.textContent=[materialKind[item.kind]||'资料',item.pageCount?item.pageCount+' 页':'尚未阅读'].join(' · ');copy.append(title,meta);button.append(icon(item.kind==='textbook'?'book':'activity'),copy);button.onclick=()=>void openDocument(item.id).catch(showError);list.append(button);}

@@ -1,9 +1,13 @@
 import {DatabaseSync} from 'node:sqlite';
 import {randomUUID,createHash} from 'node:crypto';
-import {mkdir,readFile,writeFile,lstat,realpath,open} from 'node:fs/promises';
-import {join,extname,basename} from 'node:path';
+import {mkdir,readFile,writeFile,lstat,realpath,open,copyFile} from 'node:fs/promises';
+import {constants} from 'node:fs';
+import {join,extname,basename,relative,isAbsolute} from 'node:path';
 const title=value=>{if(typeof value!=='string'||!value.trim()||value.length>100)throw Error('名称须为 1 到 100 字符');return value.trim();};
 const kinds=new Set(['textbook','past-paper','answer','notes']);
+const folderName=value=>{let s=value.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').replace(/[. ]+$/,'').slice(0,70)||'科目';return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(s)?'_'+s:s;};
+const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
+const within=(root,path)=>{const rel=relative(root,path);return !isAbsolute(rel)&&rel!=='..'&&!rel.startsWith('..\\')&&!rel.startsWith('../');};
 export class DocumentStore{
   constructor(root){this.root=join(root,'materials');this.dbPath=join(root,'materials.sqlite');}
   async database(){
@@ -18,12 +22,38 @@ export class DocumentStore{
       CREATE INDEX IF NOT EXISTS materials_subject ON materials(subject_id);
     `);}return this.db;
   }
+  protectedRoots(){return this.db?this.db.prepare('SELECT DISTINCT workspace FROM subjects').all().map(s=>join(s.workspace,'Materials')):[];}
+  async folder(workspace,subject){
+    const project=await realpath(workspace),base=join(project,'Materials');await mkdir(base,{recursive:true});
+    if(!within(project,await realpath(base)))throw Error('Materials 目录不能指向项目之外');
+    const peers=(await this.database()).prepare('SELECT id,title FROM subjects WHERE workspace=?').all(workspace);
+    const name=folderName(subject.title),collision=peers.some(s=>s.id!==subject.id&&folderName(s.title).toLowerCase()===name.toLowerCase());
+    const folder=join(base,name+(collision?'--'+subject.id.slice(0,8):''));await mkdir(folder,{recursive:true});
+    if(!within(base,await realpath(folder)))throw Error('科目目录不能指向 Materials 之外');return folder;
+  }
+  async migrate(workspace){
+    this.migrations??=new Map();if(this.migrations.has(workspace))return this.migrations.get(workspace);
+    const task=(async()=>{
+      const db=await this.database(),updates=[];
+      const subjects=db.prepare('SELECT * FROM subjects WHERE workspace=?').all(workspace);
+      for(const subject of subjects){const folder=await this.folder(workspace,subject);
+        for(const doc of db.prepare('SELECT * FROM materials WHERE subject_id=?').all(subject.id)){
+          const target=join(folder,doc.id+extname(doc.path).toLowerCase());if(doc.path===target)continue;
+          const bytes=await readFile(doc.path);if(digest(bytes)!==doc.hash)throw Error('旧资料校验失败，原文件与索引保持不变：'+doc.title);
+          try{await copyFile(doc.path,target,constants.COPYFILE_EXCL);}catch(e){if(e.code!=='EEXIST')throw e;}
+          if(digest(await readFile(target))!==doc.hash)throw Error('目标资料冲突或复制校验失败，未切换路径：'+doc.title);
+          updates.push({id:doc.id,path:target});
+        }
+      }
+      db.exec('BEGIN IMMEDIATE');try{for(const item of updates)db.prepare('UPDATE materials SET path=? WHERE id=?').run(item.path,item.id);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
+    })();this.migrations.set(workspace,task);try{return await task;}finally{this.migrations.delete(workspace);}
+  }
   async subjects(workspace){return (await this.database()).prepare('SELECT id,title FROM subjects WHERE workspace=? ORDER BY title').all(workspace);}
   async createSubject(workspace,name){const id=randomUUID(),label=title(name),db=await this.database();db.prepare('INSERT INTO subjects VALUES(?,?,?)').run(id,label,workspace);return {id,title:label};}
   async subject(workspace,id){const row=(await this.database()).prepare('SELECT * FROM subjects WHERE id=? AND workspace=?').get(id,workspace);if(!row)throw Error('科目不属于当前项目');return row;}
   async bind(sessionId,workspace,subjectId){await this.subject(workspace,subjectId);(await this.database()).prepare('INSERT OR REPLACE INTO material_bindings VALUES(?,?)').run(sessionId,subjectId);return this.list(sessionId,workspace);}
   async binding(sessionId,workspace){return (await this.database()).prepare('SELECT s.* FROM subjects s JOIN material_bindings b ON b.subject_id=s.id WHERE b.session_id=? AND s.workspace=?').get(sessionId,workspace)||null;}
-  async list(sessionId,workspace){const subject=await this.binding(sessionId,workspace);return {subject,documents:subject?(await this.database()).prepare('SELECT id,title,kind,hash,page_count AS pageCount FROM materials WHERE subject_id=? ORDER BY title').all(subject.id):[]};}
+  async list(sessionId,workspace){await this.migrate(workspace);const subject=await this.binding(sessionId,workspace);return {storagePath:join(workspace,'Materials'),subject,documents:subject?(await this.database()).prepare('SELECT id,title,kind,hash,page_count AS pageCount FROM materials WHERE subject_id=? ORDER BY title').all(subject.id):[]};}
   async document(sessionId,workspace,id){const subject=await this.binding(sessionId,workspace);if(!subject)throw Error('请先选择当前科目');const doc=(await this.database()).prepare('SELECT * FROM materials WHERE id=? AND subject_id=?').get(id,subject.id);if(!doc)throw Error('资料不属于当前科目');return doc;}
   async importPdf(sessionId,workspace,path,{name,kind='textbook'}={}){
     const subject=await this.binding(sessionId,workspace);if(!subject)throw Error('请先新建或选择科目');if(!kinds.has(kind))throw Error('资料类型无效');
@@ -31,7 +61,7 @@ export class DocumentStore{
     const bytes=await readFile(source);if(!bytes.subarray(0,1024).includes(Buffer.from('%PDF-')))throw Error('文件不是有效 PDF');
     const hash=createHash('sha256').update(bytes).digest('hex'),db=await this.database();
     const duplicate=db.prepare('SELECT id FROM materials WHERE subject_id=? AND hash=? AND kind=?').get(subject.id,hash,kind);if(duplicate)return this.document(sessionId,workspace,duplicate.id);
-    const id=randomUUID(),folder=join(this.root,subject.id+'-'+subject.title.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').slice(0,50));await mkdir(folder,{recursive:true});
+    const id=randomUUID(),folder=await this.folder(workspace,subject);
     const destination=join(folder,id+'.pdf');await writeFile(destination,bytes,{flag:'wx'});
     db.prepare('INSERT INTO materials VALUES(?,?,?,?,?,?,0)').run(id,subject.id,title(name||basename(source,'.pdf')),kind,hash,destination);
     return this.document(sessionId,workspace,id);
