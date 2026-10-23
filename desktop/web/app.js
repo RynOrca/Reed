@@ -1033,3 +1033,7 @@ $("activity-list").onclick = event => { const head = event.target.closest(".tool
 let activityUpdate; new MutationObserver(()=>{if(!$("activity-dialog").open)return;clearTimeout(activityUpdate);activityUpdate=setTimeout(renderActivity,150);}).observe(messages,{subtree:true,childList:true,characterData:true});
 $("clear-queue").onclick = () => { void command("clear_queue"); queuedTexts.clear(); };
 windowHandles(tauri);
+
+function showFullscreen(value){const button=$('fullscreen-button');button.setAttribute('aria-pressed',String(value));button.title=value?'还原窗口':'最大化至全屏';button.setAttribute('aria-label',button.title);button.replaceChildren(icon(value?'restore':'fullscreen'));document.querySelector('.reed-workspace').classList.toggle('window-fullscreen',value);window.dispatchEvent(new Event('resize'));}
+$('fullscreen-button').onclick=async()=>{const button=$('fullscreen-button');button.disabled=true;try{showFullscreen(await tauri.core.invoke('window_fullscreen',{fullscreen:button.getAttribute('aria-pressed')!=='true'}));}catch(e){errorRow(String(e));}finally{button.disabled=false;}};
+if(tauri)void tauri.core.invoke('window_fullscreen').then(showFullscreen).catch(console.error);

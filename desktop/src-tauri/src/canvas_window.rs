@@ -155,6 +155,7 @@ fn change_window(window:tauri::WebviewWindow,expanded:bool,duration:u64,chat_wid
 }
 fn change_window_inner(window:tauri::WebviewWindow,expanded:bool,duration:u64,chat_width:Option<f64>)->Result<Value,String>{
     if window.label()!="main"{return Err("画布只属于主窗口".into());}
+    if window.is_fullscreen().map_err(|e|e.to_string())? {return Ok(json!({"expanded":expanded,"fullscreen":true}));}
     let state=window.state::<CanvasWindow>();let revision=state.revision.load(Ordering::SeqCst);let mut active=state.active.lock().map_err(|e|e.to_string())?;
     if expanded {
         if let Some(mut saved)=*active{

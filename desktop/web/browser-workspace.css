@@ -40,3 +40,5 @@
 
 .reed-workspace.workspace-drawer{--resolved-chat-width:var(--workspace-chat-width)}
 .reed-workspace.workspace-drawer:not(.workspace-transitioning):is(.browser-expanded,.canvas-expanded){--resolved-chat-width:min(var(--workspace-chat-width),calc(100% - 120px))}
+
+.reed-workspace.window-fullscreen.workspace-drawer{--resolved-chat-width:clamp(300px,36vw,620px)}
