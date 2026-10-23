@@ -736,7 +736,7 @@ async function dispatch(command){
       const info=await learningTools.prewarm();send({type:'browser_state',state:info?'warmed':'disabled',...info});send({type:'ack',id:command.id});return;
     }
     if(command.type==='browser_preview'){
-      const result=await learningTools.preview(command.url?{action:'navigate',url:command.url}:{action:'preview',path:command.path});
+      const result=await learningTools.preview(command.url?{action:'navigate',url:command.url}:{action:'preview',path:command.path,search:command.search,hash:command.hash});
       send({type:'browser_result',id:command.id,result});return;
     }
     if(command.type==='browser_action'){

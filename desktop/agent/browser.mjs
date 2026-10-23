@@ -144,6 +144,11 @@ export class AgentBrowser {
     let destination;
     if(action==="navigate") {const u=new URL(url);if(!["http:","https:"].includes(u.protocol) || u.username || u.password) throw new Error("浏览器只接受 HTTP(S) 地址；本地 HTML 请使用 preview");destination=u.href;}
     if(action==="preview") destination=await this.preview(path);
+    if(destination&&action==='preview'){
+      const address=new URL(destination);
+      for(const field of ['search','hash'])if(input[field]!==undefined){if(typeof input[field]!=='string'||input[field].length>4000)throw Error('本地页面位置无效');address[field]=input[field];}
+      destination=address.href;
+    }
     if(signal?.aborted)throw new Error("浏览器操作已取消");
     await this.start();
     this.viewport=options.viewport;
