@@ -3,6 +3,8 @@ import { access, mkdir, readFile, writeFile, realpath, stat, rm } from "node:fs/
 import { join, dirname, resolve, relative, extname } from "node:path";
 import { createServer } from "node:http";
 import { randomUUID, createHash } from "node:crypto";
+import {createReadStream} from 'node:fs';
+import {pipeline} from 'node:stream/promises';
 
 const MAX_IMAGE_BYTES=5*1024*1024, MAX_PIXELS=12*1024*1024;
 export function captureOptions(input) {
@@ -40,10 +42,11 @@ export class AgentBrowser {
         const candidate=await realpath(await this.scope.check(resolve(root,requested),false));
         const rel=relative(root,candidate);
         if(rel===".." || rel.startsWith(`..\\`) || rel.startsWith("../") || resolve(root,rel)!==candidate) throw new Error("文件不在预览目录内");
-        const info=await stat(candidate);if(!info.isFile() || info.size>16*1024*1024) throw new Error("资源过大或不是文件");
+        const info=await stat(candidate);if(!info.isFile() || info.size>256*1024*1024) throw new Error("资源超过 256 MB 或不是文件");
         const mime={".html":"text/html; charset=utf-8",".htm":"text/html; charset=utf-8",".css":"text/css; charset=utf-8",".js":"text/javascript; charset=utf-8",".mjs":"text/javascript; charset=utf-8",".svg":"image/svg+xml",".png":"image/png",".jpg":"image/jpeg",".jpeg":"image/jpeg",".webp":"image/webp",".json":"application/json",".woff":"font/woff",".woff2":"font/woff2"}[extname(candidate).toLowerCase()] || "application/octet-stream";
-        res.writeHead(200,{"Content-Type":mime,"Cache-Control":"no-store","X-Content-Type-Options":"nosniff"});res.end(req.method==="HEAD"?undefined:await readFile(candidate));
-      }catch {res.writeHead(404);res.end("资源不可读取");}
+        res.writeHead(200,{"Content-Type":mime,"Content-Length":info.size,"Cache-Control":"no-store","X-Content-Type-Options":"nosniff"});
+        if(req.method==='HEAD')res.end();else await pipeline(createReadStream(candidate),res);
+      }catch {if(res.headersSent){res.destroy();return;}res.writeHead(404,{'Content-Type':'text/plain; charset=utf-8'});res.end("资源不可读取（文件不存在、超出256 MB或没有访问权限）");}
     });
     await new Promise((res,rej)=>{server.once("error",rej);server.listen(0,"127.0.0.1",res);});
     this.previewServer=server;this.previewPath=file;

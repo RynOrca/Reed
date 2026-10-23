@@ -107,3 +107,13 @@ test('preview keeps one server per file so a slow turn can reuse the URL',async(
   browser.close();
  }finally{await rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
 });
+
+
+test('本地大HTML完整流式读取，错误正文使用UTF8',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'reed-test-large-html-'));const file=join(root,'教材.html');
+ const body='<meta charset="utf-8"><h1>中文教材</h1><!--'+'x'.repeat(17*1024*1024)+'-->';
+ await writeFile(file,body);const browser=new AgentBrowser(root,{scope:{check:async p=>p}});
+ try{const url=await browser.preview(file);const response=await fetch(url);assert.equal(response.status,200);assert.equal(await response.text(),body);
+ const missing=await fetch(new URL('missing.css',url));assert.match(missing.headers.get('content-type'),/charset=utf-8/);assert.match(await missing.text(),/资源不可读取/);
+ }finally{browser.close();await rm(root,{recursive:true,force:true,maxRetries:5});}
+});
