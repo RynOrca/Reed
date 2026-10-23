@@ -61,12 +61,12 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
   }
   async function open(pathOrUrl){
     if(!opened)return;if(!pathOrUrl){scheduleBounds();return;}
-    await memory.sample();
     const target=typeof pathOrUrl==='object'?pathOrUrl:{address:pathOrUrl};
     let destination;try{destination=resolveBrowserAddress(target.address);if(destination.path){destination.search=target.search||'';destination.hash=target.hash||'';}}catch(error){status(browserFailure(error),'error');return;}
     attempt=destination.url||destination.path;q('address').value=attempt;q('source').textContent=attempt;
-    const revision=++ticket;ready=false;status('正在加载页面…','loading');q('empty').hidden=false;q('read').disabled=true;q('quote').disabled=true;scheduleBounds();
+    const revision=++ticket,saved=memory.sample();ready=false;status('正在加载页面…','loading');q('empty').hidden=false;q('read').disabled=true;q('quote').disabled=true;scheduleBounds();
     try{
+      await saved;if(revision!==ticket||!opened)return;
       const response=await command('browser_preview',destination,true);
       if(revision!==ticket||!opened)return;
       source=attempt;if(document.activeElement!==q('address'))q('address').value=source;q('source').textContent=source;

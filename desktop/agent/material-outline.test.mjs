@@ -21,3 +21,9 @@ test('真实Bridge接通PPTX导入和模型大纲缓存，跨科目拒绝读取'
  const result=await h.material('materials_outline_generate',{documentId:doc.id,revision:doc.hash});assert.equal(result.items.length,3);assert.equal((await h.material('materials_outline_get',{documentId:doc.id})).source,'model');await h.material('materials_create',{title:'test-other'});await assert.rejects(h.material('materials_outline_get',{documentId:doc.id}),/当前科目/);
  }finally{await h.close();}
 });
+
+test('中文密集资料按token预算分批，批次覆盖全部页面',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'reed-test-outline-budget-')),documents=new DocumentStore(root);try{const subject=await documents.createSubject(root,'test-中文');await documents.bind('s',root,subject.id);const path=join(root,'test.pdf');await writeFile(path,'%PDF-1.7 fixture');const doc=await documents.importPdf('s',root,path);for(let i=0;i<20;i++)await documents.cachePage('s',root,{documentId:doc.id,revision:doc.hash,pageIndex:i,pageCount:20,text:'这是中文概念解释'.repeat(200)});const batches=[];
+ await generateMaterialOutline({documents,sessionId:'s',workspace:root,documentId:doc.id,revision:doc.hash,model:{id:'mock',contextWindow:16000,maxTokens:4096},complete:async(_m,ctx)=>{const pages=JSON.parse(ctx.messages[0].content).pages;batches.push(pages);assert.ok(pages.reduce((sum,p)=>sum+p.text.length,0)<10000);return {stopReason:'stop',content:[{type:'text',text:JSON.stringify({items:[{title:'章节',pageIndex:pages[0].pageIndex,level:0}]})}]};}});assert.ok(batches.length>=3);assert.deepEqual(batches.flat().map(p=>p.pageIndex),Array.from({length:20},(_,i)=>i));
+ }finally{documents.close();await rm(root,{recursive:true,force:true});}
+});
