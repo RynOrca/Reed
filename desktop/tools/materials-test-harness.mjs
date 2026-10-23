@@ -1,11 +1,12 @@
+import {deflateRawSync} from 'node:zlib';
 import {createServer} from 'node:http';
 import {spawn} from 'node:child_process';
 import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {createInterface} from 'node:readline';
-export function syntheticPdf({pages=2,scanPage=0}={}){
-  const font=3+pages*2,bodies=['<< /Type /Catalog /Pages 2 0 R >>',`<< /Type /Pages /Kids [${Array.from({length:pages},(_,i)=>`${3+i*2} 0 R`).join(' ')}] /Count ${pages} >>`];
+export function syntheticPdf({pages=2,scanPage=0,outline=false}={}){
+  const font=3+pages*2,bodies=[`<< /Type /Catalog /Pages 2 0 R ${outline?'/Outlines '+(font+1)+' 0 R':''} >>`,`<< /Type /Pages /Kids [${Array.from({length:pages},(_,i)=>`${3+i*2} 0 R`).join(' ')}] /Count ${pages} >>`];
   for(let i=0;i<pages;i++){
     bodies.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 500] /Resources << /Font << /F1 ${font} 0 R >> >> /Contents ${4+i*2} 0 R >>`);
     const marker=i===0?'PAGE_ONE_MARKER Alpha formula':i===1?'PAGE_TWO_FUTURE Hidden later page':`PAGE_${i+1}_MARKER`;
@@ -15,6 +16,7 @@ export function syntheticPdf({pages=2,scanPage=0}={}){
     bodies.push(`<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`);
   }
   bodies.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+  if(outline)bodies.push(`<< /Type /Outlines /First ${font+2} 0 R /Last ${font+2} 0 R /Count 1 >>`,`<< /Title (Native chapter) /Parent ${font+1} 0 R /Dest [3 0 R /Fit] >>`);
   let result='%PDF-1.4\n',offsets=[0];for(let i=0;i<bodies.length;i++){offsets.push(Buffer.byteLength(result));result+=`${i+1} 0 obj\n${bodies[i]}\nendobj\n`;}
   const start=Buffer.byteLength(result),size=bodies.length+1;result+=`xref\n0 ${size}\n0000000000 65535 f \n`+offsets.slice(1).map(n=>String(n).padStart(10,'0')+' 00000 n \n').join('')+`trailer\n<< /Size ${size} /Root 1 0 R >>\nstartxref\n${start}\n%%EOF\n`;return Buffer.from(result);
 }
@@ -25,7 +27,8 @@ export async function materialsHarness({pdfOptions}={}){
   const api=createServer(async(req,res)=>{
     try{if(req.method==='GET'){res.setHeader('content-type','application/json');res.end(JSON.stringify({data:[{id:'mock',context_length:65536}]}));return;}
       let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);requests.push(body);const last=text(body.messages.findLast(m=>m.role==='user')),system=body.messages.filter(m=>['system','developer'].includes(m.role)).map(text).join('\n');let answer='SYNTHETIC_REPLY';
-      if(system.includes('你是出卷教师')){
+      if(system.includes('资料大纲整理器')){const packet=JSON.parse(last);answer=JSON.stringify({items:packet.pages.filter(p=>p.text.trim()).map((p,i)=>({title:'测试章节 '+(p.pageIndex+1),pageIndex:p.pageIndex,level:i%3===0?0:1}))});}
+      else if(system.includes('你是出卷教师')){
         if(held){const gate=held;held=null;gate.started();await gate.releasePromise;}
         const refs=JSON.parse(last.split('参考页ID：').at(-1)),count=Number(/生成 (\d+) 题/.exec(last)[1]);
         answer=JSON.stringify({questions:Array.from({length:count},(_,i)=>({type:'choice',prompt:`测试题 ${i+1}：1+1 等于多少？`,options:[{id:'A',text:'2'},{id:'B',text:'3'}],answer:'A',explanation:'PRIVATE_TEACHER_EXPLANATION',topic:'加法',difficulty:'easy',references:[refs[0]]}))});
@@ -48,4 +51,13 @@ export async function materialsHarness({pdfOptions}={}){
     holdGeneration(){let start,release;const started=new Promise(r=>start=r),releasePromise=new Promise(r=>release=r);held={started:start,releasePromise};return {started,release};},
     async close(){for(const waiter of waiters)clearTimeout(waiter.timer);if(child.exitCode===null){child.kill();await new Promise(r=>child.once('exit',r));}api.closeAllConnections();await new Promise(r=>api.close(r));await rm(root,{recursive:true,force:true,maxRetries:5});}
   };
+}
+
+export function syntheticPptx({titles=true}={}){
+ const files=new Map([['[Content_Types].xml','<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>'],['ppt/presentation.xml','<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst>'+[1,2,3].map(i=>`<p:sldId id="${255+i}" r:id="s${i}"/>`).join('')+'</p:sldIdLst><p:sldSz cx="9144000" cy="5143500"/></p:presentation>'],['ppt/_rels/presentation.xml.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+[1,2,3].map(i=>`<Relationship Id="s${i}" Type="slide" Target="slides/slide${i}.xml"/>`).join('')+'</Relationships>']]);
+ for(let i=1;i<=3;i++)files.set(`ppt/slides/slide${i}.xml`,`<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="1" name="Title"/><p:cNvSpPr/><p:nvPr>${titles?'<p:ph type="title"/>':''}</p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="500000" y="500000"/><a:ext cx="8000000" cy="1200000"/></a:xfrm><a:solidFill><a:srgbClr val="dceada"/></a:solidFill></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="3200" b="1"/><a:t>PPTX标题 ${i} 合成教材</a:t></a:r></a:p><a:p><a:r><a:rPr sz="1600"/><a:t>SLIDE_${i}_MARKER 概念与原理示例</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>`);
+ const locals=[],directory=[];let offset=0;
+ const crc=data=>{let c=0xffffffff;for(const b of data){c^=b;for(let j=0;j<8;j++)c=(c>>>1)^((c&1)?0xedb88320:0);}return (c^0xffffffff)>>>0;};
+ for(const [name,text] of files){const n=Buffer.from(name),body=Buffer.from(text),packed=deflateRawSync(body),check=crc(body),local=Buffer.alloc(30);local.writeUInt32LE(0x04034b50);local.writeUInt16LE(20,4);local.writeUInt16LE(8,8);local.writeUInt32LE(check,14);local.writeUInt32LE(packed.length,18);local.writeUInt32LE(body.length,22);local.writeUInt16LE(n.length,26);locals.push(local,n,packed);const central=Buffer.alloc(46);central.writeUInt32LE(0x02014b50);central.writeUInt16LE(20,4);central.writeUInt16LE(20,6);central.writeUInt16LE(8,10);central.writeUInt32LE(check,16);central.writeUInt32LE(packed.length,20);central.writeUInt32LE(body.length,24);central.writeUInt16LE(n.length,28);central.writeUInt32LE(offset,42);directory.push(central,n);offset+=local.length+n.length+packed.length;}
+ const central=Buffer.concat(directory),end=Buffer.alloc(22);end.writeUInt32LE(0x06054b50);end.writeUInt16LE(files.size,8);end.writeUInt16LE(files.size,10);end.writeUInt32LE(central.length,12);end.writeUInt32LE(offset,16);return Buffer.concat([...locals,central,end]);
 }

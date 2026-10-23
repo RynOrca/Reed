@@ -41,6 +41,7 @@ import { join, resolve } from "node:path";
 import { createApprovalGate } from "./approval.mjs";
 import { RoleStore } from "./roles.mjs";
 import { installLearningSkills, prepareRoleSkills, hasPreparedReview } from "./role-skills.mjs";
+import {generateMaterialOutline} from './material-outline.mjs';
 import {roleSystemPrompt} from './role-prompt.mjs';
 import { normalizeImages } from "./images.mjs";
 import { stageFile } from "./files.mjs";
@@ -100,6 +101,7 @@ await learner.load();
 const goals = new GoalStore(dataDir); await goals.initialize();
 const canvasStore = new ConversationCanvasStore(dataDir);
 const documents=new DocumentStore(dataDir);
+const outlineJobs=new Map();
 const assessments=new AssessmentStore(documents),assessmentJobs=new Map();
 
 let visibleSessionId=null,liveReplay=null,suppressRuntimePresentation=false;
@@ -639,6 +641,7 @@ async function viewRecord(id=visibleSessionId){
   viewRecords.set(id,record);return record;
 }
 async function showView(record){
+  for(const controller of outlineJobs.values())controller.abort();
   if(visibleSessionId!==record.id)sideChat.reset();
   visibleSessionId=record.id;
   Object.assign(appState,{activeSessionId:record.id,projectPath:record.projectPath,roleId:record.roleId,provider:record.provider,modelId:record.modelId});
@@ -696,6 +699,15 @@ async function dispatch(command){
         case 'materials_select':value=await documents.bind(record.id,workspace,command.subjectId);break;
         case 'materials_import':value=await documents.importPdf(record.id,workspace,await scope.check(command.path),{name:command.title,kind:command.kind});break;
         case 'materials_bytes':value=await documents.bytes(record.id,workspace,command.documentId,command.offset);break;
+        case 'materials_outline_get':value=await documents.outline(record.id,workspace,command.documentId);break;
+        case 'materials_outline_save':value=await documents.saveOutline(record.id,workspace,command.documentId,command.revision,'native',command.items);break;
+        case 'materials_outline_cancel':outlineJobs.get(record.id+':'+command.documentId)?.abort();value={cancelled:true};break;
+        case 'materials_outline_generate':{
+          const key=record.id+':'+command.documentId;if(outlineJobs.has(key))throw Error('当前资料正在分析大纲');
+          const controller=new AbortController();outlineJobs.set(key,controller);
+          try{const api=await getRuntime(),model=record.provider&&record.modelId?api.getModel(record.provider,record.modelId):null;value=await generateMaterialOutline({documents,sessionId:record.id,workspace,documentId:command.documentId,revision:command.revision,model,complete:api.completeSimple.bind(api),signal:controller.signal});}
+          finally{if(outlineJobs.get(key)===controller)outlineJobs.delete(key);}break;
+        }
         case 'materials_page':value=await documents.cachePage(record.id,workspace,command.page);break;
         case 'materials_parse':{
           const doc=await documents.document(record.id,workspace,command.documentId);if(!doc.page_count)throw Error('请先打开 PDF，再导入解析结果');
@@ -1351,7 +1363,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   }
   if(command.type==='side_chat_reset'){sideChat.reset();continue;}
   if(command.type==='side_chat_abort'){sideChat.abort();continue;}
-  if(command.type?.startsWith('browser_')||['materials_paper_generate','materials_paper_submit','materials_paper_cancel','materials_ocr'].includes(command.type)){void dispatch(command);continue;}
+  if(command.type?.startsWith('browser_')||['materials_paper_generate','materials_paper_submit','materials_paper_cancel','materials_ocr','materials_outline_generate','materials_outline_cancel'].includes(command.type)){void dispatch(command);continue;}
   if ((command.type === "init" && session) || ["get_goals", "save_goals", "cancel_vault_overview", "abort", "tool_decision", "queue_message", "promote_queue", "clear_queue", "set_approval"].includes(command.type)) {
     void dispatch(command);
   } else if(command.type==='prompt') {
@@ -1373,7 +1385,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     queue = queue.then(() => dispatch(command));
   }
 }
-sideChat.reset();for(const controller of assessmentJobs.values())controller.abort();canvasWorkflow.close();await queue;turnController?.abort();if(session)void session.abort();await activePrompt;vaultOverview.cancel();await mcp.closeAll();
+sideChat.reset();for(const controller of outlineJobs.values())controller.abort();for(const controller of assessmentJobs.values())controller.abort();canvasWorkflow.close();await queue;turnController?.abort();if(session)void session.abort();await activePrompt;vaultOverview.cancel();await mcp.closeAll();
 memoryAgent.cancel();
 workingTools.cancel();
 capabilities.close();

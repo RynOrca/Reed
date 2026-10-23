@@ -20,6 +20,7 @@ export class DocumentStore{
       CREATE VIRTUAL TABLE IF NOT EXISTS material_fts USING fts5(document_id UNINDEXED,page_index UNINDEXED,tokens);
       CREATE TABLE IF NOT EXISTS material_bindings(session_id TEXT PRIMARY KEY,subject_id TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS materials_subject ON materials(subject_id);
+      CREATE TABLE IF NOT EXISTS material_outlines(document_id TEXT PRIMARY KEY,revision TEXT NOT NULL,source TEXT NOT NULL,body TEXT NOT NULL);
     `);}return this.db;
   }
   protectedRoots(){return this.db?this.db.prepare('SELECT DISTINCT workspace FROM subjects').all().map(s=>join(s.workspace,'Materials')):[];}
@@ -53,20 +54,26 @@ export class DocumentStore{
   async subject(workspace,id){const row=(await this.database()).prepare('SELECT * FROM subjects WHERE id=? AND workspace=?').get(id,workspace);if(!row)throw Error('科目不属于当前项目');return row;}
   async bind(sessionId,workspace,subjectId){await this.subject(workspace,subjectId);(await this.database()).prepare('INSERT OR REPLACE INTO material_bindings VALUES(?,?)').run(sessionId,subjectId);return this.list(sessionId,workspace);}
   async binding(sessionId,workspace){return (await this.database()).prepare('SELECT s.* FROM subjects s JOIN material_bindings b ON b.subject_id=s.id WHERE b.session_id=? AND s.workspace=?').get(sessionId,workspace)||null;}
-  async list(sessionId,workspace){await this.migrate(workspace);const subject=await this.binding(sessionId,workspace);return {storagePath:join(workspace,'Materials'),subject,documents:subject?(await this.database()).prepare('SELECT id,title,kind,hash,page_count AS pageCount FROM materials WHERE subject_id=? ORDER BY title').all(subject.id):[]};}
+  async list(sessionId,workspace){await this.migrate(workspace);const subject=await this.binding(sessionId,workspace);return {storagePath:join(workspace,'Materials'),subject,documents:subject?(await this.database()).prepare("SELECT id,title,kind,hash,page_count AS pageCount,CASE WHEN lower(path) LIKE '%.pptx' THEN 'pptx' ELSE 'pdf' END AS format FROM materials WHERE subject_id=? ORDER BY title").all(subject.id):[]};}
   async document(sessionId,workspace,id){const subject=await this.binding(sessionId,workspace);if(!subject)throw Error('请先选择当前科目');const doc=(await this.database()).prepare('SELECT * FROM materials WHERE id=? AND subject_id=?').get(id,subject.id);if(!doc)throw Error('资料不属于当前科目');return doc;}
   async importPdf(sessionId,workspace,path,{name,kind='textbook'}={}){
     const subject=await this.binding(sessionId,workspace);if(!subject)throw Error('请先新建或选择科目');if(!kinds.has(kind))throw Error('资料类型无效');
-    const source=await realpath(path),info=await lstat(source);if(!info.isFile()||extname(source).toLowerCase()!=='.pdf'||info.size>128*1024*1024)throw Error('仅支持不超过 128 MB 的 PDF 文件');
-    const bytes=await readFile(source);if(!bytes.subarray(0,1024).includes(Buffer.from('%PDF-')))throw Error('文件不是有效 PDF');
+    const source=await realpath(path),info=await lstat(source);if(!info.isFile()||!['.pdf','.pptx'].includes(extname(source).toLowerCase())||info.size>128*1024*1024)throw Error('仅支持不超过 128 MB 的 PDF 或 PPTX 文件');
+    const bytes=await readFile(source);const extension=extname(source).toLowerCase();if(extension==='.pdf'&&!bytes.subarray(0,1024).includes(Buffer.from('%PDF-')))throw Error('文件不是有效 PDF');if(extension==='.pptx'&&!bytes.subarray(0,4).equals(Buffer.from([80,75,3,4])))throw Error('文件不是有效 PPTX');
     const hash=createHash('sha256').update(bytes).digest('hex'),db=await this.database();
     const duplicate=db.prepare('SELECT id FROM materials WHERE subject_id=? AND hash=? AND kind=?').get(subject.id,hash,kind);if(duplicate)return this.document(sessionId,workspace,duplicate.id);
     const id=randomUUID(),folder=await this.folder(workspace,subject);
-    const destination=join(folder,id+'.pdf');await writeFile(destination,bytes,{flag:'wx'});
-    db.prepare('INSERT INTO materials VALUES(?,?,?,?,?,?,0)').run(id,subject.id,title(name||basename(source,'.pdf')),kind,hash,destination);
+    const destination=join(folder,id+extension);await writeFile(destination,bytes,{flag:'wx'});
+    db.prepare('INSERT INTO materials VALUES(?,?,?,?,?,?,0)').run(id,subject.id,title(name||basename(source,extension)),kind,hash,destination);
     return this.document(sessionId,workspace,id);
   }
   async bytes(sessionId,workspace,id,offset=0){const doc=await this.document(sessionId,workspace,id);if(!Number.isSafeInteger(offset)||offset<0)throw Error('文件读取位置无效');const file=await open(doc.path,'r');try{const size=(await file.stat()).size;if(offset>size)throw Error('读取位置超出文件');const buffer=Buffer.alloc(Math.min(1024*1024,size-offset));const {bytesRead}=await file.read(buffer,0,buffer.length,offset);return {data:buffer.subarray(0,bytesRead).toString('base64'),size,hash:doc.hash,nextOffset:offset+bytesRead};}finally{await file.close();}}
+  async outline(sessionId,workspace,id){const doc=await this.document(sessionId,workspace,id);const saved=(await this.database()).prepare('SELECT source,body FROM material_outlines WHERE document_id=? AND revision=?').get(id,doc.hash);return saved?{source:saved.source,items:JSON.parse(saved.body)}:null;}
+  async saveOutline(sessionId,workspace,id,revision,source,items){
+    const doc=await this.document(sessionId,workspace,id);if(revision!==doc.hash)throw Error('资料版本已变化');if(!['native','model'].includes(source)||!Array.isArray(items)||!items.length||items.length>2000)throw Error('大纲数据无效');
+    const clean=items.map(i=>{if(typeof i.title!=='string'||!i.title.trim()||i.title.length>200||!Number.isSafeInteger(i.pageIndex)||i.pageIndex<0||i.pageIndex>=doc.page_count||!Number.isSafeInteger(i.level)||i.level<0||i.level>5)throw Error('大纲标题、层级或页码无效');return {title:i.title.trim(),pageIndex:i.pageIndex,level:i.level};});
+    (await this.database()).prepare('INSERT OR REPLACE INTO material_outlines VALUES(?,?,?,?)').run(id,doc.hash,source,JSON.stringify(clean));return {source,items:clean};
+  }
   async cachePage(sessionId,workspace,{documentId,revision,pageIndex,pageCount,text,method='text-layer'}){
     const doc=await this.document(sessionId,workspace,documentId);if(revision!==doc.hash)throw Error('资料版本已变化');
     if(!Number.isSafeInteger(pageIndex)||pageIndex<0||!Number.isSafeInteger(pageCount)||pageCount<1||pageCount>30000||pageIndex>=pageCount||typeof text!=='string'||text.length>100000||!['text-layer','mineru','ocr'].includes(method))throw Error('页面数据无效');

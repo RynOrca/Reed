@@ -89,7 +89,7 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
     return ()=>{proxy?.remove();scheduleBounds();};
   }
   panels.register('browser',{isOpen:()=>opened,open:show,close,beforeTransition});
-  async function pick(){const path=await tauri.core.invoke('choose_html_file');if(path)await (/\.pdf$/i.test(path)&&onPdf?onPdf(path):openPage(path));}
+  async function pick(){const path=await tauri.core.invoke('choose_html_file');if(path)await (/\.(pdf|pptx)$/i.test(path)&&onPdf?onPdf(path):openPage(path));}
   q('open').onclick=()=>void pick().catch(onError);q('pick').onclick=()=>void (attempt?openPage(attempt):pick()).catch(onError);
   q('close').onclick=()=>void panels.close('browser').catch(onError);
   entry.onclick=()=>{if(opened&&innerWidth<=500&&!workspace.classList.contains('browser-mobile-page')){workspace.classList.add('browser-mobile-page');scheduleBounds();return;}void panels.toggle('browser').catch(onError);};
@@ -124,7 +124,7 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
   tauri?.event.listen('browser-title',event=>{if(opened&&ready)status(event.payload.title||'页面已就绪');});
   tauri?.event.listen('browser-location',event=>{if(opened&&ready&&event.payload.url!=='about:blank'){source=event.payload.url;attempt=source;memory.navigated(source);if(document.activeElement!==q('address'))q('address').value=source;q('source').textContent=source;q('back').disabled=false;}});
   tauri?.event.listen('tauri://drag-drop',event=>{const path=event.payload?.paths?.find(path=>/\.html?$/i.test(path));if(path)void openPage(path).catch(onError);});
-  tauri?.event.listen('browser-drop',event=>{if(event.payload?.path&&!/\.pdf$/i.test(event.payload.path))void openPage(event.payload.path).catch(onError);});
+  tauri?.event.listen('browser-drop',event=>{if(event.payload?.path&&!/\.(pdf|pptx)$/i.test(event.payload.path))void openPage(event.payload.path).catch(onError);});
   return {open:openPage,close:()=>panels.close('browser'),event(event){
     if(event.initiator!=='agent')return;
     if(event.state==='loading'){

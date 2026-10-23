@@ -25,13 +25,13 @@ export function createPdfViewer({host,library,visible,onState,onImage,onPage}){
       const previous=shown;sheet.classList.remove('materials-staging');shown={sheet,canvas,pageIndex:index,document:currentDocument};job.published=true;
       previous?.sheet.remove();if(previous)previous.canvas.width=0;
       onImage({pageIndex:index,pageCount:currentPdf.numPages,zoom,mode});
-      let content,warning='';
+      let content,warning=page.warning||'';
       try{content=await page.getTextContent();}catch{warning='本页画面已显示，文字层读取失败，可重试或识别本页。';}
       if(!current())return;
       const pageText=content?content.items.map(item=>(item.str||'')+(item.hasEOL?'\n':' ')).join(''):'';
       if(content){
         text.style.setProperty('--total-scale-factor',viewport.scale);text.style.setProperty('--scale-round-x','1px');text.style.setProperty('--scale-round-y','1px');
-        try{job.layer=new (await library()).TextLayer({textContentSource:content,container:text,viewport});await job.layer.render();}
+        try{if(page.renderTextLayer)await page.renderTextLayer(text,viewport);else{job.layer=new (await library()).TextLayer({textContentSource:content,container:text,viewport});await job.layer.render();}}
         catch(error){if(!current())return;text.replaceChildren();if(error.name!=='AbortException')warning='本页画面已显示，文字选择暂不可用，可重试本页。';}
       }
       if(!current())return;
