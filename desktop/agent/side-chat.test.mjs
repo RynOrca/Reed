@@ -7,6 +7,17 @@ const text=value=>({type:'text',text:value});
 const reply=value=>({async *[Symbol.asyncIterator](){for(const block of value.content)if(block.type==='text')yield {type:'text_delta',delta:block.text};},result:async()=>value});
 const read=execute=>({name:'read',description:'只读合成文件',parameters:Type.Object({path:Type.String()}),execute});
 
+test('侧边文本以完整响应校准丢失的符号并隔开工具前后正文',async()=>{
+  const events=[];let step=0;
+  const chat=createSideChat({emit:e=>events.push(e),selectModel:()=>({id:'test'}),workspace:()=>'/test',readTool:()=>read(async()=>({content:[text('合成资料')]})),stream:async()=>{
+    const value=++step===1?message([text('先解释 **概念**：a < b。'),{type:'toolCall',id:'read-one',name:'read',arguments:{path:'test.txt'}}],'toolUse'):message([text('然后说明 $x_i + 1$。')]);
+    return {async *[Symbol.asyncIterator](){yield {type:'text_delta',delta:step===1?'先解释 概念：a b。':'然后说明 xi 1。'};},result:async()=>value};
+  }});
+  await chat.prompt({id:'text',text:'合成问题'});
+  assert.equal(events.at(-1).state,'done');
+  assert.equal(events.findLast(e=>e.state==='text').text,'先解释 **概念**：a < b。\n\n然后说明 $x_i + 1$。');
+});
+
 test('主会话参考含摘要、正文和学习图解，排除思考、图片及其他工具结果',()=>{
   const reference=mainChatReference([
     {role:'compactionSummary',summary:'早先讨论贝叶斯公式'},

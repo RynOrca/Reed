@@ -13,7 +13,7 @@ export function createSideChatPanel({tauri,readingContext}){
   function setBusy(value){busy=value;q('send').disabled=value||!input.value.trim();q('stop').hidden=!value;input.disabled=value;}
   function clear(){requestId=null;answer=null;source='';input.value='';list.replaceChildren();setBusy(false);q('status').textContent='使用主对话当前模型';}
   function close(){const wasOpen=opened;opened=false;pane.hidden=true;shell.classList.remove('side-chat-open');entry.setAttribute('aria-expanded','false');clear();if(wasOpen)void send('side_chat_reset').catch(console.error);}
-  function availability(){const available=shell.getBoundingClientRect().width>=1040;entry.disabled=!available;entry.title=available?'侧边临时聊天':'聊天区域宽度达到 1040 像素后可使用侧边聊天';if(!available&&opened)close();}
+  function availability(){shell.classList.toggle('side-chat-overlay',shell.getBoundingClientRect().width<760);entry.title='侧边临时聊天';}
   entry.onclick=()=>{if(opened){close();return;}if(entry.disabled)return;clear();opened=true;pane.hidden=false;shell.classList.add('side-chat-open');entry.setAttribute('aria-expanded','true');void send('side_chat_reset').catch(error=>{q('status').textContent=String(error.message||error);});input.focus();};
   q('close').onclick=close;q('stop').onclick=()=>{q('status').textContent='正在停止…';void send('side_chat_abort').catch(error=>{q('status').textContent=String(error.message||error);});};
   input.addEventListener('input',()=>setBusy(busy));
@@ -28,6 +28,7 @@ export function createSideChatPanel({tauri,readingContext}){
   return {event(event){
     if(!opened||event.id!==requestId)return;
     if(event.state==='delta'){source+=event.text||'';renderMarkdown(answer,source);q('status').textContent='正在回复…';list.scrollTop=list.scrollHeight;}
+    if(event.state==='text'){source=event.text||'';renderMarkdown(answer,source);list.scrollTop=list.scrollHeight;}
     if(event.state==='reading')q('status').textContent='正在读取：'+event.path;
     if(event.state==='done'||event.state==='error'||event.state==='cancelled'){setBusy(false);q('status').textContent=event.message||(event.state==='done'?'回复完成':'已停止');input.focus();}
   },close};

@@ -61,16 +61,24 @@ export function createSideChat({ stream, emit, readTool, selectModel, workspace,
       send({state:'started'});
       const packet=await contextSources({main,readingContext,text,model,context});controller.signal.throwIfAborted();
       if(packet?.text){context.messages.unshift({role:'user',content:'当前阅读资料（只读参考）：\n'+packet.text,timestamp:Date.now()});prefix++;}
+      const texts=[];
       for(let step=0;step<16;step++){
         controller.signal.throwIfAborted();
         const input=(Number(model.contextWindow)||32000)-(Number(model.maxTokens)||4096)-1024;
         if(estimateContextTokens([{role:'system',content:context.systemPrompt,tools:context.tools},...context.messages])>input)throw Error('侧边上下文已达到预算，请关闭后重新提问或缩小资料范围');
         const response=await stream(model,context,{signal:controller.signal,sessionId:chat.id,reasoning:'off',maxRetries:0});
+        let hasDelta=false;
         for await(const event of response){
           controller.signal.throwIfAborted();
-          if(event.type==='text_delta')send({state:'delta',text:event.delta});
+          if(event.type==='text_delta'){
+            if(!hasDelta&&texts.length)send({state:'delta',text:'\n\n'});
+            hasDelta=true;send({state:'delta',text:event.delta});
+          }
         }
         const message=await response.result();controller.signal.throwIfAborted();
+        const completeText=message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n\n');
+        if(completeText)texts.push(completeText);
+        send({state:'text',text:texts.join('\n\n')});
         if(['error','aborted','length'].includes(message.stopReason))throw Error(message.errorMessage||'侧边模型响应未完成');
         context.messages.push(message);
         const calls=message.content.filter(block=>block.type==='toolCall');
