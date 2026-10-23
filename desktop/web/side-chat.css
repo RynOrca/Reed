@@ -18,6 +18,7 @@
 .side-chat-pane{box-sizing:border-box;max-width:calc(100% - 24px)}
 .chat-shell.side-chat-open.side-chat-overlay>.chat-body{margin-right:0}
 .chat-shell.side-chat-open.side-chat-overlay>.composer-dock{width:100%}
+.chat-shell.side-chat-overlay>.side-chat-pane{z-index:25}
 .side-chat-answer{min-width:0;word-break:normal}
 .side-chat-answer strong{font-weight:650}
 .side-chat-answer :is(pre,table,.reed-math-display){max-width:100%;overflow-x:auto}
