@@ -35,7 +35,7 @@ export function createConversationCanvas({command,tauri,prompt,panels,isRunning,
     const total=workspace.clientWidth;
     if(!total)return;
     const next=clampSplit(width);
-    workspace.style.setProperty('--canvas-chat-width',`${next}px`);
+    workspace.classList.add('workspace-width-adjusted');workspace.style.setProperty('--canvas-chat-width',`${next}px`);
     workspace.style.setProperty('--workspace-chat-width',`${next}px`);
     const percent=Math.round(next/total*100);
     splitter.setAttribute('aria-valuenow',String(percent));

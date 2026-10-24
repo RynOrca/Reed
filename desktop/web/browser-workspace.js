@@ -1,3 +1,4 @@
+import {createPanelSplitter} from './panel-splitter.js';
 import {icon} from './icons.js';
 import {createBrowserMemory} from './browser-memory.js';
 import {resolveBrowserAddress,browserFailure} from './browser-address.mjs';
@@ -7,14 +8,14 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
   const workspace=document.querySelector('.reed-workspace'),shell=document.querySelector('.chat-shell');
   const pane=document.createElement('section');pane.className='browser-pane';pane.hidden=true;pane.setAttribute('aria-label','网页预览');
   pane.innerHTML='<header class="browser-toolbar"><button data-browser="back" class="icon-button" title="后退" aria-label="后退"></button><button data-browser="forward" class="icon-button" title="前进" aria-label="前进"></button><button data-browser="reload" class="icon-button" title="刷新" aria-label="刷新"></button><input data-browser="address" aria-label="网址、搜索或 HTML 路径" placeholder="搜索或输入网址" spellcheck="false" autocomplete="off" autocapitalize="off" inputmode="url"><button data-browser="open" class="icon-button" title="打开 HTML 文件" aria-label="打开 HTML 文件"></button><button data-browser="close" class="icon-button" title="关闭网页预览" aria-label="关闭网页预览"></button></header><div class="browser-actions"><span data-browser="status" role="status">输入网址或打开 HTML，边看边聊</span><button data-browser="quote" disabled>引用选中内容</button><button data-browser="read" disabled>读取整页</button></div><div class="browser-viewport" data-browser="viewport"><div class="browser-empty" data-browser="empty"><span data-browser="mark"></span><h2>把网页放在对话旁</h2><p>输入网址、搜索，或打开本地 HTML。<br>选中文字，就能带着原文继续提问。</p><button data-browser="pick">打开 HTML 文件</button></div></div><footer class="browser-footer"><span data-browser="source">页面内容由文件自身提供</span><button data-browser="chat">切换到对话</button></footer>';
-  const splitter=document.createElement('div');splitter.className='browser-splitter';splitter.tabIndex=0;splitter.setAttribute('role','separator');splitter.setAttribute('aria-label','调整网页与对话宽度');splitter.setAttribute('aria-orientation','vertical');splitter.setAttribute('aria-valuemin','30');splitter.setAttribute('aria-valuemax','75');splitter.setAttribute('aria-valuenow','60');splitter.hidden=true;
-  workspace.prepend(pane,splitter);
+  workspace.prepend(pane);
   const q=name=>pane.querySelector(`[data-browser="${name}"]`);
   for(const [name,glyph] of [['back','chevron'],['forward','chevron'],['reload','history'],['open','folder'],['close','close'],['mark','book']])q(name).append(icon(glyph));
   q('back').classList.add('browser-back');
   const entry=document.createElement('button');entry.type='button';entry.id='browser-button';entry.className='icon-button';entry.title='内置浏览器';entry.setAttribute('aria-label','内置浏览器');entry.setAttribute('aria-expanded','false');entry.append(icon('browser'));document.getElementById('goals-button').before(entry);
   let opened=false,ready=false,dragging=false,pendingBounds=false,layoutQueue=Promise.resolve(),lastBounds='',source='',attempt='',lastShot='',ticket=0,layoutRevision=0;
-  let ratio=Number(localStorage.getItem('reed-browser-ratio'))||.6;
+  const panelSplit=createPanelSplitter({workspace,pane,key:'reed-browser-ratio',label:'调整浏览器与对话宽度',onChange:scheduleBounds,onDrag:value=>{dragging=value;scheduleBounds();}});
+  const splitter=panelSplit.splitter;
   const status=(text,state='ready')=>{q('status').textContent=text;pane.dataset.state=state;pane.setAttribute('aria-busy',String(state==='loading'));};
   const memory=createBrowserMemory({pane,tauri,navigate:value=>openPage(value),isReady:()=>opened&&ready,onBounds:scheduleBounds,onError});
   function quote(data){
@@ -42,20 +43,19 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
     });
     layoutQueue=task.catch(()=>{lastBounds='';});return task;
   }
-  function split(value,save=false){ratio=Math.max(.3,Math.min(.75,value));workspace.style.setProperty('--browser-width',Math.round(ratio*100)+'%');splitter.setAttribute('aria-valuenow',String(Math.round(ratio*100)));if(dragging||save)workspace.style.setProperty('--workspace-chat-width',Math.max(240,workspace.clientWidth*(1-ratio)-6)+'px');if(save)localStorage.setItem('reed-browser-ratio',String(ratio));scheduleBounds();}
   async function show(){
     if(opened)return;
-    opened=true;pane.hidden=false;splitter.hidden=false;workspace.classList.add('browser-expanded');entry.setAttribute('aria-expanded','true');split(ratio);
+    opened=true;pane.hidden=false;splitter.hidden=false;workspace.classList.add('browser-expanded');entry.setAttribute('aria-expanded','true');panelSplit.show();
     if(ready&&lastShot){const image=document.createElement('img');image.alt='';image.className='browser-motion-image';image.src='data:image/png;base64,'+lastShot;await image.decode();q('viewport').append(image);}
     try{await tauri.core.invoke('set_canvas_window',{expanded:true,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:320});}
-    catch(error){opened=false;pane.hidden=true;splitter.hidden=true;workspace.classList.remove('browser-expanded');entry.setAttribute('aria-expanded','false');throw error;}
+    catch(error){opened=false;pane.hidden=true;panelSplit.hide();workspace.classList.remove('browser-expanded');entry.setAttribute('aria-expanded','false');throw error;}
     workspace.classList.toggle('browser-mobile-page',innerWidth<=500);
   }
   async function close({keepExpanded=false}={}){
     await memory.sample();ticket++;opened=false;memory.invalidate();
     // Hide the native surface before changing its parent's layout or size.
     await applyBounds({visible:false},true);
-    pane.hidden=true;splitter.hidden=true;q('viewport').querySelectorAll('.browser-motion-image').forEach(image=>image.remove());
+    pane.hidden=true;panelSplit.hide();q('viewport').querySelectorAll('.browser-motion-image').forEach(image=>image.remove());
     workspace.classList.remove('browser-expanded','browser-mobile-page');entry.setAttribute('aria-expanded','false');
     if(!keepExpanded){await paintWorkspace();}
   }
@@ -112,11 +112,6 @@ export function createBrowserWorkspace({tauri,command,prompt,onQuote,onPage,pane
     try{const response=await command('browser_read',{includeImages:true,maxSegments:6},true);if(revision!==ticket||!opened)return;await onPage(response.result);status(response.result.details.coverage.complete?'已加入页面内容，确认后发送':'已加入页面内容；长页或嵌入内容未全部覆盖');workspace.classList.remove('browser-mobile-page');prompt.focus();}catch(error){if(revision===ticket)status(String(error.message||error),'error');}finally{q('read').disabled=!ready;}
   };
   q('chat').onclick=()=>{workspace.classList.toggle('browser-mobile-page');scheduleBounds();if(!workspace.classList.contains('browser-mobile-page'))prompt.focus();};
-  splitter.addEventListener('pointerdown',event=>{if(event.button!==0)return;event.preventDefault();dragging=true;splitter.setPointerCapture(event.pointerId);scheduleBounds();});
-  splitter.addEventListener('pointermove',event=>{if(dragging){const rect=workspace.getBoundingClientRect();split(workspace.dataset.drawerSide==='right'?1-(event.clientX-rect.left)/rect.width:(event.clientX-rect.left)/rect.width);}});
-  const finish=()=>{if(!dragging)return;dragging=false;split(ratio,true);};splitter.addEventListener('pointerup',finish);splitter.addEventListener('lostpointercapture',finish);
-  splitter.addEventListener('pointercancel',finish);
-  splitter.addEventListener('dblclick',()=>split(.6,true));splitter.addEventListener('keydown',event=>{if(['ArrowLeft','ArrowRight','Home'].includes(event.key)){event.preventDefault();split(event.key==='Home' ? .6 : ratio+(event.key==='ArrowRight' ? .03 : -.03),true);}});
   new ResizeObserver(scheduleBounds).observe(q('viewport'));
   new MutationObserver(scheduleBounds).observe(document.body,{subtree:true,attributes:true,attributeFilter:['open','hidden','class']});
   window.addEventListener('resize',scheduleBounds);

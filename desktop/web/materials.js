@@ -3,16 +3,22 @@ import {materialMarkup,hydrateMaterialIcons,materialKind} from './materials-view
 import {createPdfViewer} from './pdf-viewer.js';
 import {createMaterialOutline} from './material-outline.js';
 import {openPptx} from './pptx-viewer.js';
+import {createPanelSplitter} from './panel-splitter.js';
 
 export function createMaterials({command:rawCommand,tauri,panels,reading,onError,sessionId}){
   const command=async(type,args={})=>(await rawCommand(type,args,true)).material;
   const workspace=document.querySelector('.reed-workspace'),pane=document.createElement('section');
   pane.className='browser-pane materials-pane';pane.hidden=true;pane.dataset.view='read';pane.setAttribute('aria-label','学习资料');pane.innerHTML=materialMarkup();hydrateMaterialIcons(pane);workspace.prepend(pane);
   const q=name=>pane.querySelector(`[data-m="${name}"]`);
+  const panelSplit=createPanelSplitter({workspace,pane,key:'reed-materials-ratio',kind:'materials',label:'调整学习资料与对话宽度'});
+  // Keep status announcements and errors available without a bottom bar.
+  const statusNode=q('status');pane.append(statusNode);statusNode.id='materials-current-status';
+  const statusTrigger=document.createElement('button');statusTrigger.type='button';statusTrigger.className='materials-status-trigger';statusTrigger.setAttribute('aria-label','查看资料状态');statusTrigger.setAttribute('aria-expanded','false');statusTrigger.setAttribute('aria-controls',statusNode.id);statusTrigger.append(icon('info'));q('close').before(statusTrigger);
+  statusTrigger.onclick=()=>{const shown=statusNode.toggleAttribute('data-important');statusTrigger.setAttribute('aria-expanded',String(shown));};
   const entry=document.createElement('button');entry.type='button';entry.id='materials-button';entry.className='icon-button';entry.title='学习资料';entry.setAttribute('aria-label','学习资料');entry.setAttribute('aria-expanded','false');entry.append(icon('folder'));document.getElementById('browser-button').after(entry);
   const dialog=document.createElement('dialog');dialog.className='materials-dialog';pane.append(dialog);
   let opened=false,pdf=null,pdfTask=null,doc=null,lib=null,selectedSubject=null,ownerSession='',importingPath=null,epoch=0,lastDocumentId='',catalog=null;
-  const textCache=new Map(),status=text=>{q('status').textContent=text;},isReading=()=>opened&&pane.dataset.view==='read';
+  const textCache=new Map(),status=text=>{q('status').textContent=text;statusTrigger.title=text;if(/失败|错误|没有可读文字|不足|未能/.test(text)){statusNode.setAttribute('data-important','');statusTrigger.setAttribute('aria-expanded','true');}},isReading=()=>opened&&pane.dataset.view==='read';
   const closeMenus=()=>{q('library').hidden=true;q('more').hidden=true;q('scrim').hidden=true;q('library-toggle').setAttribute('aria-expanded','false');q('more-toggle').setAttribute('aria-expanded','false');};
   function libraryMenu(){const show=q('library').hidden;closeMenus();q('library').hidden=!show;q('scrim').hidden=!show;q('library-toggle').setAttribute('aria-expanded',String(show));}
   function notice(title,copy,action='重试本页'){q('notice-title').textContent=title;q('notice-copy').textContent=copy;q('notice-action').textContent=action;q('notice').hidden=false;}
@@ -76,8 +82,8 @@ export function createMaterials({command:rawCommand,tauri,panels,reading,onError
     if(importingPath===path)return;importingPath=path;
     try{await refresh();if(!selectedSubject){libraryMenu();status('请先新建或选择科目，再导入 PDF。');return;}const owner=sessionId(),data=await ask('导入学习资料',[{name:'title',label:'资料名称',value:path.split(/[\\/]/).pop().replace(/\.(pdf|pptx)$/i,'')},{name:'kind',label:'资料类型',options:Object.entries(materialKind)}]);if(!data||owner!==sessionId())return;status('正在复制资料到项目 Materials 目录…');const result=await command('materials_import',{path,...data});if(owner!==sessionId())return;await refresh();await openDocument(result.id);}finally{if(importingPath===path)importingPath=null;}
   }
-  const show=async()=>{opened=true;pane.hidden=false;workspace.classList.add('browser-expanded','browser-mobile-page');entry.setAttribute('aria-expanded','true');await refresh();if(pdf&&doc&&isReading())await viewer.render();};
-  const close=async()=>{void outline.cancel();opened=false;epoch++;viewer.cancel();if(!pdf&&pdfTask){void pdfTask.destroy().catch(()=>{});pdfTask=null;}pane.hidden=true;reading.clear();closeMenus();workspace.classList.remove('browser-expanded','browser-mobile-page');entry.setAttribute('aria-expanded','false');};
+  const show=async()=>{opened=true;pane.hidden=false;panelSplit.show();workspace.classList.add('browser-expanded','browser-mobile-page');entry.setAttribute('aria-expanded','true');await refresh();if(pdf&&doc&&isReading())await viewer.render();};
+  const close=async()=>{void outline.cancel();opened=false;epoch++;viewer.cancel();if(!pdf&&pdfTask){void pdfTask.destroy().catch(()=>{});pdfTask=null;}pane.hidden=true;panelSplit.hide();reading.clear();closeMenus();workspace.classList.remove('browser-expanded','browser-mobile-page');entry.setAttribute('aria-expanded','false');};
   panels.register('materials',{isOpen:()=>opened,open:show,close});entry.onclick=()=>void panels.toggle('materials').catch(onError);q('close').onclick=()=>void panels.close('materials').catch(onError);q('back-chat').onclick=()=>void panels.close('materials').catch(onError);
   q('library-toggle').onclick=libraryMenu;q('library-close').onclick=closeMenus;q('scrim').onclick=closeMenus;
   q('more-toggle').onclick=()=>{const show=q('more').hidden;closeMenus();q('more').hidden=!show;q('scrim').hidden=!show;q('more-toggle').setAttribute('aria-expanded',String(show));};
