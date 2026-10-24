@@ -333,6 +333,8 @@ function renderRoles(roles) {
 $("role-new").onclick = () => { roleId = null; $("role-form").reset(); roleLearningMode.set(); roleSkills.set(); $("role-name").focus(); };
 $("role-form").onsubmit = event => { event.preventDefault(); void action(async () => { await command("save_role", { roleId, name: $("role-name").value, system: $("role-system").value, skills: roleSkills.get(), ...roleLearningMode.get() }); roleId = null; $("role-form").reset(); roleLearningMode.set(); roleSkills.set(); notice("角色已保存，可在对话窗口选择。"); }); };
 for(const id of ['appearance-theme','appearance-icon']) $(id).onchange=()=>action(()=>saveAppearance($("appearance-icon").value,$("appearance-theme").value));
+$("appearance-font-size").oninput=()=>{$("appearance-font-value").textContent=$("appearance-font-size").value+' px';};
+$("appearance-font-size").onchange=()=>action(()=>saveAppearance($("appearance-icon").value,$("appearance-theme").value,$("appearance-font-size").value));
 
 // 「关于」页：显示版本号，支持检查更新与一键安装。
 let pendingUpdate = null;

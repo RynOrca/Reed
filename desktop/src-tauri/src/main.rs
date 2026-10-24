@@ -233,9 +233,10 @@ fn update_brand_icon(app: tauri::AppHandle, style: String, dark: bool) -> Result
 }
 
 #[tauri::command]
-fn set_appearance(app: tauri::AppHandle, style: String, theme: String) -> Result<(), String> {
+fn set_appearance(app: tauri::AppHandle, style: String, theme: String, font_size: Option<u32>) -> Result<(), String> {
     if !["glass", "illustrated"].contains(&style.as_str()) || !["system", "light", "dark"].contains(&theme.as_str()) {return Err("外观选项无效".into());}
-    let mut prefs=read_preferences(&app);prefs["iconStyle"]=style.into();prefs["theme"]=theme.into();save_preferences(&app,&prefs)?;
+    if font_size.is_some_and(|size| !(14..=24).contains(&size)) {return Err("字号应在 14 至 24 之间".into());}
+    let mut prefs=read_preferences(&app);prefs["iconStyle"]=style.into();prefs["theme"]=theme.into();if let Some(size)=font_size{prefs["fontSize"]=size.into();}save_preferences(&app,&prefs)?;
     app.emit("desktop-appearance",prefs).map_err(|e|e.to_string())
 }
 

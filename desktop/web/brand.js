@@ -1,12 +1,17 @@
 import { showStartupVersion, appVersion } from './update.js';
 export { appVersion };
-let preferences={iconStyle:'glass',theme:'system'};
+let preferences={iconStyle:'glass',theme:'system',fontSize:18};
 const media=matchMedia('(prefers-color-scheme: dark)');
 let host;
 export function applyBrand(prefs=preferences) {
   preferences={...preferences,...prefs};
   const dark=preferences.theme==='dark'||(preferences.theme==='system'&&media.matches);
   document.documentElement.dataset.theme=dark?'dark':'light';
+  const fontSize=Math.max(14,Math.min(24,Number(preferences.fontSize)||18));
+  document.documentElement.style.setProperty('--reed-font-size',fontSize+'px');
+  document.documentElement.dataset.fontSize=String(fontSize);
+  const fontControl=document.getElementById('appearance-font-size'),fontValue=document.getElementById('appearance-font-value');
+  if(fontControl)fontControl.value=String(fontSize);if(fontValue)fontValue.textContent=fontSize+' px';
   const style=preferences.iconStyle==='illustrated'?'illustrated':'glass';
   for(const image of document.querySelectorAll('[data-brand-icon]'))image.src=`./assets/branding/${style}-${dark?'dark':'light'}.png`;
   const theme=document.getElementById('appearance-theme'),icon=document.getElementById('appearance-icon');
@@ -31,6 +36,6 @@ export function finishStartup() {
   splash.classList.add('startup-complete');
   setTimeout(()=>{splash.hidden=true;},240);
 }
-export async function saveAppearance(style,theme) {
-  await host.core.invoke('set_appearance',{style,theme});
+export async function saveAppearance(style,theme,fontSize=preferences.fontSize) {
+  await host.core.invoke('set_appearance',{style,theme,fontSize:Number(fontSize)});
 }
