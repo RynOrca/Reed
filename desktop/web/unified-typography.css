@@ -2,7 +2,7 @@
 :root{--reed-reading-font:"Reed Reading Serif","Noto Serif SC","Source Han Serif SC",Georgia,"SimSun",serif;--reed-ui-font:"Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;--reed-font-size:18px;--reed-ui-size:calc(var(--reed-font-size) * 13 / 18);--reed-reading-size:var(--reed-font-size)}
 @media(max-width:480px){:root{--reed-reading-size:calc(var(--reed-font-size) - 1px)}}
 .transcript-list .prose-chat{font-size:var(--reed-reading-size)}
-:is(.browser-pane,.canvas-pane,.side-chat-pane){font-family:var(--reed-ui-font);font-size:var(--reed-ui-size)}
+:is(.browser-pane,.canvas-pane,.side-chat-pane){--reed-ui-font:var(--reed-reading-font);font-family:var(--reed-reading-font);font-size:var(--reed-ui-size)}
 :is(.browser-pane,.canvas-pane,.side-chat-pane) :is(button,input,select,textarea,small,label,h1,h2,h3,h4,header,footer,nav){font-family:var(--reed-ui-font)}
 :is(.browser-toolbar input,.browser-actions,.browser-bookmarks,.browser-empty p,.browser-empty button,.materials-toolbar,.materials-tabs button,.materials-toolbar .materials-document-trigger,.materials-pane .materials-reading-tools input,.materials-pane .materials-reading-tools select,.materials-library,.materials-document strong,.materials-document small,.materials-toc,.material-toc-jump,.materials-dialog,.materials-dialog label,.materials-more-menu button,.materials-pane button,.materials-section-label,.materials-paper-row strong,.materials-paper-row small,.materials-question-nav button,.materials-paper-progress,.materials-grade-summary,.materials-submit-row small,.side-chat-pane textarea,.side-chat-pane>header strong,.side-chat-pane>header small,.side-chat-pane footer,.side-chat-intro,.canvas-meta,.canvas-node-top,.canvas-node footer button,.canvas-actions>[data-cv=arrange],.canvas-help){font-size:var(--reed-ui-size)}
 :is(.side-chat-messages,.side-chat-answer,.materials-practice p,.practice-question .practice-prompt,.practice-result,.practice-question textarea,.canvas-node-summary,.canvas-source-body){font-family:var(--reed-reading-font);font-size:var(--reed-reading-size)!important;line-height:1.95}
@@ -12,6 +12,9 @@
 .canvas-node h3,.materials-practice-head h2{font-family:var(--reed-ui-font);font-size:var(--reed-reading-size)}
 .canvas-header h2{font-family:var(--reed-ui-font);font-size:var(--reed-ui-size)}
 .canvas-edge-label{font-family:var(--reed-ui-font);font-size:var(--reed-ui-size)}
+.materials-pane :is(p,strong,.practice-prompt,.practice-result){font-family:var(--reed-reading-font)}
+.materials-pane .practice-question h4 strong,.materials-pane .materials-grade-summary strong{font-family:var(--reed-reading-font)}
+.materials-pane :is(label,small,select,input,button),.canvas-node-top small,.canvas-zoom{font-size:var(--reed-ui-size)}
 .materials-practice h1,.materials-assessment h1,.materials-dialog h3,.materials-generate-panel h2,.browser-empty h2{font-family:var(--reed-ui-font);font-size:calc(var(--reed-reading-size) * 1.25)}
 .settings-shell #appearance-font-size{width:120px;accent-color:var(--goal-accent,#85947b)}
 .settings-shell #appearance-font-value{min-width:42px;font-variant-numeric:tabular-nums}

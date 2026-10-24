@@ -14,10 +14,10 @@
 @media(max-width:720px){.reed-workspace.browser-expanded{grid-template-columns:minmax(0,var(--browser-width,60%)) 6px minmax(0,1fr)}.browser-expanded>.chat-shell{grid-column:3}.browser-actions{flex-wrap:nowrap}.browser-expanded>.browser-pane{display:flex}.browser-actions>[role=status]{flex-basis:auto}}
 /* Footer content moves into the toolbar/status area, so the page reaches the edge. */
 .browser-footer,.materials-footer{display:none!important}
-.browser-actions{gap:8px;min-height:40px;padding:5px 10px;flex-wrap:nowrap;background:var(--ds-bg-primary)}
+.browser-actions{gap:8px;min-height:40px;padding:5px 10px;flex-wrap:wrap;background:var(--ds-bg-primary)}
 .browser-actions>button{flex:none;border-radius:5px;padding:6px 7px}
 .browser-actions>button:hover{background:var(--ds-bg-hover)}
-.browser-bookmark-strip{display:flex;align-items:center;gap:4px;flex:1;min-width:0;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;scrollbar-color:#85947b66 transparent}
+.browser-bookmark-strip{display:flex;align-items:center;gap:4px;flex:1 1 120px;min-width:min(120px,100%);max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;scrollbar-color:#85947b66 transparent}
 .browser-actions .browser-bookmark-item{flex:none;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px 10px;border-radius:5px;text-align:left}
 .browser-bookmark-item:hover,.browser-bookmark-item[aria-current=page]{background:var(--ds-bg-hover);color:var(--goal-accent)}
 .browser-bookmark-empty{white-space:nowrap;opacity:.5;padding:6px;font-size:.9em}
