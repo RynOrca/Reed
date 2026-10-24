@@ -30,6 +30,6 @@ export function createSideChatPanel({tauri,readingContext}){
     if(event.state==='delta'){source+=event.text||'';renderMarkdown(answer,source);q('status').textContent='正在回复…';list.scrollTop=list.scrollHeight;}
     if(event.state==='text'){source=event.text||'';renderMarkdown(answer,source);list.scrollTop=list.scrollHeight;}
     if(event.state==='reading')q('status').textContent='正在读取：'+event.path;
-    if(event.state==='done'||event.state==='error'||event.state==='cancelled'){setBusy(false);q('status').textContent=event.message||(event.state==='done'?'回复完成':'已停止');input.focus();}
+    if(event.state==='done'||event.state==='error'||event.state==='cancelled'){setBusy(false);q('status').textContent=event.message||(event.state==='done'?'回复完成':'已停止');if(pane.contains(document.activeElement))input.focus();}
   },close};
 }
