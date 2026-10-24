@@ -10,7 +10,7 @@ import {streamSimple} from '@earendil-works/pi-ai/compat';
 test('OpenCode 请求标识跨轮稳定，不伪装其他客户端，不向其他域发送',()=>{
   for(const baseUrl of ['https://opencode.ai/inference/go/openai/v1','https://opencode.ai/zen/go/v1']){
     const headers=providerHeaders({baseUrl},'isolated-session',{custom:'preserved'});
-    assert.equal(headers['x-opencode-session'],'isolated-session');assert.equal(headers['User-Agent'],'Reed/0.3.9');assert.equal(headers.custom,'preserved');
+    assert.equal(headers['x-opencode-session'],'isolated-session');assert.equal(headers['User-Agent'],'Reed/0.4.0');assert.equal(headers.custom,'preserved');
   }
   const original={custom:'test'};assert.equal(providerHeaders({baseUrl:'https://opencode.ai.example.com'},'test',original),original);
 });
@@ -25,7 +25,7 @@ test('OpenCode Go 三类协议预设使用官方模型发现端点，保存 Resp
       const provider=await store.save({template:template.id,baseUrl:template.baseUrl,protocol:template.protocol});
       await store.discover(provider.id,runtime);assert.equal(provider.models[0].id,'test-model');
     }
-    assert.ok(seen.every(r=>r.url==='https://opencode.ai/inference/go/v1/models'&&r.headers['x-opencode-session']&&r.headers['User-Agent']==='Reed/0.3.9'));
+    assert.ok(seen.every(r=>r.url==='https://opencode.ai/inference/go/v1/models'&&r.headers['x-opencode-session']&&r.headers['User-Agent']==='Reed/0.4.0'));
   }finally{await rm(root,{recursive:true,force:true});}
 });
 
@@ -36,5 +36,5 @@ test('实际 SDK 流请求保留自有客户端标识和会话头',async()=>{
     seen={url,headers:new Headers(init.headers)};
     return new Response('data: '+JSON.stringify({choices:[{index:0,delta:{content:'合成回复'},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n',{headers:{'content-type':'text/event-stream'}});
   }});
-  assert.equal((await stream.result()).stopReason,'stop');assert.equal(seen.headers.get('x-opencode-session'),'test-side-session');assert.equal(seen.headers.get('user-agent'),'Reed/0.3.9');
+  assert.equal((await stream.result()).stopReason,'stop');assert.equal(seen.headers.get('x-opencode-session'),'test-side-session');assert.equal(seen.headers.get('user-agent'),'Reed/0.4.0');
 });
