@@ -7,8 +7,12 @@ export function createPanelSplitter({workspace,pane,key,label,kind='browser',onC
   function split(value,save=false){
     ratio=Math.max(.25,Math.min(.75,value));
     workspace.style.setProperty('--browser-width',`calc((100% - 6px) * ${ratio})`);
-    workspace.style.setProperty('--workspace-chat-width',`${Math.max(0,(workspace.clientWidth-6)*(1-ratio))}px`);
-    workspace.classList.add('workspace-width-adjusted');
+    // Expansion owns chat geometry until the native carrier has finished moving.
+    // Calculating against the collapsed window here would shrink a 420px chat to 166px.
+    if(!workspace.classList.contains('workspace-transitioning')){
+      workspace.style.setProperty('--workspace-chat-width',`${Math.max(0,(workspace.clientWidth-6)*(1-ratio))}px`);
+      workspace.classList.add('workspace-width-adjusted');
+    }
     splitter.setAttribute('aria-valuemin','25');splitter.setAttribute('aria-valuemax','75');splitter.setAttribute('aria-valuenow',String(Math.round(ratio*100)));splitter.setAttribute('aria-valuetext',`资料占 ${Math.round(ratio*100)}%`);
     if(save)try{localStorage.setItem(key,String(ratio));}catch{}
     onChange();
