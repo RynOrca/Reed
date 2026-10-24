@@ -17,6 +17,8 @@
 .browser-actions{gap:8px;min-height:40px;padding:5px 10px;flex-wrap:wrap;background:var(--ds-bg-primary)}
 .browser-actions>button{flex:none;border-radius:5px;padding:6px 7px}
 .browser-actions>button:hover{background:var(--ds-bg-hover)}
+.browser-page-tools{display:flex;align-items:center;gap:8px;flex:none;margin-left:auto}
+.browser-page-tools>button{padding:6px 7px;border-radius:5px}.browser-page-tools>button:hover{background:var(--ds-bg-hover)}
 .browser-bookmark-strip{display:flex;align-items:center;gap:4px;flex:1 1 120px;min-width:min(120px,100%);max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;scrollbar-color:#85947b66 transparent}
 .browser-actions .browser-bookmark-item{flex:none;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px 10px;border-radius:5px;text-align:left}
 .browser-bookmark-item:hover,.browser-bookmark-item[aria-current=page]{background:var(--ds-bg-hover);color:var(--goal-accent)}
@@ -30,4 +32,5 @@
 .materials-toolbar .materials-status-trigger:hover{color:var(--mt-accent)}
 .materials-pane>.materials-status[data-important]{white-space:normal;overflow-wrap:anywhere;pointer-events:auto}
 @media(max-width:480px){.browser-actions{gap:3px;padding-inline:5px}.browser-actions>button{padding-inline:4px}.browser-actions .browser-bookmark-item{max-width:125px}}
+@container materials (max-width:520px){.materials-reading-tools :is([data-m=zoom-in],[data-m=zoom-out],[data-m=zoom]){display:none}.materials-toolbar{overflow-x:auto;scrollbar-width:none}}
 @media(prefers-reduced-motion:reduce){.workspace-splitter::after{transition:none}}

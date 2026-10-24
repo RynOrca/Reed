@@ -6,6 +6,7 @@ export function createBrowserMemory({pane,tauri,navigate,isReady,onBounds,onErro
  const dialog=document.createElement('dialog');dialog.className='browser-bookmarks';dialog.setAttribute('aria-label','浏览器书签');pane.append(dialog);
  const strip=document.createElement('nav');strip.className='browser-bookmark-strip';strip.setAttribute('aria-label','书签栏');actions.insertBefore(strip,star);actions.prepend(star);actions.insertBefore(listButton,strip);
  status.classList.add('browser-page-status');actions.before(status);
+ const pageTools=document.createElement('div');pageTools.className='browser-page-tools';pageTools.append(pane.querySelector('[data-browser=quote]'),pane.querySelector('[data-browser=read]'));actions.append(pageTools);
  strip.addEventListener('wheel',event=>{if(strip.scrollWidth<=strip.clientWidth||event.ctrlKey||event.shiftKey||Math.abs(event.deltaX)>Math.abs(event.deltaY))return;const before=strip.scrollLeft;strip.scrollLeft+=event.deltaY;if(strip.scrollLeft!==before)event.preventDefault();},{passive:false});
  let state={bookmarks:[],positions:{}},current=null,revision=0,sampling=false,restoring=false,navigationTimer;const roots=[];
  try{const saved=JSON.parse(localStorage.getItem(KEY));if(Array.isArray(saved?.bookmarks)&&saved.positions&&typeof saved.positions==='object')state=saved;}catch{}
