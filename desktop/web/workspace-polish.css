@@ -23,8 +23,14 @@
 .browser-actions .browser-bookmark-item{flex:none;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px 10px;border-radius:5px;text-align:left}
 .browser-bookmark-item:hover,.browser-bookmark-item[aria-current=page]{background:var(--ds-bg-hover);color:var(--goal-accent)}
 .browser-bookmark-empty{white-space:nowrap;opacity:.5;padding:6px;font-size:.9em}
-.browser-page-status{display:block;flex:none;padding:4px 12px;min-height:22px;max-height:30px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ds-text-muted);font:var(--reed-ui-size)/1.5 var(--reed-ui-font)}
-.browser-pane[data-state=error]>.browser-page-status{color:var(--ds-error,#bd766b)}
+/* Status never consumes a toolbar row. Show navigation feedback inside the empty/loading viewport. */
+.browser-page-status{position:absolute;left:10px;bottom:10px;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);pointer-events:none;color:var(--ds-text-muted);font:var(--reed-ui-size)/1.5 var(--reed-ui-font)}
+.browser-viewport:has(>.browser-empty:not([hidden]))>.browser-page-status:not(:empty){z-index:12;width:auto;height:auto;max-width:calc(100% - 20px);clip-path:none;padding:3px 7px;border-radius:4px;background:var(--ds-bg-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.browser-pane[data-state=error] .browser-page-status{color:var(--ds-error,#bd766b)}
+/* Title and metadata share one row, including narrow canvas panes. */
+.canvas-heading{flex:1;overflow:hidden}.canvas-heading>div{display:flex;align-items:center;gap:10px;flex:1;min-width:0;overflow:hidden}
+.canvas-heading h2{flex:0 1 auto;max-width:min(180px,60%);min-width:0}.canvas-meta{flex:1;min-width:0;margin-top:0;white-space:nowrap;overflow:hidden}
+.canvas-meta>[data-cv=counts]{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}.canvas-status{flex:0 1 auto}.canvas-status i{flex:none}
 .materials-pane>.materials-status{position:absolute;left:12px;right:12px;top:53px;z-index:27;max-width:calc(100% - 24px);padding:5px 9px;border:1px solid var(--mt-line);border-radius:6px;background:var(--mt-surface);font:var(--reed-ui-size)/1.5 var(--reed-ui-font);pointer-events:none}
 .materials-pane>.materials-status:empty{display:none}
 .materials-pane>.materials-status:not([data-important]){clip-path:inset(50%);width:1px;height:1px;padding:0;overflow:hidden}
