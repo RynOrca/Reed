@@ -21,7 +21,7 @@ fn choose_path(owner:isize,initial:Option<&str>,folder:bool)->Result<Option<Stri
         let dialog:IFileOpenDialog=CoCreateInstance(&FileOpenDialog,None,CLSCTX_INPROC_SERVER).map_err(|e|e.to_string())?;
         let flags=dialog.GetOptions().map_err(|e|e.to_string())?|FOS_FORCEFILESYSTEM|FOS_PATHMUSTEXIST|FOS_NOCHANGEDIR;
         dialog.SetOptions(if folder{flags|FOS_PICKFOLDERS}else{flags}).map_err(|e|e.to_string())?;
-        dialog.SetTitle(if folder{w!("选择文件夹")}else{w!("选择要预览的 HTML 文件")}).map_err(|e|e.to_string())?;
+        dialog.SetTitle(if folder{w!("选择文件夹")}else{w!("选择文件")}).map_err(|e|e.to_string())?;
         if let Some(path)=initial.filter(|path|std::path::Path::new(path).is_dir()){
             let item:windows::Win32::UI::Shell::IShellItem=windows::Win32::UI::Shell::SHCreateItemFromParsingName(&windows::core::HSTRING::from(path),None).map_err(|e|e.to_string())?;
             dialog.SetFolder(&item).map_err(|e|e.to_string())?;

@@ -1,7 +1,7 @@
 .side-chat-pane[hidden]{display:none!important}
 .side-chat-pane{position:absolute;top:62px;right:16px;bottom:16px;width:350px;display:flex;flex-direction:column;z-index:18;border:1px solid var(--rd-line,#85947b44);border-radius:10px;background:var(--ds-bg-primary);color:var(--ds-text);overflow:hidden;box-shadow:0 3px 16px #0000000a}
 .side-chat-pane>header{display:flex;align-items:center;justify-content:space-between;padding:14px 14px 10px;border-bottom:1px solid var(--rd-line,#85947b33)}
-.side-chat-pane strong{display:block;font-size:13px;font-weight:500}.side-chat-pane small{display:block;margin-top:5px;font-size:10px;opacity:.55}
+.side-chat-pane>header strong{display:block;font-size:13px;font-weight:500}.side-chat-pane>header small{display:block;margin-top:5px;font-size:10px;opacity:.55}
 .side-chat-messages{flex:1;min-height:0;overflow:auto;padding:16px;font-size:13px;line-height:1.8;overflow-wrap:anywhere}
 .side-chat-intro{font-size:12px;opacity:.6}.side-chat-user{white-space:pre-wrap;padding:9px 12px;margin:8px 0 14px;background:#85947b16;border-radius:7px}.side-chat-answer{margin-bottom:24px;font-size:13px!important;line-height:1.8!important}
 .side-chat-pane form{padding:12px;border-top:1px solid var(--rd-line,#85947b33)}.side-chat-pane textarea{box-sizing:border-box;width:100%;resize:vertical;min-height:64px;max-height:180px;border:0;background:transparent;color:inherit;outline:none;font:13px/1.7 var(--sans,system-ui)}
@@ -15,3 +15,14 @@
   .chat-shell.side-chat-open.outline-visible .message-navigation{right:5px}
 }
 #side-chat-button:disabled{opacity:.3;cursor:default}
+.side-chat-pane{box-sizing:border-box;max-width:calc(100% - 24px)}
+.chat-shell.side-chat-open.side-chat-overlay>.chat-body{margin-right:0}
+.chat-shell.side-chat-open.side-chat-overlay>.composer-dock{width:100%}
+.chat-shell.side-chat-overlay>.side-chat-pane{z-index:25}
+.chat-shell.side-chat-overlay>.side-chat-pane{opacity:.26;transition:opacity .18s ease}
+.chat-shell.side-chat-overlay>.side-chat-pane:hover,.chat-shell.side-chat-overlay>.side-chat-pane:focus-within{opacity:1}
+@media(prefers-reduced-motion:reduce){.chat-shell.side-chat-overlay>.side-chat-pane{transition:none}}
+@media(prefers-reduced-transparency:reduce){.chat-shell.side-chat-overlay>.side-chat-pane{opacity:1}}
+.side-chat-answer{min-width:0;word-break:normal}
+.side-chat-answer strong{font-weight:650}
+.side-chat-answer :is(pre,table,.reed-math-display){max-width:100%;overflow-x:auto}

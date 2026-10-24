@@ -6,6 +6,7 @@ import {renderLearningFailure} from '../web/learning-fallback.js';
 import {splitLearningLiterals,stripLearningMarkup,hasLearningMarkup,renderAssistantMarkdown,recoveredQuestionKey,saveRecoveredAnswer,loadRecoveredAnswers} from '../web/learning-literals.js';
 import {renderMarkdown} from '../web/markdown.js';
 import {restoreLatexCommands,normalizeLatexEscapes} from '../web/math.js';
+import {normalizeMathDelimiters} from '../web/math-auto.js';
 
 // 这些用例直接跑真实前端模块，因此需要一个够用的 DOM 桩：只实现渲染器用到的部分。
 class El {
@@ -38,6 +39,35 @@ const samples={
   fill:{...ident('fill'),type:'fill',title:'填空',label:'c_sum ='},
 };
 const find=(node,predicate)=>{if(!node||typeof node!=='object')return null;if(predicate(node))return node;for(const child of node.children||[]){const hit=find(child,predicate);if(hit)return hit;}return null;};
+
+test('字段名与已有数学、代码、链接不被自动公式识别破坏',()=>{
+  for(const source of [
+    '• score：相关度分数 • images：模型看不到图 • raw_content：太长了 • followup_questions：占位符',
+    '字段 raw_content 与 followup_questions 保持文字',
+    '已有 $x_i + y^2$，另一个 \\(a_1\\) 公式',
+    '已有 $$x_i + y^2$$ 与 \\[a_1\\] 公式',
+    '代码 `raw_content = x_i` 与 ``a_b``',
+    '**$x_i$**、_foo_、==重点 $x_i$==、++$y^2$++',
+    '[资料](https://example.test/raw_content?q=x_y)',
+    '路径 D:\\Books\\raw_content.pdf',
+    '$$\nx_i = y^2\n$$',
+    '\\[\nx_i = y^2\n\\]',
+    '````txt\n```\nraw_content = x_i\n````',
+  ])assert.equal(normalizeMathDelimiters(source),source,source);
+  const list=normalizeMathDelimiters('- x_i = y^2');
+  assert.ok(list.startsWith('- $'),'保留列表标记，只包公式');
+  const table=normalizeMathDelimiters('| 字段 | raw_content |');
+  assert.equal(table,'| 字段 | raw_content |','表格分隔符不可变成数学符号');
+});
+
+test('正文及学习块中误加数学分隔符的技术字段按代码显示',()=>{
+  const root=new El('div');renderMarkdown(root,'字段 $raw_content$，公式 $x_i + y^2$。');
+  assert.ok(find(root,n=>n.tagName==='CODE'&&n.textContent==='raw_content'));
+  assert.ok(find(root,n=>String(n.className).includes('reed-math')));
+  const view=renderLearning({...base,blocks:[{...ident('technical'),type:'callout',title:'字段',text:'$followup_questions$ 与 raw_content；公式 $$x_i + y^2$$。'}]});
+  assert.ok(find(view.root,n=>n.tagName==='CODE'&&n.textContent==='followup_questions'));
+  assert.ok(find(view.root,n=>String(n.className).includes('reed-math')));
+});
 
 test('图解失败与历史重放不显示占位或原始诊断',()=>{
   const root=new El('div');root.append(new El('button'));

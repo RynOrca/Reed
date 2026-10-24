@@ -40,3 +40,10 @@
 
 .reed-workspace.workspace-drawer{--resolved-chat-width:var(--workspace-chat-width)}
 .reed-workspace.workspace-drawer:not(.workspace-transitioning):is(.browser-expanded,.canvas-expanded){--resolved-chat-width:min(var(--workspace-chat-width),calc(100% - 120px))}
+
+.reed-workspace.window-fullscreen.workspace-drawer{--resolved-chat-width:clamp(300px,36vw,620px)}
+
+.browser-actions .browser-bookmark{padding:4px;flex:none}.browser-bookmark .ui-icon{width:15px;height:15px}.browser-bookmark[aria-pressed=true]{color:var(--goal-accent);background:var(--ds-bg-hover)}
+.browser-bookmarks{width:min(440px,calc(100% - 28px));max-height:70vh;overflow:auto;background:var(--ds-bg-primary);color:var(--ds-text);border:1px solid var(--goal-line);border-radius:12px;padding:18px}.browser-bookmarks::backdrop{background:#0006}.browser-bookmarks header,.browser-bookmarks>div{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:8px 0}.browser-bookmarks button{background:transparent;color:inherit;border:0;cursor:pointer}.browser-bookmarks>div{border-top:1px solid var(--goal-line)}.browser-bookmark-open{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;text-align:left;white-space:nowrap;padding:9px 0}.browser-bookmarks p{font-size:12px;line-height:1.8}
+
+.browser-bookmarks .confirm-remove{color:#b4544e;background:#b4544e12;border-radius:4px;padding:5px}

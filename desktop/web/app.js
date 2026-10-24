@@ -8,6 +8,11 @@ import {createOutline} from "./reading-outline.js";
 import {createConversationCanvas} from "./conversation-canvas.js";
 import {createBrowserWorkspace} from './browser-workspace.js';
 import {createSideChatPanel} from './side-chat.js';
+import {createReadingContext} from './reading-context.js';
+import {renderContextReference} from './context-reference.js';
+import {createMaterials} from './materials.js';
+import {installMaterialParsers} from './material-parsers.js';
+import {installAssessments} from './assessment.js';
 import {createWorkspacePanels} from './workspace-panels.mjs';
 import {createProjectPicker} from "./project-picker.js";
 import {createMessageNavigation} from "./message-navigation.js";
@@ -50,6 +55,7 @@ let turnErrorShown = false;
 let assistantRow = null;
 let thinkingRow = null;let thinkingContentSeen=false;
 let processTimeline=null,processStartedAt=null;
+let contextReportRow=null;
 const sessionDrafts=new Map();
 function processBody(){
   if(!processTimeline){
@@ -69,6 +75,7 @@ function finishProcess(outcome,timing={}){
   processTimeline.summary.textContent=duration+suffix;
   processTimeline.summary.hidden=false;processTimeline.root.open=false;
   processTimeline=null;processStartedAt=null;
+  contextReportRow=null;
 }
 let submitted = null;
 const toolRows = new Map();
@@ -106,7 +113,8 @@ $("goals-button").append(icon("book"));
 $("goals-button").onclick = () => goalsPanel.open();
 
 const projectPicker=createProjectPicker({button:$('workspace-button'),command,tauri,isRunning:()=>running,onError:errorRow,onSelect:()=>{closeHistory();prompt.focus();}});
-const sideChatPanel=createSideChatPanel({tauri});
+const readingContext=createReadingContext();
+const sideChatPanel=createSideChatPanel({tauri,readingContext});
 const workspacePanels=createWorkspacePanels({prepare:()=>tauri.core.invoke('workspace_geometry'),onExpanded:()=>tauri.core.invoke('set_canvas_window',{expanded:true,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:320}),onInterrupt:()=>{void tauri.core.invoke('cancel_canvas_transition').catch(errorRow);},onEmpty:()=>tauri.core.invoke('set_canvas_window',{expanded:false,chatWidth:document.querySelector('.chat-shell').getBoundingClientRect().width,durationMs:matchMedia('(prefers-reduced-motion: reduce)').matches?0:213})});
 const canvasPanel = createConversationCanvas({command,tauri,prompt,panels:workspacePanels,isRunning:()=>running,reportError:errorRow,onUnavailable:()=>{
   const role=roles.find(item=>item.id===activeRoleId);
@@ -123,7 +131,7 @@ const canvasPanel = createConversationCanvas({command,tauri,prompt,panels:worksp
   row.animate([{backgroundColor:"var(--goal-accent-soft)"},{backgroundColor:"transparent"}],{duration:1600});
 }});
 createMessageNavigation({messages,transcript,onNavigate:row=>{followLatest=false;outlinePanel.selectTurn(row);}});
-const browserPanel=createBrowserWorkspace({tauri,command,prompt,panels:workspacePanels,onError:error=>errorRow(String(error.message||error)),
+const browserPanel=createBrowserWorkspace({tauri,command,prompt,onPdf:path=>materialsPanel.import(path),panels:workspacePanels,onError:error=>errorRow(String(error.message||error)),
   onQuote:({text,context,source,url,action})=>{
     const quote=`引用「${source}」\n来源：${url}\n\n${text.split('\n').map(line=>'> '+line).join('\n')}${context&&context!==text?'\n\n所在段落：'+context:''}${action?'\n\n'+action:''}`;
     prompt.value+=(prompt.value.trim()?'\n\n':'')+quote;prompt.dispatchEvent(new Event('input'));
@@ -138,6 +146,9 @@ const browserPanel=createBrowserWorkspace({tauri,command,prompt,panels:workspace
     renderAttachments();prompt.value+=(prompt.value.trim()?'\n\n':'')+`请阅读当前网页「${page.title}」。正文已附在“网页阅读.md”中${images.length?`，另附 ${images.length} 张真实页面截图`:''}。${page.coverage.complete?'':'本次尚未覆盖全部长页或嵌入内容，请通过 browser 的 read_page 按需继续读取。'}`;prompt.dispatchEvent(new Event('input'));
   },
 });
+const materialsPanel=createMaterials({command,tauri,panels:workspacePanels,reading:readingContext,sessionId:()=>activeSessionId,onError:error=>errorRow(String(error.message||error))});
+installMaterialParsers(materialsPanel,{tauri,onError:error=>errorRow(String(error.message||error))});
+installAssessments(materialsPanel,{tauri,sessionId:()=>activeSessionId,onError:error=>errorRow(String(error.message||error))});
 transcript.addEventListener("scroll",()=>{followLatest=transcript.scrollHeight-transcript.clientHeight-transcript.scrollTop<65;},{passive:true});
 
 function status(text,explicit) {
@@ -591,6 +602,7 @@ function onEvent(event) {
   if(response.type==="ack"&&response.stale){stopping=false;$("stop-button").disabled=false;status(running?"这一轮已结束，正在等待 Agent 同步…":"已停止");}
   switch (response.type) {
     case 'browser_state':browserPanel.event(response);break;
+    case 'practice_paper':if(response.sessionId===activeSessionId)void materialsPanel.showPaper(response.paper).catch(errorRow);break;
     case 'restore_user':{
       const message=response.message||{};const content=messageRow('user',(message.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n'));
       attachmentPreview(content,(message.content||[]).filter(b=>b.type==='image').map(b=>({...b,kind:'image'})));break;
@@ -624,11 +636,14 @@ function onEvent(event) {
       $("model-label").textContent = response.modelName || response.model || "选择模型";
       $("model-button").title = response.model || "选择模型";
       if(activeSessionId!==(response.sessionId||"")){
+        readingContext.session(response.sessionId||'');
+        sideChatPanel.close();
         sessionDrafts.set(activeSessionId,{text:prompt.value,attachments:[...attachments]});
         const draft=sessionDrafts.get(response.sessionId);prompt.value=draft?.text||'';attachments=draft?.attachments||[];renderAttachments();
         submitted=null;recoveredPending=null;queuedTexts.clear();activePromptId=null;cancelledTurnId=null;setRunning(false);learningCandidate=null;updateLearningAvailability();
       }
       activeSessionId = response.sessionId || "";
+      materialsPanel.session();
       activeSessionName = response.sessionName || "";
       void canvasPanel.session(activeSessionId,response.canvasEnabled===true,response.canvasOpen===true,activeSessionName,response.learningModeEnabled===true||response.learningGoalsEnabled===true);
       updateModelChip(response);$("compaction-state").textContent=response.autoCompaction?"自动压缩已开启":"自动压缩已关闭";
@@ -686,6 +701,10 @@ function onEvent(event) {
       errorRow(response.message||"模型服务未结束上一条请求，已恢复本地输入。");
       break;
     case "request_phase": if(running&&!stopping)status(requestStatus(response,recoveryStatus));break;
+    case 'context_sources': {
+      if(!contextReportRow){contextReportRow=document.createElement('details');contextReportRow.className='context-reference-report';processBody().append(contextReportRow);}
+      renderContextReference(contextReportRow,response);break;
+    }
     case "model_queue": if (running&&!stopping) status((recoveryStatus?recoveryStatus+'；':'')+(response.state==='waiting'?'正在等待模型服务空闲…':'正在准备模型请求…')); break;
     case "delta": {
       recoveryStatus = "";
@@ -820,17 +839,18 @@ document.addEventListener('click',event=>{
 });
 document.addEventListener("click", event => {
   const link = event.target.closest?.("a"); if (!link) return;
+  if(link.dataset.material){event.preventDefault();const match=/^reed-material:([a-f0-9-]{36})#page=([1-9][0-9]*)$/i.exec(link.dataset.material);if(match)void materialsPanel.open(match[1],Number(match[2])-1).catch(errorRow);return;}
   if(/^https?:/i.test(link.getAttribute("href")||"")){event.preventDefault();void browserPanel.open(link.href).catch(e=>errorRow(String(e.message||e)));return;}
   if(!link.dataset.localFile)return;event.preventDefault();
-  void command("resolve_file", { path: link.dataset.localFile }, true).then(r => /\.html?$/i.test(r.path)?browserPanel.open(r.path):tauri.core.invoke("open_local_file", { path: r.path })).catch(e => errorRow(String(e.message || e)));
+  void command("resolve_file", { path: link.dataset.localFile }, true).then(r => /\.html?$/i.test(r.path)?browserPanel.open(r.path):/\.pdf$/i.test(r.path)?materialsPanel.import(r.path):tauri.core.invoke("open_local_file", { path: r.path })).catch(e => errorRow(String(e.message || e)));
 });
 async function command(type, args = {}, awaitReply = false) {
   if(['open_session','new_session','select_role','change_workspace','save_role','set_role_learning'].includes(type))await canvasPanel.flush();
   if (!tauri) return Promise.reject(new Error("需要在 Tauri 桌面窗口中运行"));
   const id = `${commandPrefix}${++sequence}`;
   if(type==='prompt')activePromptId=id;
-  const response = awaitReply ? new Promise((resolve, reject) => { const timer = setTimeout(() => { pending.delete(id); reject(new Error("操作超时，请检查 Agent 连接")); }, type==="compact"?180000:type==="browser_read"?120000:type?.startsWith("browser_")?60000:type==="abort"?15000:30000); pending.set(id, { resolve, reject, timer }); }) : Promise.resolve();
-  tauri.core.invoke("agent_command", { command: { id, type, sessionId:activeSessionId,...args } }).catch((error) => {
+  const response = awaitReply ? new Promise((resolve, reject) => { const timer = setTimeout(() => { pending.delete(id); reject(new Error("操作超时，请检查 Agent 连接")); }, type==="materials_outline_generate"?900000:type?.startsWith("materials_paper_")?240000:type==="compact"?180000:type==="materials_ocr"||type==="materials_parse"?120000:type==="browser_read"?120000:type?.startsWith("browser_")?60000:type==="abort"?15000:30000); pending.set(id, { resolve, reject, timer }); }) : Promise.resolve();
+  tauri.core.invoke("agent_command", { command: { id, type, sessionId:activeSessionId,...(['prompt','queue_message'].includes(type)?{readingContext:readingContext.snapshot()}:{}),...args } }).catch((error) => {
     if (pending.has(id)) { clearTimeout(pending.get(id).timer); pending.get(id).reject(error); pending.delete(id); }
     else onEvent({payload:{type:'error',id,commandType:type,message:String(error)}});
   });
@@ -1013,3 +1033,7 @@ $("activity-list").onclick = event => { const head = event.target.closest(".tool
 let activityUpdate; new MutationObserver(()=>{if(!$("activity-dialog").open)return;clearTimeout(activityUpdate);activityUpdate=setTimeout(renderActivity,150);}).observe(messages,{subtree:true,childList:true,characterData:true});
 $("clear-queue").onclick = () => { void command("clear_queue"); queuedTexts.clear(); };
 windowHandles(tauri);
+
+function showFullscreen(value){const button=$('fullscreen-button');button.setAttribute('aria-pressed',String(value));button.title=value?'还原窗口':'最大化至全屏';button.setAttribute('aria-label',button.title);button.replaceChildren(icon(value?'restore':'fullscreen'));document.querySelector('.reed-workspace').classList.toggle('window-fullscreen',value);window.dispatchEvent(new Event('resize'));}
+$('fullscreen-button').onclick=async()=>{const button=$('fullscreen-button');button.disabled=true;try{showFullscreen(await tauri.core.invoke('window_fullscreen',{fullscreen:button.getAttribute('aria-pressed')!=='true'}));}catch(e){errorRow(String(e));}finally{button.disabled=false;}};
+if(tauri)void tauri.core.invoke('window_fullscreen').then(showFullscreen).catch(console.error);

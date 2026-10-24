@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self'; font-src 'self' data: blob:; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost;">
   <title>Reed 苇</title>
   <!-- 前端不做打包，裸模块说明符靠 import map 解析到本地 vendor（见 update.js）。 -->
   <script type="importmap">
@@ -15,7 +15,7 @@
   </script>
   <link rel="stylesheet" href="./style.css">
   <script type="module" src="./app.js"></script>
-<link rel="stylesheet" href="./role-skills.css"><link rel="stylesheet" href="./brand.css"><link rel="stylesheet" href="./learning-workspace.css"><link rel="stylesheet" href="./conversation-canvas.css"><link rel="stylesheet" href="./project-picker.css"><link rel="stylesheet" href="./chat-typography.css"><link rel="stylesheet" href="./learning-palette.css"><link rel="stylesheet" href="./learning-blocks.css"><link rel="stylesheet" href="./math.css"><link rel="stylesheet" href="./reed-redesign.css"><link rel="stylesheet" href="./browser-workspace.css"><link rel="stylesheet" href="./side-chat.css"></head>
+<link rel="stylesheet" href="./role-skills.css"><link rel="stylesheet" href="./brand.css"><link rel="stylesheet" href="./learning-workspace.css"><link rel="stylesheet" href="./conversation-canvas.css"><link rel="stylesheet" href="./project-picker.css"><link rel="stylesheet" href="./chat-typography.css"><link rel="stylesheet" href="./learning-palette.css"><link rel="stylesheet" href="./learning-blocks.css"><link rel="stylesheet" href="./math.css"><link rel="stylesheet" href="./reed-redesign.css"><link rel="stylesheet" href="./browser-workspace.css"><link rel="stylesheet" href="./side-chat.css"><link rel="stylesheet" href="./context-reference.css"><link rel="stylesheet" href="./materials.css"><link rel="stylesheet" href="./workspace-polish.css"><link rel="stylesheet" href="./unified-typography.css"></head>
 <body>
 <div id="startup" role="status" aria-label="Reed 正在启动"><img class="brand-icon" data-brand-icon src="./assets/branding/glass-dark.png" alt="苇"><h1>Reed 苇</h1><p>轻如一苇，学海可航。</p><p class="startup-version" id="startup-version"></p><div class="startup-progress" aria-hidden="true"></div></div>
   <svg class="icon-sprite" aria-hidden="true" focusable="false">
@@ -43,7 +43,7 @@
         <button id="goals-button" class="icon-button" type="button" title="学习目标" aria-label="学习目标" hidden></button>
         <button id="activity-button" class="icon-button" type="button" title="工具与思考记录" aria-label="工具与思考记录"></button>
         <button id="settings-button" class="icon-button" type="button" title="设置" aria-label="设置"><svg><use href="#icon-settings"/></svg></button>
-        <button id="pin-button" class="icon-button" type="button" title="窗口置顶" aria-label="窗口置顶" aria-pressed="false"></button><button id="hide-button" class="icon-button" type="button" title="隐藏到托盘" aria-label="隐藏到托盘"></button>
+        <button id="fullscreen-button" class="icon-button" type="button" title="最大化至全屏" aria-label="最大化至全屏" aria-pressed="false"></button><button id="pin-button" class="icon-button" type="button" title="窗口置顶" aria-label="窗口置顶" aria-pressed="false"></button><button id="hide-button" class="icon-button" type="button" title="隐藏到托盘" aria-label="隐藏到托盘"></button>
 
 
       </div>

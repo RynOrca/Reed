@@ -2,5 +2,5 @@
 export function providerHeaders(model,sessionId,headers={}) {
   let url;try{url=new URL(model?.baseUrl);}catch{return headers;}
   if(url.hostname!=='opencode.ai')return headers;
-  return {...headers,'User-Agent':'Reed/0.3.9','x-opencode-session':sessionId};
+  return {...headers,'User-Agent':'Reed/0.4.0','x-opencode-session':sessionId};
 }

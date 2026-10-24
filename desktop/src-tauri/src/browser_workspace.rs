@@ -35,6 +35,7 @@ fn ensure(app: &tauri::AppHandle, surface: &str) -> Result<Value, String> {
         .visible(false).skip_taskbar(true).decorations(false).shadow(false).resizable(false).inner_size(1280.,800.)
         .data_directory(profile)
         .initialization_script(if selection {include_str!("browser_selection.js")}else{""})
+        .initialization_script(if selection {include_str!("browser_scrollbars.js")}else{""})
         .on_document_title_changed(move |_,title|{if selection{let _=titles.emit_to("main","browser-title",json!({"title":title}));}})
         .on_new_window(|_,_|tauri::webview::NewWindowResponse::Deny)
         .on_navigation(move |url|{
@@ -57,7 +58,7 @@ fn ensure(app: &tauri::AppHandle, surface: &str) -> Result<Value, String> {
                 let host=app.clone();
                 view.on_window_event(move |event|{
                     if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop{paths,..})=event{
-                        if let Some(path)=paths.iter().find(|path|path.extension().and_then(|s|s.to_str()).map(|ext|["html","htm"].contains(&ext.to_lowercase().as_str())).unwrap_or(false)){
+                        if let Some(path)=paths.iter().find(|path|path.extension().and_then(|s|s.to_str()).map(|ext|["html","htm","pdf","pptx"].contains(&ext.to_lowercase().as_str())).unwrap_or(false)){
                             let _=host.emit_to("main","browser-drop",json!({"path":path}));
                         }
                     }

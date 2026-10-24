@@ -265,9 +265,9 @@ export class MemoryStore {
   }
   workContext(query,scope=''){return this.workMatches(query,scope).map(i=>`[${i.id}] ${i.title}：${i.body.slice(0,700)}`).join("\n").slice(0,2600);}
   recallNotes(query,{review=false}={}){if(!this.state.enabled.l2)return [];return this.state.notes.filter(n=>(review||!(n.reviewOnly||reviewOnly(n.title+" "+n.body)))&&score(query,n.title+" "+n.body)>0).sort((a,b)=>score(query,b.title+" "+b.body)-score(query,a.title+" "+a.body)).slice(0,3);}
-  async context(query, currentSessionId, {review=false}={}) {
+  async context(query, currentSessionId, {review=false,relevantOnly=false}={}) {
     const parts=[];
-    if(this.state.enabled.l1){const facts=this.state.facts.filter(f=>!isLearningGoal(f.key)&&(review||!reviewOnly(f.key+" "+f.content))).map((f,index)=>({f,index,rank:score(query,f.key+' '+f.content)})).sort((a,b)=>b.rank-a.rank||b.index-a.index).slice(0,4).map(({f})=>f);if(facts.length)parts.push("背景与偏好：\n"+facts.map(f=>`${f.key}：${f.content.slice(0,120)}`).join("\n"));}
+    if(this.state.enabled.l1){const facts=this.state.facts.filter(f=>!isLearningGoal(f.key)&&(review||!reviewOnly(f.key+" "+f.content))).map((f,index)=>({f,index,rank:score(query,f.key+' '+f.content)})).filter(item=>!relevantOnly||item.rank>0).sort((a,b)=>b.rank-a.rank||b.index-a.index).slice(0,4).map(({f})=>f);if(facts.length)parts.push("背景与偏好：\n"+facts.map(f=>`${f.key}：${f.content.slice(0,120)}`).join("\n"));}
     const notes=this.recallNotes(query,{review});if(notes.length)parts.push("相关资料索引（用 recall_memory 读取）："+notes.map(n=>n.title).join("、"));
     // Raw cross-session messages can reintroduce reviews and superseded facts.
     // They remain on disk, but are never automatically injected.

@@ -7,7 +7,17 @@ const CJK = /[\u3400-\u9fff\uf900-\ufaff]/;
 const MATH_CHAR = /[A-Za-z0-9\\^_=<>≤≥≠≈×·⋅→⇒∈∉∑∏√∞∫±²³¹⁻⁰⁴⁵⁶⁷⁸⁹*/|+\-(){}\[\]]/;
 const SIGNAL = /[\\^_=<>≤≥≠≈×·⋅→⇒∈∉∑∏√∞∫±*/|]/;
 const SUPER = /[²³¹⁻⁰⁴⁵⁶⁷⁸⁹]/;
-const SKIP = "```[\\s\\S]*?(?:```|$)|`[^`\\n]*`";
+// 技术字段不是变量下标；c_1、x_i、x_{offset} 仍可作为公式。
+export const isCodeIdentifier = text => /^[A-Za-z][A-Za-z0-9]{1,}(?:_[A-Za-z][A-Za-z0-9]{1,})+$/.test(String(text).trim());
+const SKIP = [
+  /`+[^`\n]*`+/, /\$\$[^\n]*?(?:\$\$|$)/, /\$(?:\\.|[^$\n])+\$/,
+  /\\\([^\n]*?\\\)/, /\\\[[^\n]*?\\\]/,
+  /!?\[[^\]\n]*\]\([^\n]*?\)/, /https?:\/\/[^\s]+/, /[A-Za-z]:[\\/][^\s]+/,
+  /[A-Za-z][A-Za-z0-9]+(?:_[A-Za-z][A-Za-z0-9]+)+/, /[A-Za-z0-9_-]+\.[A-Za-z]{2,8}\b/,
+  /<\/?[A-Za-z][^>\n]*>/, /\*\*[^\n]+?\*\*/, /__[^\n]+?__/,
+  /(?<![A-Za-z0-9])\*[^*\n]+\*(?![A-Za-z0-9])/, /(?<![A-Za-z0-9])_[^_\n]+_(?![A-Za-z0-9])/,
+  /==[^\n]+?==/, /\+\+[^\n]+?\+\+/,
+].map(pattern=>pattern.source).join('|');
 const TOKEN = "[A-Za-z]+|[0-9]+|[\\^_=<>≤≥≠≈×·⋅→⇒∈∉∑∏√∞∫±²³¹⁻⁰⁴⁵⁶⁷⁸⁹+*/|\\-]|(?<=[A-Za-z0-9\\^_=<>≤≥≠≈×·⋅→⇒∈∉∑∏√∞∫±²³¹⁻⁰⁴⁵⁶⁷⁸⁹])[()\\[\\]{}]|\\S";
 const signalsIn = text => (text.match(new RegExp(SIGNAL.source, "g")) || []).length;
 // 字母数字混排（c1c2c3、n2）算公式。
@@ -29,7 +39,7 @@ export function formulaDominant(line) {
 // 行内片段是否值得单独包成公式。
 function runLike(text) {
   const trimmed = String(text || "").trim();
-  if (!trimmed || CJK.test(trimmed) || trimmed.startsWith("`") || trimmed.startsWith("$")) return false;
+  if (!trimmed || CJK.test(trimmed) || trimmed.startsWith("`") || trimmed.startsWith("$") || isCodeIdentifier(trimmed)) return false;
   const letters = (trimmed.match(/[A-Za-z]/g) || []).length;
   const signals = signalsIn(trimmed) + (SUPER.test(trimmed) ? 1 : 0);
   const parens = /[(){}[\]]/.test(trimmed);
@@ -44,10 +54,12 @@ function lineSpans(line) {
   const flush = () => { if (current) { spans.push(current); current = null; } };
   for (let match = pattern.exec(line); match; match = pattern.exec(line)) {
     const token = match[0], start = match.index, end = start + token.length;
-    if (token.startsWith("`")) { flush(); spans.push({ kind: "protected", start, end }); cursor = end; continue; }
+    if (new RegExp(`^(?:${SKIP})$`).test(token)) { flush(); spans.push({ kind: "protected", start, end }); cursor = end; continue; }
     // 空白也并入当前片段：公式里常有空格（c = g^m r^n），但不能跨越中文。
     if (/^\s*$/.test(token) && current) { current.end = end; cursor = end; continue; }
     if (CJK.test(token)) { flush(); spans.push({ kind: "text", start, end }); cursor = end; continue; }
+    // Markdown 标记、句子标点和普通英文不并入数学片段。
+    if ((/^[A-Za-z]{4,}$/.test(token) && !/^(?:sqrt|frac|lambda|equiv|pmod|cdot|times|mathrm|mathbb|lcm)$/.test(token)) || /^[•:;,.!?：；，。！？#`$|]$/.test(token)) { flush(); spans.push({kind:'text',start,end}); cursor=end; continue; }
     if (current) current.end = end;
     else current = { kind: "math", start, end };
     cursor = end;
@@ -58,14 +70,20 @@ function lineSpans(line) {
 export function wrapUndelimitedMath(text) {
   const source = String(text || "");
   if (!source.trim()) return source;
-  let fence = false;
+  let fence = null, displayMath = null;
   return source.split(/(\r?\n)/).map(line => {
     if (/^\s*$/.test(line)) return line;
     // 围栏代码块、缩进代码：原样保留，绝不插入定界符。
-    const marker = /^\s*(?:```|~~~)/.test(line);
-    if (marker) { fence = !fence; return line; }
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (marker) { if(!fence)fence=marker[1];else if(marker[1][0]===fence[0]&&marker[1].length>=fence.length)fence=null; return line; }
     if (fence || /^(?: {4,}|\t)/.test(line)) return line;
-    if (formulaDominant(line)) return "$" + line.trim() + "$";
+    if(displayMath){if(line.includes(displayMath))displayMath=null;return line;}
+    const display=/^\s*(\$\$|\\\[)/.exec(line);
+    if(display){const close=display[1]==='$$'?'$$':'\\]';if(!line.slice(display[0].length).includes(close))displayMath=close;return line;}
+    const prefix=/^(\s*(?:(?:[-+*]|\d+[.)])\s+|>\s*))/.exec(line);
+    if(prefix)return prefix[1]+wrapUndelimitedMath(line.slice(prefix[1].length));
+    // 已有公式/代码/链接不参与整行识别，列表与表格结构也不能吞进公式。
+    if (!new RegExp(SKIP).test(line) && !/^\s*(?:[-+*]|\d+[.)]|>)/.test(line) && !line.includes('|') && formulaDominant(line)) return "$" + line.trim() + "$";
     const spans = lineSpans(line);
     let out = "", cursor = 0;
     for (const span of spans) {

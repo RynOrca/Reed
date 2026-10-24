@@ -35,7 +35,7 @@ export function createConversationCanvas({command,tauri,prompt,panels,isRunning,
     const total=workspace.clientWidth;
     if(!total)return;
     const next=clampSplit(width);
-    workspace.style.setProperty('--canvas-chat-width',`${next}px`);
+    workspace.classList.add('workspace-width-adjusted');workspace.style.setProperty('--canvas-chat-width',`${next}px`);
     workspace.style.setProperty('--workspace-chat-width',`${next}px`);
     const percent=Math.round(next/total*100);
     splitter.setAttribute('aria-valuenow',String(percent));
@@ -189,6 +189,9 @@ export function createConversationCanvas({command,tauri,prompt,panels,isRunning,
   q('plus').onclick=()=>zoom(scale*1.15);q('minus').onclick=()=>zoom(scale/1.15);q('zoom').onclick=()=>zoom(1);q('fit').onclick=()=>fit();q('minimap').onclick=()=>fit();clear.onclick=clearReference;
   const viewport=q('viewport');viewport.addEventListener('wheel',e=>{if(e.target.closest('button'))return;e.preventDefault();const rect=viewport.getBoundingClientRect();if(!e.ctrlKey&&(e.deltaX||Math.abs(e.deltaY)<30)){pan={x:pan.x-e.deltaX,y:pan.y-e.deltaY};transform();saveView();}else zoom(scale*Math.exp(-e.deltaY*.0014),e.clientX-rect.left,e.clientY-rect.top);},{passive:false});
   viewport.addEventListener('focusin',event=>{
+    // Pointer focus must not move the pressed button between down and up.
+    // Keyboard navigation still brings the focused card into the viewport.
+    if(!event.target.matches(':focus-visible'))return;
     const card=event.target.closest?.('.canvas-node');if(!opened||!card||gesture)return;
     const area=viewport.getBoundingClientRect(),rect=card.getBoundingClientRect(),pad=16;
     const dx=rect.left<area.left+pad?area.left+pad-rect.left:rect.right>area.right-pad?area.right-pad-rect.right:0;

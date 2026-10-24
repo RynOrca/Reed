@@ -6,6 +6,7 @@ const paths={
   pin:["M9 3h6l-1 6 4 4v2H6v-2l4-4-1-6Z","M12 15v7"],
   archive:["M5 4h14a2 2 0 0 1 2 2v2H3V6a2 2 0 0 1 2-2Z","M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8","M9 12h6"],
   new:["M12 5v14M5 12h14"],history:["M3 11a9 9 0 1 1 2.8 7M3 4v7h7","M12 7v5l3 2"],spark:["m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z"],
+  fullscreen:["M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5"],restore:["M3 8h5V3M21 8h-5V3M16 21v-5h5M8 21v-5H3"],bookmark:["M6 3h12v18l-6-4-6 4Z"],
   settings:["M4 7h16M4 17h16","M8 4v6M16 14v6"],hide:["M6 12h12"],close:["m6 6 12 12M18 6 6 18"],
   role:["M20 21v-2a5 5 0 0 0-5-5H9a5 5 0 0 0-5 5v2","M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"],
   activity:["M5 4h14v16H5Z","M9 8h6M9 12h6M9 16h3"],folder:["M3 7V5h6l2 2h10v13H3Z"],send:["M12 19V5m-6 6 6-6 6 6"],stop:["M7 7h10v10H7Z"],

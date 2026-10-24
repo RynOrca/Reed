@@ -1,0 +1,42 @@
+/* Shared panel handle: the same hairline and rounded grip as the canvas. */
+.workspace-splitter[hidden]{display:none!important}
+.reed-workspace.browser-expanded>.workspace-splitter:not([hidden]){display:block!important;position:relative;grid-column:2;grid-row:1;min-width:6px;width:6px;background:transparent;cursor:col-resize;touch-action:none;z-index:15}
+.workspace-splitter::before{content:'';position:absolute;inset:0 auto 0 50%;width:1px;transform:translateX(-50%);background:rgba(38,54,41,.14)}
+.workspace-splitter::after{content:'';position:absolute;top:50%;left:50%;width:4px;height:34px;transform:translate(-50%,-50%);border-radius:4px;background:#466a4f;opacity:.32;transition:height .16s ease,opacity .16s ease}
+:root[data-theme=dark] .workspace-splitter::before{background:rgba(239,233,218,.12)}
+:root[data-theme=dark] .workspace-splitter::after{background:#b4cdad;opacity:.28}
+.workspace-splitter:hover::after,.workspace-splitter:focus-visible::after,.panel-resizing .workspace-splitter::after{height:54px;opacity:.9}
+.workspace-splitter:focus-visible{outline:2px solid #b4cdad;outline-offset:-2px}
+.panel-resizing{cursor:col-resize;user-select:none}.panel-resizing>.browser-pane{pointer-events:none}
+.reed-workspace.workspace-drawer.browser-expanded>.workspace-splitter:not([hidden]){position:absolute;inset:0 var(--resolved-chat-width,var(--workspace-chat-width)) 0 auto}
+.reed-workspace.workspace-drawer[data-drawer-side=right]>.workspace-splitter{left:var(--resolved-chat-width,var(--workspace-chat-width))!important;right:auto!important}
+.reed-workspace.window-fullscreen.workspace-drawer.workspace-width-adjusted{--resolved-chat-width:min(var(--workspace-chat-width),calc(100% - 120px))}
+@media(max-width:720px){.reed-workspace.browser-expanded{grid-template-columns:minmax(0,var(--browser-width,60%)) 6px minmax(0,1fr)}.browser-expanded>.chat-shell{grid-column:3}.browser-actions{flex-wrap:nowrap}.browser-expanded>.browser-pane{display:flex}.browser-actions>[role=status]{flex-basis:auto}}
+/* Footer content moves into the toolbar/status area, so the page reaches the edge. */
+.browser-footer,.materials-footer{display:none!important}
+.browser-actions{gap:8px;min-height:40px;padding:5px 10px;flex-wrap:wrap;background:var(--ds-bg-primary)}
+.browser-actions>button{flex:none;border-radius:5px;padding:6px 7px}
+.browser-actions>button:hover{background:var(--ds-bg-hover)}
+.browser-page-tools{display:flex;align-items:center;gap:8px;flex:none;margin-left:auto}
+.browser-page-tools>button{padding:6px 7px;border-radius:5px}.browser-page-tools>button:hover{background:var(--ds-bg-hover)}
+.browser-bookmark-strip{display:flex;align-items:center;gap:4px;flex:1 1 120px;min-width:min(120px,100%);max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;scrollbar-color:#85947b66 transparent}
+.browser-actions .browser-bookmark-item{flex:none;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px 10px;border-radius:5px;text-align:left}
+.browser-bookmark-item:hover,.browser-bookmark-item[aria-current=page]{background:var(--ds-bg-hover);color:var(--goal-accent)}
+.browser-bookmark-empty{white-space:nowrap;opacity:.5;padding:6px;font-size:.9em}
+/* Status never consumes a toolbar row. Show navigation feedback inside the empty/loading viewport. */
+.browser-page-status{position:absolute;left:10px;bottom:10px;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);pointer-events:none;color:var(--ds-text-muted);font:var(--reed-ui-size)/1.5 var(--reed-ui-font)}
+.browser-viewport:has(>.browser-empty:not([hidden]))>.browser-page-status:not(:empty){z-index:12;width:auto;height:auto;max-width:calc(100% - 20px);clip-path:none;padding:3px 7px;border-radius:4px;background:var(--ds-bg-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.browser-pane[data-state=error] .browser-page-status{color:var(--ds-error,#bd766b)}
+/* Title and metadata share one row, including narrow canvas panes. */
+.canvas-heading{flex:1;overflow:hidden}.canvas-heading>div{display:flex;align-items:center;gap:10px;flex:1;min-width:0;overflow:hidden}
+.canvas-heading h2{flex:0 1 auto;max-width:min(180px,60%);min-width:0}.canvas-meta{flex:1;min-width:0;margin-top:0;white-space:nowrap;overflow:hidden}
+.canvas-meta>[data-cv=counts]{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}.canvas-status{flex:0 1 auto}.canvas-status i{flex:none}
+.materials-pane>.materials-status{position:absolute;left:12px;right:12px;top:53px;z-index:27;max-width:calc(100% - 24px);padding:5px 9px;border:1px solid var(--mt-line);border-radius:6px;background:var(--mt-surface);font:var(--reed-ui-size)/1.5 var(--reed-ui-font);pointer-events:none}
+.materials-pane>.materials-status:empty{display:none}
+.materials-pane>.materials-status:not([data-important]){clip-path:inset(50%);width:1px;height:1px;padding:0;overflow:hidden}
+.materials-toolbar .materials-status-trigger{flex:none;width:24px;height:28px;padding:3px;color:var(--mt-muted)}
+.materials-toolbar .materials-status-trigger:hover{color:var(--mt-accent)}
+.materials-pane>.materials-status[data-important]{white-space:normal;overflow-wrap:anywhere;pointer-events:auto}
+@media(max-width:480px){.browser-actions{gap:3px;padding-inline:5px}.browser-actions>button{padding-inline:4px}.browser-actions .browser-bookmark-item{max-width:125px}}
+@container materials (max-width:520px){.materials-reading-tools :is([data-m=zoom-in],[data-m=zoom-out],[data-m=zoom]){display:none}.materials-toolbar{overflow-x:auto;scrollbar-width:none}}
+@media(prefers-reduced-motion:reduce){.workspace-splitter::after{transition:none}}

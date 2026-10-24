@@ -3,6 +3,8 @@ import { access, mkdir, readFile, writeFile, realpath, stat, rm } from "node:fs/
 import { join, dirname, resolve, relative, extname } from "node:path";
 import { createServer } from "node:http";
 import { randomUUID, createHash } from "node:crypto";
+import {createReadStream} from 'node:fs';
+import {pipeline} from 'node:stream/promises';
 
 const MAX_IMAGE_BYTES=5*1024*1024, MAX_PIXELS=12*1024*1024;
 export function captureOptions(input) {
@@ -17,6 +19,9 @@ export function captureOptions(input) {
 // Own, isolated Edge profile; starts only when the agent uses the browser.
 export class AgentBrowser {
   constructor(dir,{scope,native,surface='agent'}={}) { this.dir=dir; this.scope=scope; this.previewServers=new Map();this.native=native;this.surface=surface;this.nativeReady=false;this.starting=null;this.startFailure=null; this.sequence=0; this.pending=new Map(); this.viewport={width:1280,height:800}; this.operations=Promise.resolve(); this.generation=0; this.queued=0; }
+  localPath(url){
+    try{const u=new URL(url);for(const [root,entry] of this.previewServers){const base=new URL(entry.base);if(u.origin!==base.origin||!u.pathname.startsWith(base.pathname))continue;const path=resolve(root,decodeURIComponent(u.pathname.slice(base.pathname.length))),rel=relative(root,path);if(rel!=='..'&&!rel.startsWith('..\\')&&!rel.startsWith('../'))return path;}}catch{}return null;
+  }
   async preview(path) {
     if(!this.scope) throw new Error("本地预览需要文件访问授权");
     const file=await realpath(await this.scope.check(path,false));
@@ -40,10 +45,11 @@ export class AgentBrowser {
         const candidate=await realpath(await this.scope.check(resolve(root,requested),false));
         const rel=relative(root,candidate);
         if(rel===".." || rel.startsWith(`..\\`) || rel.startsWith("../") || resolve(root,rel)!==candidate) throw new Error("文件不在预览目录内");
-        const info=await stat(candidate);if(!info.isFile() || info.size>16*1024*1024) throw new Error("资源过大或不是文件");
+        const info=await stat(candidate);if(!info.isFile() || info.size>256*1024*1024) throw new Error("资源超过 256 MB 或不是文件");
         const mime={".html":"text/html; charset=utf-8",".htm":"text/html; charset=utf-8",".css":"text/css; charset=utf-8",".js":"text/javascript; charset=utf-8",".mjs":"text/javascript; charset=utf-8",".svg":"image/svg+xml",".png":"image/png",".jpg":"image/jpeg",".jpeg":"image/jpeg",".webp":"image/webp",".json":"application/json",".woff":"font/woff",".woff2":"font/woff2"}[extname(candidate).toLowerCase()] || "application/octet-stream";
-        res.writeHead(200,{"Content-Type":mime,"Cache-Control":"no-store","X-Content-Type-Options":"nosniff"});res.end(req.method==="HEAD"?undefined:await readFile(candidate));
-      }catch {res.writeHead(404);res.end("资源不可读取");}
+        res.writeHead(200,{"Content-Type":mime,"Content-Length":info.size,"Cache-Control":"no-store","X-Content-Type-Options":"nosniff"});
+        if(req.method==='HEAD')res.end();else await pipeline(createReadStream(candidate),res);
+      }catch {if(res.headersSent){res.destroy();return;}res.writeHead(404,{'Content-Type':'text/plain; charset=utf-8'});res.end("资源不可读取（文件不存在、超出256 MB或没有访问权限）");}
     });
     await new Promise((res,rej)=>{server.once("error",rej);server.listen(0,"127.0.0.1",res);});
     this.previewServer=server;this.previewPath=file;
@@ -141,6 +147,11 @@ export class AgentBrowser {
     let destination;
     if(action==="navigate") {const u=new URL(url);if(!["http:","https:"].includes(u.protocol) || u.username || u.password) throw new Error("浏览器只接受 HTTP(S) 地址；本地 HTML 请使用 preview");destination=u.href;}
     if(action==="preview") destination=await this.preview(path);
+    if(destination&&action==='preview'){
+      const address=new URL(destination);
+      for(const field of ['search','hash'])if(input[field]!==undefined){if(typeof input[field]!=='string'||input[field].length>4000)throw Error('本地页面位置无效');address[field]=input[field];}
+      destination=address.href;
+    }
     if(signal?.aborted)throw new Error("浏览器操作已取消");
     await this.start();
     this.viewport=options.viewport;
@@ -185,7 +196,8 @@ export class AgentBrowser {
     }
     const snapshot=await this.evaluate(`(()=>{const elements=[...document.querySelectorAll('a,button,input,textarea,select,[role="button"]')].filter(e=>e.getBoundingClientRect().width&&e.getBoundingClientRect().height).slice(0,150); document.querySelectorAll('[data-summon-element]').forEach(e=>e.removeAttribute('data-summon-element')); const controls=elements.map((e,i)=>{e.setAttribute('data-summon-element',String(i+1));return {index:i+1,tag:e.tagName,label:(e.innerText||e.getAttribute('aria-label')||e.placeholder||e.type||'').slice(0,150),href:e.href};}); return {url:location.href,title:document.title,text:document.body.innerText.slice(0,14000),controls};})()`);
     if(this.native){const history=await this.call('Page.getNavigationHistory');snapshot.navigation={canBack:history.currentIndex>0,canForward:history.currentIndex<history.entries.length-1};}
-    return {content:[{type:"text",text:JSON.stringify(snapshot)}],details:{url:snapshot.url}};
+    snapshot.localPath=this.localPath(snapshot.url);
+    return {content:[{type:"text",text:JSON.stringify(snapshot)}],details:{url:snapshot.url,localPath:snapshot.localPath}};
   }
   async readPage(input,signal){
     const limit=input.maxSegments??8;
